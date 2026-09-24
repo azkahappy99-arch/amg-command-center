@@ -1,0 +1,134 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Default-Deny Catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId);
+      allow create: if isSignedIn() && (request.auth.uid == userId)
+        && incoming().keys().hasAll(['id', 'email', 'role'])
+        && incoming().id == userId
+        && incoming().role in ['admin', 'operator', 'viewer'];
+      allow update: if isSignedIn() && (request.auth.uid == userId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Channels Collection
+    match /channels/{channelId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(channelId)
+        && incoming().youtubeChannelId is string && incoming().youtubeChannelId.size() <= 128
+        && incoming().title is string && incoming().title.size() <= 200;
+      allow delete: if isSignedIn();
+    }
+
+    // YouTube Connections - NEVER readable from client side directly
+    match /youtube_connections/{connectionId} {
+      allow read, write: if false; // Server-side admin SDK only
+    }
+
+    // Content Profiles
+    match /content_profiles/{profileId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(profileId)
+        && incoming().name is string && incoming().name.size() <= 150;
+      allow delete: if isSignedIn();
+    }
+
+    // Master Titles
+    match /master_titles/{titleId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(titleId)
+        && incoming().text is string && incoming().text.size() <= 200;
+      allow delete: if isSignedIn();
+    }
+
+    // Master Thumbnails
+    match /master_thumbnails/{thumbnailId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(thumbnailId)
+        && incoming().name is string && incoming().name.size() <= 150;
+      allow delete: if isSignedIn();
+    }
+
+    // Videos
+    match /videos/{videoId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(videoId)
+        && incoming().youtubeVideoId is string && incoming().youtubeVideoId.size() <= 64;
+      allow delete: if isSignedIn();
+    }
+
+    // Video Operations
+    match /video_operations/{opId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(opId);
+      allow update, delete: if false;
+    }
+
+    // Schedules
+    match /schedules/{scheduleId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(scheduleId);
+      allow delete: if isSignedIn();
+    }
+
+    // Automation Batches
+    match /automation_batches/{batchId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(batchId);
+      allow delete: if false;
+    }
+
+    // Automation Jobs
+    match /automation_jobs/{jobId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(jobId);
+      allow delete: if false;
+    }
+
+    // Error Logs
+    match /error_logs/{errorId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(errorId);
+      allow delete: if false;
+    }
+
+    // Activity Logs
+    match /activity_logs/{logId} {
+      allow get, list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(logId);
+      allow update, delete: if false;
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow get, list: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(notificationId);
+      allow delete: if isSignedIn();
+    }
+  }
+}

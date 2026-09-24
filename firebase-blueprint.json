@@ -1,0 +1,312 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role and preferences",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "operator", "viewer"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "email", "role"]
+    },
+    "Channel": {
+      "title": "Channel",
+      "description": "YouTube channel configuration and status",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "youtubeChannelId": { "type": "string" },
+        "title": { "type": "string" },
+        "customUrl": { "type": "string" },
+        "thumbnailUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["Connected", "Ready", "Processing", "Needs Attention", "Disconnected", "Error", "Completed"] },
+        "contentProfileId": { "type": "string" },
+        "publishFrequency": { "type": "string" },
+        "publishTime": { "type": "string" },
+        "timezone": { "type": "string" },
+        "lastSyncAt": { "type": "string" },
+        "lastScheduledPublishAt": { "type": "string" },
+        "uploadPlaylistId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "youtubeChannelId", "title", "status"]
+    },
+    "YoutubeConnection": {
+      "title": "YoutubeConnection",
+      "description": "Server-side YouTube OAuth credentials and connection state",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "channelId": { "type": "string" },
+        "accountEmail": { "type": "string" },
+        "hasRefreshToken": { "type": "boolean" },
+        "tokenExpiry": { "type": "string" },
+        "scope": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "expired", "revoked", "error"] },
+        "lastError": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "channelId", "status"]
+    },
+    "ContentProfile": {
+      "title": "ContentProfile",
+      "description": "Reusable content template with titles, thumbnails, and schedule rules",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "publishFrequency": { "type": "string" },
+        "publishTime": { "type": "string" },
+        "timezone": { "type": "string" },
+        "masterTitleIds": { "type": "array" },
+        "masterThumbnailIds": { "type": "array" },
+        "assignedChannelCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "name", "publishFrequency", "publishTime", "timezone"]
+    },
+    "MasterTitle": {
+      "title": "MasterTitle",
+      "description": "A reusable title entry for round-robin rotation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "profileId": { "type": "string" },
+        "text": { "type": "string" },
+        "orderIndex": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "text", "orderIndex"]
+    },
+    "MasterThumbnail": {
+      "title": "MasterThumbnail",
+      "description": "A reusable thumbnail graphic for round-robin rotation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "profileId": { "type": "string" },
+        "name": { "type": "string" },
+        "url": { "type": "string" },
+        "orderIndex": { "type": "number" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "url", "orderIndex"]
+    },
+    "Video": {
+      "title": "Video",
+      "description": "Video metadata and management state machine tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "youtubeVideoId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "titleBefore": { "type": "string" },
+        "titleAssigned": { "type": "string" },
+        "thumbnailBefore": { "type": "string" },
+        "thumbnailAssigned": { "type": "string" },
+        "originalUploadAt": { "type": "string" },
+        "processingStatus": { "type": "string", "enum": ["processing", "processed", "failed"] },
+        "privacyStatus": { "type": "string", "enum": ["private", "unlisted", "public"] },
+        "scheduledPublishAt": { "type": "string" },
+        "managementStatus": { "type": "string", "enum": ["DISCOVERED", "VALIDATING", "PROCESSING", "READY", "TITLE_APPLIED", "THUMBNAIL_APPLIED", "SCHEDULE_PENDING", "SCHEDULED", "VERIFIED", "COMPLETED", "ERROR", "RETRY_PENDING"] },
+        "isManaged": { "type": "boolean" },
+        "contentProfileId": { "type": "string" },
+        "automationBatchId": { "type": "string" },
+        "retryCount": { "type": "number" },
+        "lastError": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "youtubeVideoId", "channelId", "managementStatus", "isManaged"]
+    },
+    "VideoOperation": {
+      "title": "VideoOperation",
+      "description": "Atomic operation log for YouTube video changes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "videoId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "operationType": { "type": "string", "enum": ["title", "thumbnail", "schedule", "verify"] },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "verified", "failed"] },
+        "payload": { "type": "string" },
+        "error": { "type": "string" },
+        "executedAt": { "type": "string" }
+      },
+      "required": ["id", "videoId", "operationType", "status"]
+    },
+    "Schedule": {
+      "title": "Schedule",
+      "description": "Slot reservation for video publishing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "channelId": { "type": "string" },
+        "videoId": { "type": "string" },
+        "targetPublishAt": { "type": "string" },
+        "timezone": { "type": "string" },
+        "status": { "type": "string", "enum": ["reserved", "scheduled_on_youtube", "published"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "channelId", "videoId", "targetPublishAt"]
+    },
+    "AutomationBatch": {
+      "title": "AutomationBatch",
+      "description": "Batch tracking record for automation executions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchNumber": { "type": "string" },
+        "channelId": { "type": "string" },
+        "profileId": { "type": "string" },
+        "isDryRun": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending", "running", "paused", "completed", "failed"] },
+        "startedAt": { "type": "string" },
+        "completedAt": { "type": "string" },
+        "detectedCount": { "type": "number" },
+        "processedCount": { "type": "number" },
+        "scheduledCount": { "type": "number" },
+        "completedCount": { "type": "number" },
+        "failedCount": { "type": "number" }
+      },
+      "required": ["id", "batchNumber", "channelId", "status"]
+    },
+    "AutomationJob": {
+      "title": "AutomationJob",
+      "description": "Individual step job within an automation batch",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "batchId": { "type": "string" },
+        "videoId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "jobType": { "type": "string", "enum": ["detect", "validate", "apply_title", "apply_thumbnail", "schedule", "verify"] },
+        "status": { "type": "string", "enum": ["pending", "processing", "completed", "failed", "retry_pending"] },
+        "startedAt": { "type": "string" },
+        "completedAt": { "type": "string" },
+        "retryCount": { "type": "number" },
+        "error": { "type": "string" }
+      },
+      "required": ["id", "batchId", "jobType", "status"]
+    },
+    "ErrorLog": {
+      "title": "ErrorLog",
+      "description": "Structured error record for Error Center tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "channelId": { "type": "string" },
+        "channelTitle": { "type": "string" },
+        "videoId": { "type": "string" },
+        "operation": { "type": "string" },
+        "errorType": { "type": "string" },
+        "errorMessage": { "type": "string" },
+        "retryCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["open", "retried", "resolved", "ignored"] }
+      },
+      "required": ["id", "timestamp", "operation", "errorType", "errorMessage", "status"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Audit trail log of all system and user operations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "user": { "type": "string" },
+        "channelId": { "type": "string" },
+        "channelTitle": { "type": "string" },
+        "videoId": { "type": "string" },
+        "operation": { "type": "string" },
+        "previousValue": { "type": "string" },
+        "newValue": { "type": "string" },
+        "result": { "type": "string" },
+        "error": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "user", "operation", "result"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "System alerts, quota notices, and video ready updates",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "success", "warning", "error"] },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "channelId": { "type": "string" },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "type", "title", "message", "read", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and RBAC role access"
+    },
+    "/channels/{channelId}": {
+      "schema": "Channel",
+      "description": "Managed YouTube channels and channel metadata"
+    },
+    "/youtube_connections/{connectionId}": {
+      "schema": "YoutubeConnection",
+      "description": "Server-side credential metadata and OAuth state"
+    },
+    "/content_profiles/{profileId}": {
+      "schema": "ContentProfile",
+      "description": "Reusable content templates for channels"
+    },
+    "/master_titles/{titleId}": {
+      "schema": "MasterTitle",
+      "description": "Master titles for round-robin rotation"
+    },
+    "/master_thumbnails/{thumbnailId}": {
+      "schema": "MasterThumbnail",
+      "description": "Master thumbnails for round-robin rotation"
+    },
+    "/videos/{videoId}": {
+      "schema": "Video",
+      "description": "Detected and managed YouTube video catalog"
+    },
+    "/video_operations/{opId}": {
+      "schema": "VideoOperation",
+      "description": "Recorded operations executed against YouTube"
+    },
+    "/schedules/{scheduleId}": {
+      "schema": "Schedule",
+      "description": "Channel publishing slot reservations"
+    },
+    "/automation_batches/{batchId}": {
+      "schema": "AutomationBatch",
+      "description": "Automation batch records and execution summaries"
+    },
+    "/automation_jobs/{jobId}": {
+      "schema": "AutomationJob",
+      "description": "Individual asynchronous automation jobs"
+    },
+    "/error_logs/{errorId}": {
+      "schema": "ErrorLog",
+      "description": "Captured errors for the Error Center"
+    },
+    "/activity_logs/{logId}": {
+      "schema": "ActivityLog",
+      "description": "Audit trail logs for all AMG actions"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "System notices and event alerts"
+    }
+  }
+}

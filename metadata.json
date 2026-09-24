@@ -1,0 +1,7 @@
+{
+  "name": "AMG — Azka Media Group",
+  "description": "Multi-channel YouTube management and automation platform for scheduling, master titles, and master thumbnails.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
