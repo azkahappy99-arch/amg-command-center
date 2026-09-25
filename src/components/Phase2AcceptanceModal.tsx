@@ -53,7 +53,7 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
       const res = await api.runPhase2AcceptanceTest(channelId);
       setTestResponse(res);
     } catch (err: any) {
-      setError(err.message || 'Failed to run Phase 2 Acceptance Test suite.');
+      setError(err.message || 'Gagal menjalankan rangkaian uji penerimaan Fase 2.');
     } finally {
       setIsRunning(false);
     }
@@ -70,19 +70,19 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
             </div>
             <div>
               <h2 className="text-lg font-black text-neutral-100 uppercase tracking-tight flex items-center gap-2">
-                Phase 2 Acceptance Test Suite
+                Uji Penerimaan Kepatuhan Fase 2
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-950 text-red-400 border border-red-800/60">
-                  Requirements 32 & 33
+                  Kebutuhan 32 & 33
                 </span>
               </h2>
               <p className="text-xs text-neutral-400">
-                Automated verification of Safe Eligibility, Cutoff Separation, Rotation Matrix & Scheduling Continuation.
+                Verifikasi otomatis Kelayakan Aman, Pemisahan Batas Unggah, Matriks Rotasi &amp; Penjadwalan Berkelanjutan.
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 rounded-xl transition"
+            className="p-2 text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 rounded-xl transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -93,7 +93,7 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
           {/* Target Channel Info */}
           <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <span className="text-[10px] uppercase font-bold text-neutral-500 tracking-wider">Test Target</span>
+              <span className="text-[10px] uppercase font-bold text-neutral-500 tracking-wider">Target Uji</span>
               <div className="text-sm font-bold text-neutral-200">{channelTitle}</div>
               <div className="text-[11px] text-neutral-400 font-mono">{channelId}</div>
             </div>
@@ -105,12 +105,12 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
               {isRunning ? (
                 <>
                   <RotateCw className="w-4 h-4 animate-spin" />
-                  Running Suite...
+                  Menjalankan Pengujian...
                 </>
               ) : (
                 <>
                   <Play className="w-4 h-4 fill-white" />
-                  Run Acceptance Suite
+                  Jalankan Uji Penerimaan
                 </>
               )}
             </button>
@@ -118,7 +118,7 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
 
           {error && (
             <div className="p-4 rounded-xl bg-red-950/60 border border-red-800/80 text-red-300">
-              <span className="font-bold">Execution Error:</span> {error}
+              <span className="font-bold">Kesalahan Eksekusi:</span> {error}
             </div>
           )}
 
@@ -139,15 +139,15 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
                 )}
                 <div>
                   <div className="text-sm font-black uppercase tracking-wide">
-                    {testResponse.allPassed ? 'ALL PHASE 2 ACCEPTANCE TESTS PASSED' : 'SOME TESTS FAILED'}
+                    {testResponse.allPassed ? 'SEMUA PENGUJIAN PENERIMAAN FASE 2 LOLOS' : 'BEBERAPA PENGUJIAN GAGAL'}
                   </div>
                   <div className="text-[11px] opacity-80">
-                    Passed {testResponse.passedCount} of {testResponse.totalTests} verification checks.
+                    Lolos {testResponse.passedCount} dari {testResponse.totalTests} pemeriksaan verifikasi.
                   </div>
                 </div>
               </div>
               <span className="text-[10px] font-mono opacity-60">
-                {new Date(testResponse.timestamp).toLocaleTimeString()}
+                {new Date(testResponse.timestamp).toLocaleTimeString('id-ID')}
               </span>
             </div>
           )}
@@ -155,7 +155,7 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
           {/* Test Cases Checklist */}
           <div className="space-y-3">
             <h3 className="text-[11px] font-bold uppercase text-neutral-400 tracking-wider">
-              Verification Test Cases
+              Daftar Kasus Uji Verifikasi
             </h3>
 
             {testResponse ? (
@@ -190,7 +190,7 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
                           : 'bg-red-950 text-red-400 border border-red-800/60'
                       }`}
                     >
-                      {t.passed ? 'PASSED' : 'FAILED'}
+                      {t.passed ? 'LOLOS' : 'GAGAL'}
                     </span>
                   </div>
                 </div>
@@ -198,7 +198,7 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
             ) : (
               <div className="p-8 text-center text-neutral-500 bg-neutral-950/40 rounded-xl border border-dashed border-neutral-800">
                 <Sparkles className="w-8 h-8 text-neutral-600 mx-auto mb-2" />
-                Click &quot;Run Acceptance Suite&quot; above to verify all Phase 2 safety, cutoff separation, rotation, and continuous scheduling requirements against the test dataset.
+                Klik &quot;Jalankan Uji Penerimaan&quot; di atas untuk memverifikasi seluruh kepatuhan keamanan Fase 2, pemisahan batas unggah, rotasi judul &amp; thumbnail, serta penjadwalan berkelanjutan.
               </div>
             )}
           </div>
@@ -206,12 +206,12 @@ export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
 
         {/* Footer */}
         <div className="p-4 border-t border-neutral-800 bg-neutral-950/60 flex items-center justify-between text-xs text-neutral-400">
-          <span>AMG Phase 2 Safe Engine Standards Compliance</span>
+          <span>Kepatuhan Standar Mesin Aman AMG Fase 2</span>
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold transition"
+            className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold transition cursor-pointer"
           >
-            Close
+            Tutup
           </button>
         </div>
       </div>

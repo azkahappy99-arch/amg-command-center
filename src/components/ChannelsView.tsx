@@ -507,28 +507,28 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400 shadow-[0_0_8px_#34d399,0_0_15px_#10b981]"></span>
             </span>
             <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-            CONNECTED
+            TERHUBUNG
           </span>
         );
       case 'AUTHORIZATION REQUIRED':
         return (
           <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-amber-950 text-amber-300 border border-amber-700/60">
             <Key className="w-3 h-3 text-amber-400" />
-            AUTHORIZATION REQUIRED
+            PERLU OTORISASI
           </span>
         );
       case 'TOKEN EXPIRED':
         return (
           <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-950 text-rose-300 border border-rose-700/60">
             <AlertCircle className="w-3 h-3 text-rose-400" />
-            TOKEN EXPIRED
+            TOKEN KEDALUWARSA
           </span>
         );
       case 'ERROR':
         return (
           <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-red-950 text-red-300 border border-red-700/60">
             <AlertTriangle className="w-3 h-3 text-red-400" />
-            ERROR
+            KENDALA
           </span>
         );
       case 'DISCONNECTED':
@@ -536,7 +536,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
         return (
           <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-neutral-800 text-neutral-400 border border-neutral-700/60">
             <XCircle className="w-3 h-3 text-neutral-500" />
-            DISCONNECTED
+            TERPUTUS
           </span>
         );
     }
@@ -551,11 +551,12 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
         <div className="flex items-center gap-2.5">
           <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
           <div>
-            <span className="font-bold text-amber-100">READ-ONLY MODE ACTIVE:</span> AMG is in Phase 1 verification mode. Live YouTube sync inspects actual videos and metadata without modifying titles, thumbnails, schedules, or privacy status.
+            <span className="font-bold text-amber-100">MODE HANYA BACA AKTIF: </span>
+            AMG dalam mode verifikasi Fase 1. Sinkronisasi YouTube memeriksa video dan metadata asli tanpa mengubah judul, thumbnail, jadwal, atau privasi.
           </div>
         </div>
         <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-[10px] font-mono font-bold text-amber-300 uppercase shrink-0 ml-3">
-          Safe Mode
+          MODE AMAN
         </span>
       </div>
 

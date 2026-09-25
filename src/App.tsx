@@ -191,7 +191,7 @@ export default function App() {
         />
 
         {/* Dynamic Route View */}
-        <main className="flex-1 p-3 sm:p-4 md:p-6 lg:p-8 max-w-7xl w-full mx-auto pb-10 overflow-x-hidden">
+        <main className="flex-1 p-3 sm:p-4 md:p-6 lg:p-8 max-w-7xl w-full mx-auto pb-24 lg:pb-10 overflow-x-hidden">
           {currentSection === 'dashboard' && (
             <DashboardView
               metrics={stats.metrics}

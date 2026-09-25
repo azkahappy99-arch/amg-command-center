@@ -26,10 +26,10 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-neutral-100 tracking-tight uppercase flex items-center gap-2">
             <History className="w-6 h-6 text-red-500" />
-            Audit Trail & Activity Logs
+            LOG AKTIVITAS & RIWAYAT AUDIT
           </h1>
           <p className="text-xs sm:text-sm text-neutral-400 mt-0.5">
-            Immutable log record of every channel sync, title rotation, thumbnail upload, and scheduled slot change.
+            Catatan log permanen untuk setiap sinkronisasi channel, rotasi judul, upload thumbnail, dan perubahan slot jadwal.
           </p>
         </div>
 
@@ -38,7 +38,7 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 text-xs font-semibold"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          <span>Refresh Audit Trail</span>
+          <span>Segarkan Log Aktivitas</span>
         </button>
       </div>
 
@@ -49,7 +49,7 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Filter audit logs by operation, user, or channel..."
+          placeholder="Filter log audit berdasarkan operasi, pengguna, atau channel..."
           className="w-full pl-10 pr-4 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none placeholder-neutral-500"
         />
       </div>
@@ -58,28 +58,28 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl p-5 space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
           <h3 className="text-sm font-bold text-neutral-100">
-            Audit Records ({filteredLogs.length})
+            Catatan Audit ({filteredLogs.length})
           </h3>
-          <span className="text-xs text-neutral-500">Chronological Descending</span>
+          <span className="text-xs text-neutral-500">Urutan Waktu Terbaru</span>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs text-neutral-300 divide-y divide-neutral-800">
             <thead className="bg-neutral-950/80 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
               <tr>
-                <th className="py-2.5 px-3">Timestamp</th>
-                <th className="py-2.5 px-3">Actor / User</th>
-                <th className="py-2.5 px-3">Channel</th>
-                <th className="py-2.5 px-3">Operation</th>
-                <th className="py-2.5 px-3">Value Transition (Before → After)</th>
-                <th className="py-2.5 px-3">Result</th>
+                <th className="py-2.5 px-3">WAKTU</th>
+                <th className="py-2.5 px-3">PENGGUNA / AKTOR</th>
+                <th className="py-2.5 px-3">CHANNEL</th>
+                <th className="py-2.5 px-3">OPERASI</th>
+                <th className="py-2.5 px-3">PERUBAHAN DATA (SEBELUM → SESUDAH)</th>
+                <th className="py-2.5 px-3">HASIL</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-800/60 font-sans">
               {filteredLogs.map((log) => (
                 <tr key={log.id} className="hover:bg-neutral-800/30 transition">
                   <td className="py-3 px-3 text-neutral-400 whitespace-nowrap font-mono text-[11px]">
-                    {new Date(log.timestamp).toLocaleString([], {
+                    {new Date(log.timestamp).toLocaleString('id-ID', {
                       month: 'short',
                       day: 'numeric',
                       hour: '2-digit',
@@ -117,7 +117,7 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
                           : 'bg-rose-950 text-rose-400 border border-rose-800/40'
                       }`}
                     >
-                      {log.result}
+                      {log.result === 'SUCCESS' ? 'BERHASIL' : 'GAGAL'}
                     </span>
                   </td>
                 </tr>

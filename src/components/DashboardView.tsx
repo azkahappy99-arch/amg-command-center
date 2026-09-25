@@ -102,7 +102,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [actionRequired]);
 
   return (
-    <div className="space-y-6 overflow-x-hidden max-w-full w-full">
+    <div className="space-y-6 overflow-x-hidden max-w-full w-full pb-20 sm:pb-24 lg:pb-8">
       {/* 1. Top Title & Quick Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-neutral-800/60 max-w-full">
         <div className="min-w-0">
@@ -400,7 +400,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       )}
 
       {/* 6. Footer Copyright */}
-      <footer className="mt-8 pt-6 pb-2 border-t border-neutral-800/60 text-center">
+      <footer className="mt-8 pt-6 pb-6 lg:pb-2 border-t border-neutral-800/60 text-center">
         <p className="text-xs text-zinc-400 font-medium tracking-wide">
           Copyright © 2026 Azka Media Group. All Rights Reserved.
         </p>

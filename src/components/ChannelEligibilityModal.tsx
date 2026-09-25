@@ -60,11 +60,11 @@ export const ChannelEligibilityModal: React.FC<ChannelEligibilityModalProps> = (
 
   const handleSave = async () => {
     if (patterns.length === 0) {
-      setError('At least one title pattern is required.');
+      setError('Minimal satu pola judul diperlukan.');
       return;
     }
     if (windowDays <= 0) {
-      setError('Eligibility window days must be greater than 0.');
+      setError('Jendela waktu kelayakan harus lebih dari 0 hari.');
       return;
     }
 

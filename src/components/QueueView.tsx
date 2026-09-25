@@ -188,7 +188,13 @@ export const QueueView: React.FC = () => {
                             : 'bg-neutral-800 text-neutral-400'
                         }`}
                       >
-                        {job.status}
+                        {job.status === 'completed'
+                          ? 'SELESAI'
+                          : job.status === 'processing'
+                          ? 'MEMPROSES'
+                          : job.status === 'failed'
+                          ? 'GAGAL'
+                          : 'MENUNGGU'}
                       </span>
                     </td>
                     <td className="py-3 px-3 font-mono text-neutral-400">

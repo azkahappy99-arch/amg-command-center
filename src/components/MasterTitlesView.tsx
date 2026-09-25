@@ -50,7 +50,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
       setNewTitleText('');
       onTitlesUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to add title');
+      alert(err.message || 'Gagal menambahkan judul master');
     } finally {
       setIsAdding(false);
     }
@@ -63,7 +63,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
       setEditingTitleId(null);
       onTitlesUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to update title');
+      alert(err.message || 'Gagal memperbarui judul master');
     }
   };
 
@@ -81,17 +81,17 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
       ]);
       onTitlesUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to reorder titles');
+      alert(err.message || 'Gagal mengatur urutan judul');
     }
   };
 
   const handleDelete = async (title: MasterTitle) => {
-    if (!confirm(`Delete title "${title.text}"?`)) return;
+    if (!confirm(`Hapus master judul "${title.text}"?`)) return;
     try {
       await api.deleteMasterTitle(title.id);
       onTitlesUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to delete title');
+      alert(err.message || 'Gagal menghapus judul');
     }
   };
 
@@ -100,7 +100,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
       await api.updateMasterTitle(title.id, { isActive: !title.isActive });
       onTitlesUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to toggle status');
+      alert(err.message || 'Gagal mengubah status judul');
     }
   };
 
@@ -111,16 +111,16 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
         <div>
           <h1 className="text-xl sm:text-2xl font-black text-neutral-100 tracking-tight uppercase flex items-center gap-2">
             <Type className="w-6 h-6 text-red-500" />
-            Master Titles & Deterministic Rotation
+            MASTER JUDUL & ROTASI DETERMINISTIK
           </h1>
           <p className="text-xs sm:text-sm text-neutral-400 mt-0.5">
-            Configure dynamic N Master Titles. Sequenced round-robin rotation assigns each title deterministically with zero random selection.
+            Konfigurasikan N Master Judul dinamis. Rotasi berurutan menetapkan setiap judul secara pasti tanpa pemilihan acak.
           </p>
         </div>
 
         {/* Profile Selector */}
         <div className="flex items-center space-x-2">
-          <span className="text-xs font-semibold text-neutral-400 uppercase">Profile:</span>
+          <span className="text-xs font-semibold text-neutral-400 uppercase">PROFIL:</span>
           <select
             value={selectedProfileId}
             onChange={(e) => setSelectedProfileId(e.target.value)}
@@ -141,7 +141,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           type="text"
           value={newTitleText}
           onChange={(e) => setNewTitleText(e.target.value)}
-          placeholder="Enter new Master Title (e.g. Tidur Nyenyak dengan Suara Hujan)..."
+          placeholder="Masukkan Master Judul baru..."
           className="flex-1 px-4 py-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800 text-neutral-100 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none placeholder-neutral-500"
         />
         <button
@@ -150,7 +150,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-md shadow-red-900/20"
         >
           <Plus className="w-4 h-4" />
-          <span>Add Master Title</span>
+          <span>+ Tambah Master Judul</span>
         </button>
       </form>
 
@@ -159,13 +159,13 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
         {/* Titles List (3 cols) */}
         <div className="lg:col-span-3 space-y-3">
           <div className="flex items-center justify-between text-xs font-bold text-neutral-300 uppercase tracking-wider">
-            <span>Configured Titles ({profileTitles.length})</span>
-            <span className="text-neutral-500 font-normal">Reorder to adjust rotation index</span>
+            <span>JUDUL TERKONFIGURASI ({profileTitles.length})</span>
+            <span className="text-neutral-500 font-normal">URUTKAN ULANG UNTUK MENGATUR INDEKS ROTASI</span>
           </div>
 
           {profileTitles.length === 0 ? (
             <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-500 text-xs">
-              No Master Titles configured for this profile yet. Add your first title above.
+              Belum ada Master Judul untuk profil ini. Tambahkan judul pertama Anda di atas.
             </div>
           ) : (
             <div className="space-y-2">
@@ -200,7 +200,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
                           {title.text}
                         </div>
                         <div className="text-[10px] text-neutral-500 mt-0.5">
-                          Index: #{idx} • Status: {title.isActive ? 'Active' : 'Paused'}
+                          Indeks: #{idx} • Status: {title.isActive ? 'Aktif' : 'Dijeda'}
                         </div>
                       </div>
                     )}
@@ -212,7 +212,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
                       onClick={() => handleMove(idx, 'up')}
                       disabled={idx === 0}
                       className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:opacity-30 transition"
-                      title="Move up"
+                      title="Pindahkan ke atas"
                     >
                       <ArrowUp className="w-3.5 h-3.5" />
                     </button>
@@ -220,7 +220,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
                       onClick={() => handleMove(idx, 'down')}
                       disabled={idx === profileTitles.length - 1}
                       className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:opacity-30 transition"
-                      title="Move down"
+                      title="Pindahkan ke bawah"
                     >
                       <ArrowDown className="w-3.5 h-3.5" />
                     </button>
@@ -230,14 +230,14 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
                         setEditingText(title.text);
                       }}
                       className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition"
-                      title="Edit text"
+                      title="Ubah teks judul"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => handleDelete(title)}
                       className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition"
-                      title="Delete title"
+                      title="Hapus judul"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -253,14 +253,14 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           <div className="flex items-center justify-between text-xs font-bold text-neutral-300 uppercase tracking-wider">
             <span className="flex items-center gap-1.5">
               <RotateCw className="w-3.5 h-3.5 text-red-500" />
-              Rotation Simulator
+              SIMULATOR ROTASI
             </span>
-            <span className="text-[10px] text-emerald-400 font-semibold">100% Deterministic</span>
+            <span className="text-[10px] text-emerald-400 font-semibold">100% DETERMINISTIK</span>
           </div>
 
           <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
             <p className="text-[11px] text-neutral-400 leading-relaxed">
-              When AMG processes a batch of unmanaged videos for this profile, each video receives a title strictly according to this round-robin sequence:
+              Saat sistem memproses kumpulan video yang belum dikelola untuk profil ini, setiap video akan menerima judul sesuai urutan rotasi berikut:
             </p>
 
             <div className="space-y-1.5 pt-1">
@@ -279,7 +279,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
                       Video #{seq}:
                     </span>
                     <span className="font-semibold text-neutral-200 truncate ml-2 text-right">
-                      {assignedTitle ? assignedTitle.text : 'Pending titles setup'}
+                      {assignedTitle ? assignedTitle.text : 'Menunggu penyiapan judul'}
                     </span>
                   </div>
                 );
