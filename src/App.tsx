@@ -134,17 +134,25 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
+      useEffect(() => {
+    const saved = localStorage.getItem('amg_saved_channel');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setChannels([parsed]);
+        setSelectedChannelId(parsed.id);
+      } catch (e) {}
+    }
     loadAllData();
   }, []);
 
-  const handleGisAuthorize = async (channelId?: string) => {
-  setIsRefreshing(true);
-  try {
-    const result = await authorizeAndFetchYouTubeChannel(true);
-    if (result && result.channel) {
-      setChannels([
-        {
+
+    const handleGisAuthorize = async (channelId?: string) => {
+    setIsRefreshing(true);
+    try {
+      const result = await authorizeAndFetchYouTubeChannel(true);
+      if (result && result.channel) {
+        const channelData = {
           id: result.channel.id,
           title: result.channel.title,
           youtubeChannelId: result.channel.id,
@@ -152,17 +160,19 @@ export default function App() {
           thumbnailUrl: result.channel.thumbnailUrl,
           subscriberCount: result.channel.subscriberCount,
           videoCount: result.channel.videoCount,
-        } as any
-      ]);
-      setSelectedChannelId(result.channel.id);
+        };
+        // Simpan permanen di browser
+        localStorage.setItem('amg_saved_channel', JSON.stringify(channelData));
+        setChannels([channelData as any]);
+        setSelectedChannelId(result.channel.id);
+      }
+    } catch (err: any) {
+      console.error('GIS Authorization error:', err);
+      alert(`Google Identity Services: ${err.message || 'Otorisasi ditolak atau popup dibatalkan.'}`);
+    } finally {
+      setIsRefreshing(false);
     }
-  } catch (err: any) {
-    console.error('GIS Authorization error:', err);
-    alert(`Google Identity Services: ${err.message || 'Otorisasi ditolak atau popup dibatalkan.'}`);
-  } finally {
-    setIsRefreshing(false);
-  }
-};
+  };
 
 
 
