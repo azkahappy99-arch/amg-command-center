@@ -184,7 +184,9 @@ export async function requestGisAccessToken(promptConsent: boolean = false): Pro
         },
       });
 
-      tokenClient.requestAccessToken(promptConsent ? { prompt: 'consent' } : undefined);
+      tokenClient.requestAccessToken({ prompt: promptConsent ? 'consent' : '' });
+
+
     } catch (err: any) {
       reject(new Error(err.message || 'Failed to initialize Google Identity Services client.'));
     }
@@ -205,12 +207,15 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
     },
   });
 
-  if (!res.ok) {
-    const errorBody = await res.json().catch(() => ({}));
-    const message =
-      errorBody?.error?.message ||
-      `YouTube Data API v3 error (${res.status}: ${res.statusText})`;
-    throw new Error(message);
+      if (!res.ok) {
+      const errorBody = await res.json().catch(() => ({}));
+      const message =
+        errorBody?.error?.message ||
+        `YouTube Data API error (${res.status}: ${res.statusText})`;
+      alert("Gagal memuat channel YouTube: " + message);
+      throw new Error(message);
+    }
+
   }
 
   const data = await res.json();
