@@ -247,7 +247,7 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
     localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelData));
   } catch (e) {
     console.warn('Could not cache channel data:', e);
-  }
+  
 
   return channelData;
 }
