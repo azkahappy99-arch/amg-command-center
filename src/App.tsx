@@ -164,7 +164,7 @@ export default function App() {
   }
 };
 
-  };
+
 
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
   const unmanagedCount = videos.filter((v) => !v.isManaged).length;
