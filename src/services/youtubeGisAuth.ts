@@ -266,5 +266,7 @@ export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = f
     accessToken: token,
     expiresIn: 3600,
     channel,
-  };
+  };}
+  
+
 }
