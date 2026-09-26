@@ -142,11 +142,11 @@ export default function App() {
     setIsRefreshing(true);
     try {
       const result = await authorizeAndFetchYouTubeChannel(true);
-      await api.gisSyncChannel({
-        channelId: channelId || selectedChannelId,
-        accessToken: result.accessToken,
-        channelData: result.channel,
-      });
+//      await api.gisSyncChannel({
+//        channelId: channelId || selectedChannelId,
+//        accessToken: result.accessToken,
+//        channelData: result.channel,
+//      });
       await loadAllData();
     } catch (err: any) {
       console.error('GIS Authorization error:', err);
