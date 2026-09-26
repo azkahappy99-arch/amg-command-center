@@ -147,7 +147,7 @@ export default function App() {
   }, []);
 
 
-    const handleGisAuthorize = async (channelId?: string) => {
+      const handleGisAuthorize = async (channelId?: string) => {
     setIsRefreshing(true);
     try {
       const result = await authorizeAndFetchYouTubeChannel(true);
@@ -165,6 +165,9 @@ export default function App() {
         localStorage.setItem('amg_saved_channel', JSON.stringify(channelData));
         setChannels([channelData as any]);
         setSelectedChannelId(result.channel.id);
+        alert(`Berhasil terhubung ke channel: ${result.channel.title}`);
+      } else {
+        alert('Otorisasi berhasil tetapi data channel tidak ditemukan atau kosong.');
       }
     } catch (err: any) {
       console.error('GIS Authorization error:', err);
@@ -174,6 +177,7 @@ export default function App() {
     }
   };
 
+      
 
 
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
