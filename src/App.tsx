@@ -139,21 +139,31 @@ export default function App() {
   }, []);
 
   const handleGisAuthorize = async (channelId?: string) => {
-    setIsRefreshing(true);
-    try {
-      const result = await authorizeAndFetchYouTubeChannel(true);
-//      await api.gisSyncChannel({
-//        channelId: channelId || selectedChannelId,
-//        accessToken: result.accessToken,
-//        channelData: result.channel,
-//      });
-      await loadAllData();
-    } catch (err: any) {
-      console.error('GIS Authorization error:', err);
-      alert(`Google Identity Services: ${err.message || 'Otorisasi ditolak atau popup dibatalkan.'}`);
-    } finally {
-      setIsRefreshing(false);
+  setIsRefreshing(true);
+  try {
+    const result = await authorizeAndFetchYouTubeChannel(true);
+    if (result && result.channel) {
+      setChannels([
+        {
+          id: result.channel.id,
+          title: result.channel.title,
+          youtubeChannelId: result.channel.id,
+          status: 'CONNECTED',
+          thumbnailUrl: result.channel.thumbnailUrl,
+          subscriberCount: result.channel.subscriberCount,
+          videoCount: result.channel.videoCount,
+        } as any
+      ]);
+      setSelectedChannelId(result.channel.id);
     }
+  } catch (err: any) {
+    console.error('GIS Authorization error:', err);
+    alert(`Google Identity Services: ${err.message || 'Otorisasi ditolak atau popup dibatalkan.'}`);
+  } finally {
+    setIsRefreshing(false);
+  }
+};
+
   };
 
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
