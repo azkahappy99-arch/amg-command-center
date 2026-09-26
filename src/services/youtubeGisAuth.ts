@@ -1,4 +1,4 @@
-/**
+        /**
  * YouTube Data API v3 Client-Side Authorization via Google Identity Services (GIS)
  * Client ID: 140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com
  * Scope: https://www.googleapis.com/auth/youtube.readonly
@@ -15,11 +15,11 @@ export const GIS_CONFIG = {
 export interface YouTubeChannelSnippet {
   id: string;
   title: string;
-  description?: string;
+  description: string;
   customUrl?: string;
   thumbnailUrl?: string;
-  subscriberCount: number;
-  videoCount: number;
+  subscriberCount?: number;
+  videoCount?: number;
   viewCount?: number;
 }
 
@@ -29,12 +29,11 @@ export interface GisAuthResult {
   channel: YouTubeChannelSnippet;
 }
 
-// Global declaration for Google Identity Services
 declare global {
   interface Window {
     google?: {
-      accounts: {
-        oauth2: {
+      accounts?: {
+        oauth2?: {
           initTokenClient: (config: {
             client_id: string;
             scope: string;
@@ -50,16 +49,12 @@ declare global {
   }
 }
 
-/**
- * Ensures Google Identity Services (GIS) script is loaded
- */
 export async function ensureGsiScriptLoaded(): Promise<void> {
   if (window.google?.accounts?.oauth2) {
     return;
   }
 
   return new Promise<void>((resolve, reject) => {
-    // Check if script tag already exists in DOM
     const existing = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
     if (existing) {
       const interval = setInterval(() => {
@@ -94,18 +89,19 @@ export async function ensureGsiScriptLoaded(): Promise<void> {
 
       setTimeout(() => {
         clearInterval(interval);
-        if (window.google?.accounts?.oauth2) resolve();
-        else reject(new Error('GSI library failed to initialize.'));
+        if (window.google?.accounts?.oauth2) {
+          resolve();
+        } else {
+          reject(new Error('GSI library failed to initialize.'));
+        }
       }, 5000);
     };
+
     script.onerror = () => reject(new Error('Failed to load Google Identity Services library.'));
     document.head.appendChild(script);
   });
 }
 
-/**
- * Retrieves the stored GIS access token if not expired
- */
 export function getStoredGisToken(): string | null {
   try {
     const token = localStorage.getItem(GIS_CONFIG.STORAGE_KEY_TOKEN);
@@ -113,7 +109,6 @@ export function getStoredGisToken(): string | null {
     if (!token) return null;
 
     if (expiresAt && Date.now() > parseInt(expiresAt, 10)) {
-      // Token expired
       localStorage.removeItem(GIS_CONFIG.STORAGE_KEY_TOKEN);
       localStorage.removeItem(GIS_CONFIG.STORAGE_KEY_EXPIRES);
       return null;
@@ -125,9 +120,6 @@ export function getStoredGisToken(): string | null {
   }
 }
 
-/**
- * Stores token and metadata in localStorage
- */
 export function storeGisToken(token: string, expiresInSeconds: number = 3600): void {
   try {
     const expiresAt = Date.now() + expiresInSeconds * 1000;
@@ -138,9 +130,6 @@ export function storeGisToken(token: string, expiresInSeconds: number = 3600): v
   }
 }
 
-/**
- * Clears stored GIS token
- */
 export function clearStoredGisToken(): void {
   try {
     localStorage.removeItem(GIS_CONFIG.STORAGE_KEY_TOKEN);
@@ -151,15 +140,12 @@ export function clearStoredGisToken(): void {
   }
 }
 
-/**
- * Prompts Google OAuth popup via GIS to request interactive access token
- */
 export async function requestGisAccessToken(promptConsent: boolean = false): Promise<string> {
   await ensureGsiScriptLoaded();
 
   return new Promise<string>((resolve, reject) => {
     try {
-      const tokenClient = window.google!.accounts.oauth2.initTokenClient({
+      const tokenClient = window.google!.accounts!.oauth2!.initTokenClient({
         client_id: GIS_CONFIG.CLIENT_ID,
         scope: GIS_CONFIG.SCOPE,
         callback: (resp: any) => {
@@ -185,18 +171,12 @@ export async function requestGisAccessToken(promptConsent: boolean = false): Pro
       });
 
       tokenClient.requestAccessToken({ prompt: promptConsent ? 'consent' : '' });
-
-
     } catch (err: any) {
       reject(new Error(err.message || 'Failed to initialize Google Identity Services client.'));
     }
   });
 }
 
-/**
- * Directly calls YouTube Data API v3 endpoint:
- * https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true
- */
 export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTubeChannelSnippet> {
   const url = 'https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true';
 
@@ -207,16 +187,14 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
     },
   });
 
-      if (!res.ok) {
-      const errorBody = await res.json().catch(() => ({}));
-      const message =
-        errorBody?.error?.message ||
-        `YouTube Data API error (${res.status}: ${res.statusText})`;
-      alert("Gagal memuat channel YouTube: " + message);
-      throw new Error(message);
-    }
-
-  
+  if (!res.ok) {
+    const errorBody = await res.json().catch(() => ({}));
+    const message =
+      errorBody?.error?.message ||
+      `YouTube Data API error (${res.status}: ${res.statusText})`;
+    alert("Gagal memuat channel YouTube: " + message);
+    throw new Error(message);
+  }
 
   const data = await res.json();
   if (!data.items || data.items.length === 0) {
@@ -247,17 +225,11 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
     localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelData));
   } catch (e) {
     console.warn('Could not cache channel data:', e);
-  
+  }
 
   return channelData;
 }
 
-/**
- * Complete interactive flow:
- * 1. Opens GIS popup and obtains token
- * 2. Fetches YouTube Channel details via YouTube Data API v3
- * 3. Persists to backend & localStorage
- */
 export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = false): Promise<GisAuthResult> {
   const token = await requestGisAccessToken(promptConsent);
   const channel = await fetchMyYouTubeChannel(token);
@@ -266,7 +238,5 @@ export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = f
     accessToken: token,
     expiresIn: 3600,
     channel,
-  };}
-  
-
+  };
 }
