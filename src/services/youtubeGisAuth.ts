@@ -216,7 +216,7 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
       throw new Error(message);
     }
 
-  }
+  
 
   const data = await res.json();
   if (!data.items || data.items.length === 0) {
