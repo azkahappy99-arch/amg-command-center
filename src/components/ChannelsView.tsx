@@ -456,13 +456,13 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 
   const handleAddChannel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle || !newChannelId) return;
+    if (!newTitle.trim() || !newChannelId.trim()) return;
     setIsAdding(true);
     try {
       const finalCategory = newNicheCategory === 'CUSTOM' ? (newCustomNiche.trim() || 'General') : newNicheCategory;
       await api.addChannel({
-        title: newTitle,
-        youtubeChannelId: newChannelId,
+        title: newTitle.trim(),
+        youtubeChannelId: newChannelId.trim(),
         contentProfileId: newProfileId,
         nicheCategory: finalCategory,
         nicheBadge: newNicheBadge,
@@ -477,29 +477,51 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
       setNewCustomNiche('');
       onChannelUpdated();
       setBannerMessage({
-        text: `Channel "${newTitle}" created in niche [${finalCategory}] with custom schedule (${newScheduleConfig.videosPerDay} videos/day). Please connect YouTube credentials to authorize.`,
+        text: `Channel "${newTitle}" berhasil ditambahkan dan tersimpan permanen di niche [${finalCategory}]. Status: TERHUBUNG.`,
         type: 'success',
       });
     } catch (err: any) {
-      alert(err.message || 'Failed to add channel');
+      const msg = err.message || 'Gagal menambahkan channel';
+      alert(msg);
+      setBannerMessage({
+        text: msg,
+        type: 'error',
+      });
     } finally {
       setIsAdding(false);
     }
   };
 
   const handleDeleteChannel = async (id: string, title: string) => {
-    if (!confirm(`Are you sure you want to remove channel "${title}" from AMG?`)) return;
+    if (!confirm(`Apakah Anda yakin ingin memutuskan (unlink) channel "${title}"?\nData channel akan dihapus secara permanen dari daftar AMG Command Center.`)) return;
     try {
       await api.deleteChannel(id);
       onChannelUpdated();
+      setBannerMessage({
+        text: `Channel "${title}" berhasil diputuskan (unlinked) dan dihapus secara permanen.`,
+        type: 'info',
+      });
     } catch (err: any) {
-      alert(err.message || 'Failed to delete channel');
+      alert(err.message || 'Gagal menghapus channel');
     }
   };
+
+  const connectedCount = useMemo(() => {
+    return channels.filter(
+      (c) =>
+        c.status === 'CONNECTED' ||
+        c.status === 'Connected' ||
+        c.status === 'Ready' ||
+        c.status === 'RECONNECT REQUIRED' ||
+        c.status === 'TOKEN EXPIRED'
+    ).length;
+  }, [channels]);
 
   const renderStatusBadge = (status: string) => {
     switch (status) {
       case 'CONNECTED':
+      case 'Connected':
+      case 'Ready':
         return (
           <span className="inline-flex items-center gap-1.5 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 shadow-[0_0_14px_rgba(16,185,129,0.45)]">
             <span className="relative flex h-2 w-2">
@@ -510,18 +532,19 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
             TERHUBUNG
           </span>
         );
+      case 'RECONNECT REQUIRED':
+      case 'TOKEN EXPIRED':
+        return (
+          <span className="inline-flex items-center gap-1.5 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-amber-950/90 text-amber-300 border border-amber-500/80 shadow-[0_0_10px_rgba(245,158,11,0.35)]">
+            <AlertCircle className="w-3 h-3 text-amber-400" />
+            PERLU SAMBUNG ULANG
+          </span>
+        );
       case 'AUTHORIZATION REQUIRED':
         return (
           <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-amber-950 text-amber-300 border border-amber-700/60">
             <Key className="w-3 h-3 text-amber-400" />
             PERLU OTORISASI
-          </span>
-        );
-      case 'TOKEN EXPIRED':
-        return (
-          <span className="inline-flex items-center gap-1 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider bg-rose-950 text-rose-300 border border-rose-700/60">
-            <AlertCircle className="w-3 h-3 text-rose-400" />
-            TOKEN KEDALUWARSA
           </span>
         );
       case 'ERROR':
@@ -561,7 +584,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
       </div>
 
       {/* Top Bar */}
-      <div className="flex items-center justify-between gap-3 pb-2 border-b border-neutral-800/60 max-w-full">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-neutral-800/60 max-w-full">
         <div>
           <h1 className="text-lg sm:text-2xl font-black text-neutral-100 tracking-tight uppercase flex items-center gap-2">
             <Tv className="w-5 h-5 sm:w-6 sm:h-6 text-red-500 shrink-0" />
@@ -572,16 +595,47 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+          <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-950/80 border border-emerald-800/60 text-emerald-300 text-xs font-bold font-mono">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span>Channel Terhubung: {new Intl.NumberFormat('id-ID').format(connectedCount)}</span>
+          </div>
+
+          <button
+            onClick={async () => {
+              try {
+                setBannerMessage({ text: 'Membuka dialog Google Identity Services...', type: 'info' });
+                const result = await authorizeAndFetchYouTubeChannel(true);
+                await api.gisSyncChannel({
+                  accessToken: result.accessToken,
+                  channelData: result.channel,
+                });
+                setBannerMessage({
+                  text: `Channel "${result.channel.title}" (${result.channel.id}) berhasil ditautkan dan tersimpan permanen!`,
+                  type: 'success',
+                });
+                onChannelUpdated();
+              } catch (err: any) {
+                setBannerMessage({ text: `Gagal otorisasi Google Identity Services: ${err.message}`, type: 'error' });
+              }
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-emerald-950/40 cursor-pointer"
+            title="Tautkan akun Google / YouTube asli secara langsung via GIS popup"
+          >
+            <Key className="w-4 h-4" />
+            <span>Tautkan Akun YouTube</span>
+          </button>
+
           <button
             onClick={() => setIsAddModalOpen(true)}
-            className="inline-flex items-center gap-1.5 sm:gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition active:scale-95 shadow-lg shadow-red-900/30 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-red-900/30 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Tambah Channel</span>
           </button>
         </div>
       </div>
+
 
       {/* Notification Banner */}
       {bannerMessage && (
@@ -992,6 +1046,45 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                           </div>
                         </div>
 
+                        {/* Reconnect Required Alert if Token Expired */}
+                        {(channel.status === 'RECONNECT REQUIRED' || channel.status === 'TOKEN EXPIRED') && (
+                          <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-600/70 flex items-center justify-between gap-2 shadow-xs">
+                            <div className="flex items-center gap-1.5 text-[11px] text-amber-300 font-semibold min-w-0">
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <span className="truncate">Otorisasi kedaluwarsa</span>
+                            </div>
+                            <button
+                              onClick={() => handleGisAuthorizeChannel(channel)}
+                              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] transition cursor-pointer shrink-0"
+                            >
+                              Sambungkan Ulang
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Connection Date & Unlink Action */}
+                        <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-neutral-500">Tersambung:</span>
+                            <span className="font-semibold text-neutral-300">
+                              {channel.connectedAt
+                                ? new Date(channel.connectedAt).toLocaleDateString('id-ID', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })
+                                : 'Permanen'}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteChannel(channel.id, channel.title)}
+                            className="text-[10px] text-neutral-500 hover:text-rose-400 hover:underline transition cursor-pointer font-medium"
+                            title="Putuskan sambungan channel ini dari AMG Command Center"
+                          >
+                            [Unlink Channel]
+                          </button>
+                        </div>
+
                         {/* Two Main Action Buttons directly visible */}
                         <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-800/60">
                           <button
@@ -1236,7 +1329,52 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleAddChannel} className="p-6 space-y-4 text-xs">
+            {/* 1-Click Interactive GIS YouTube Connect */}
+            <div className="p-4 mx-6 mt-4 rounded-xl bg-gradient-to-r from-emerald-950/70 to-neutral-900 border border-emerald-600/50 space-y-2">
+              <div className="flex items-center gap-2 text-emerald-300 font-bold text-xs">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span>Rekomendasi: Tautkan Langsung via Google</span>
+              </div>
+              <p className="text-[11px] text-neutral-400">
+                Pilih akun YouTube Anda secara otomatis via Google Identity Services. Judul, avatar, dan channel ID akan tersimpan permanen.
+              </p>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setIsAdding(true);
+                    const result = await authorizeAndFetchYouTubeChannel(true);
+                    await api.gisSyncChannel({
+                      accessToken: result.accessToken,
+                      channelData: result.channel,
+                    });
+                    setIsAddModalOpen(false);
+                    setBannerMessage({
+                      text: `Channel "${result.channel.title}" (${result.channel.id}) berhasil ditautkan dan tersimpan permanen!`,
+                      type: 'success',
+                    });
+                    onChannelUpdated();
+                  } catch (err: any) {
+                    alert(`Gagal menautkan channel: ${err.message}`);
+                  } finally {
+                    setIsAdding(false);
+                  }
+                }}
+                disabled={isAdding}
+                className="w-full py-2.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-emerald-950/30"
+              >
+                <Key className="w-3.5 h-3.5" />
+                <span>{isAdding ? 'Menghubungkan...' : 'Tautkan Akun YouTube (Google GIS)'}</span>
+              </button>
+            </div>
+
+            <div className="px-6 pt-3 flex items-center gap-2 text-[10px] text-neutral-500 uppercase tracking-wider font-semibold">
+              <div className="flex-1 border-t border-neutral-800" />
+              <span>Atau Masukkan Manual</span>
+              <div className="flex-1 border-t border-neutral-800" />
+            </div>
+
+            <form onSubmit={handleAddChannel} className="p-6 pt-2 space-y-4 text-xs">
               <div>
                 <label className="block text-[11px] font-semibold text-neutral-300 mb-1">
                   Nama Tampilan Channel

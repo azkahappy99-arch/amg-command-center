@@ -101,6 +101,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     );
   }, [actionRequired]);
 
+  // Reliable Connected Channel Calculation (Requirement 1)
+  const connectedCount = useMemo(() => {
+    const fromProps = channels.filter(
+      (c) =>
+        c.status === 'CONNECTED' ||
+        c.status === 'Connected' ||
+        c.status === 'Ready' ||
+        c.status === 'RECONNECT REQUIRED' ||
+        c.status === 'TOKEN EXPIRED'
+    ).length;
+    return Math.max(fromProps, metrics.connectedChannels || 0);
+  }, [channels, metrics.connectedChannels]);
+
   return (
     <div className="space-y-6 overflow-x-hidden max-w-full w-full pb-20 sm:pb-24 lg:pb-8">
       {/* 1. Top Title & Quick Actions */}
@@ -211,8 +224,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           className="p-3.5 rounded-xl bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition cursor-pointer group"
         >
           <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-[11px] font-medium uppercase tracking-wider">Terhubung</span>
-            {metrics.connectedChannels > 0 ? (
+            <span className="text-[11px] font-medium uppercase tracking-wider">Channel Terhubung</span>
+            {connectedCount > 0 ? (
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400 shadow-[0_0_8px_#34d399,0_0_14px_#10b981]"></span>
@@ -221,12 +234,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <CheckCircle2 className="w-3.5 h-3.5 text-neutral-500" />
             )}
           </div>
-          <div className="text-2xl font-bold text-emerald-400">{metrics.connectedChannels}</div>
+          <div className="text-2xl font-bold text-emerald-400">
+            {new Intl.NumberFormat('id-ID').format(connectedCount)}
+          </div>
           <div className="text-[10px] text-emerald-400 mt-1 font-medium flex items-center gap-1">
-            {metrics.connectedChannels > 0 ? (
+            {connectedCount > 0 ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                <span>Terotorisasi Aktif</span>
+                <span>{new Intl.NumberFormat('id-ID').format(connectedCount)} Terotorisasi Aktif</span>
               </>
             ) : (
               <span className="text-neutral-500">Belum Terhubung</span>

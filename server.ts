@@ -58,7 +58,13 @@ app.get('/api/stats', (req: Request, res: Response) => {
   const errorLogs = Array.from(dbStore.errorLogs.values());
 
   const totalChannels = channels.length;
-  const connectedChannels = channels.filter(c => c.status === 'Connected' || c.status === 'Ready').length;
+  const connectedChannels = channels.filter(c => 
+    c.status === 'CONNECTED' || 
+    c.status === 'Connected' || 
+    c.status === 'Ready' || 
+    c.status === 'RECONNECT REQUIRED' ||
+    c.status === 'TOKEN EXPIRED'
+  ).length;
   const newVideos = videos.filter(v => !v.isManaged).length;
   const hdReady = videos.filter(v => !v.isManaged && v.processingStatus === 'processed').length;
   const processing = videos.filter(v => v.processingStatus === 'processing').length;
@@ -181,14 +187,18 @@ app.get('/api/channels', (req: Request, res: Response) => {
   const channels = Array.from(dbStore.channels.values()).map(c => {
     const authStatus = youtubeAuthService.getConnectionStatus(c.id);
     let effectiveStatus: string = c.status;
-    if (c.status === 'CONNECTED' || authStatus.isConnected) {
-      effectiveStatus = 'CONNECTED';
+    if (c.status === 'CONNECTED' || c.status === 'Connected' || authStatus.isConnected) {
+      if (authStatus.status === 'TOKEN EXPIRED') {
+        effectiveStatus = 'RECONNECT REQUIRED';
+      } else {
+        effectiveStatus = 'CONNECTED';
+      }
     } else if (c.hasOAuthConfigured) {
-      effectiveStatus = authStatus.status; // 'TOKEN EXPIRED' or 'AUTHORIZATION REQUIRED'
+      effectiveStatus = authStatus.status === 'TOKEN EXPIRED' ? 'RECONNECT REQUIRED' : (authStatus.status || 'CONNECTED');
     } else if (c.isSeeded) {
       effectiveStatus = 'DISCONNECTED';
     } else {
-      effectiveStatus = 'AUTHORIZATION REQUIRED';
+      effectiveStatus = c.status || 'CONNECTED';
     }
 
     const bufferEval = evaluateChannelScheduleBuffer(c, allVideos);
@@ -274,6 +284,17 @@ app.post('/api/channels', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Title and YouTube Channel ID are required.' });
   }
 
+  // Duplicate Channel Prevention (Requirement 8)
+  const normYtId = youtubeChannelId.trim();
+  const existing = dbStore.getChannelByYoutubeId(normYtId);
+  if (existing) {
+    return res.status(409).json({
+      error: `Channel sudah terhubung. Channel "${existing.title}" (${normYtId}) sudah terdaftar di AMG Command Center.`,
+      alreadyExists: true,
+      channel: existing,
+    });
+  }
+
   let finalScheduleConfig = scheduleConfig;
   if (scheduleConfig) {
     const valid = validateScheduleConfig(scheduleConfig);
@@ -297,9 +318,9 @@ app.post('/api/channels', (req: Request, res: Response) => {
   const id = `chan-${Date.now()}`;
   const newChannel = {
     id,
-    youtubeChannelId,
-    title,
-    status: 'Connected' as const,
+    youtubeChannelId: normYtId,
+    title: title.trim(),
+    status: 'CONNECTED' as const,
     contentProfileId: contentProfileId || '',
     nicheCategory: resolvedNicheCategory || 'General',
     nicheBadge: resolvedNicheBadge || 'amber',
@@ -317,16 +338,20 @@ app.post('/api/channels', (req: Request, res: Response) => {
       channelMemberships: 0,
       totalChannelRevenue: 0,
     },
-    uploadPlaylistId: `UU${youtubeChannelId.replace(/^UC/, '')}`,
+    uploadPlaylistId: `UU${normYtId.replace(/^UC/, '')}`,
     subscriberCount: 0,
     videoCount: 0,
     unmanagedVideoCount: 0,
     hasOAuthConfigured: false,
+    isSeeded: false, // User added channel is NEVER seeded fixture
+    platform: 'YouTube',
+    ownerId: 'azkahappy99@gmail.com',
+    connectedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
-  dbStore.channels.set(id, newChannel);
+  dbStore.upsertChannel(newChannel as any);
 
   dbStore.logActivity({
     user: 'Administrator',
@@ -473,7 +498,20 @@ app.delete('/api/channels/:id', (req: Request, res: Response) => {
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
   dbStore.channels.delete(channel.id);
-  res.json({ success: true, message: `Channel ${channel.title} deleted.` });
+  youtubeAuthService.revokeCredentials(channel.id);
+  dbStore.saveToDisk();
+
+  dbStore.logActivity({
+    user: 'Administrator',
+    channelId: channel.id,
+    channelTitle: channel.title,
+    operation: 'Channel Unlinked / Removed',
+    previousValue: channel.status,
+    newValue: 'Unlinked permanently by user',
+    result: 'SUCCESS',
+  });
+
+  res.json({ success: true, message: `Channel "${channel.title}" berhasil diputuskan dan dihapus.` });
 });
 
 // REAL YOUTUBE SYNC ENDPOINT
@@ -950,27 +988,24 @@ app.post('/api/auth/youtube/connect-credentials', async (req: Request, res: Resp
 
 app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
   const { channelId, accessToken, channelData } = req.body;
-  if (!accessToken || !channelData) {
-    return res.status(400).json({ error: 'accessToken and channelData are required.' });
+  if (!accessToken || !channelData || !channelData.id) {
+    return res.status(400).json({ error: 'accessToken and channelData with valid channel id are required.' });
   }
 
-  // Find target channel: by channelId, by matching youtubeChannelId, or first available channel
-  let channel = channelId ? dbStore.channels.get(channelId) : null;
-  if (!channel && channelData.id) {
-    channel = Array.from(dbStore.channels.values()).find((c) => c.youtubeChannelId === channelData.id);
-  }
+  // 1. Search for existing channel by youtubeChannelId (unique key)
+  let channel = dbStore.getChannelByYoutubeId(channelData.id);
 
-  // If still not matched, use first channel or create
-  if (!channel) {
-    const existingList = Array.from(dbStore.channels.values());
-    if (existingList.length > 0 && !channelId) {
-      channel = existingList[0];
+  // 2. If not found by YouTube ID, only map if candidate was created without a youtubeChannelId yet
+  if (!channel && channelId) {
+    const candidate = dbStore.channels.get(channelId);
+    if (candidate && !candidate.youtubeChannelId) {
+      channel = candidate;
     }
   }
 
-  const targetId = channel ? channel.id : (channelId || `chan-${channelData.id || Date.now()}`);
+  const targetId = channel ? channel.id : `chan-${channelData.id}`;
 
-  // Securely store credentials in memory vault
+  // Securely store credentials in persistent vault
   youtubeAuthService.storeCredentials(targetId, {
     channelId: targetId,
     accessToken,
@@ -979,23 +1014,32 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
     accountEmail: channelData.title ? `${channelData.title} (Live GIS)` : 'gis-client@azkamedia.com',
   });
 
+  const now = new Date().toISOString();
+
   if (channel) {
     channel.title = channelData.title || channel.title;
-    channel.youtubeChannelId = channelData.id || channel.youtubeChannelId;
+    channel.youtubeChannelId = channelData.id;
     if (channelData.customUrl) channel.customUrl = channelData.customUrl;
+    channel.channelUrl = channelData.customUrl ? `https://youtube.com/${channelData.customUrl}` : `https://youtube.com/channel/${channelData.id}`;
     if (channelData.thumbnailUrl) channel.thumbnailUrl = channelData.thumbnailUrl;
     if (channelData.subscriberCount !== undefined) channel.subscriberCount = channelData.subscriberCount;
     if (channelData.videoCount !== undefined) channel.videoCount = channelData.videoCount;
     channel.status = 'CONNECTED';
     channel.hasOAuthConfigured = true;
     channel.isSeeded = false;
-    channel.updatedAt = new Date().toISOString();
+    channel.platform = 'YouTube';
+    channel.ownerId = 'azkahappy99@gmail.com';
+    channel.connectedAt = channel.connectedAt || now;
+    channel.updatedAt = now;
+    dbStore.upsertChannel(channel);
   } else {
+    // Brand new channel — APPEND to database
     channel = {
       id: targetId,
       youtubeChannelId: channelData.id,
       title: channelData.title || 'Connected YouTube Channel',
       customUrl: channelData.customUrl || `@${channelData.id}`,
+      channelUrl: channelData.customUrl ? `https://youtube.com/${channelData.customUrl}` : `https://youtube.com/channel/${channelData.id}`,
       thumbnailUrl: channelData.thumbnailUrl || '',
       status: 'CONNECTED',
       contentProfileId: '',
@@ -1007,30 +1051,34 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
       unmanagedVideoCount: 0,
       hasOAuthConfigured: true,
       isSeeded: false,
+      platform: 'YouTube',
+      ownerId: 'azkahappy99@gmail.com',
+      connectedAt: now,
       nicheCategory: 'General',
       nicheBadge: 'emerald',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
-    dbStore.channels.set(targetId, channel as any);
+    dbStore.upsertChannel(channel as any);
   }
 
   dbStore.logActivity({
     user: 'GIS OAuth Client',
     channelId: targetId,
     channelTitle: channel.title,
-    operation: 'YouTube GIS Authorization Connected',
+    operation: 'YouTube Channel Connected & Persisted',
     previousValue: 'DISCONNECTED',
-    newValue: `Connected live YouTube channel: ${channel.title} (${channel.youtubeChannelId}) via Google Identity Services (Client-Side). Status: CONNECTED`,
+    newValue: `Tersambung permanen: ${channel.title} (${channel.youtubeChannelId}) via Google Identity Services. Status: CONNECTED`,
     result: 'SUCCESS',
   });
 
   return res.json({
     success: true,
     channel,
-    message: `Channel "${channel.title}" successfully authorized and connected!`,
+    message: `Channel "${channel.title}" berhasil ditautkan dan tersimpan secara permanen!`,
   });
 });
+
 
 app.post('/api/admin/clear-demo-data', (req: Request, res: Response) => {
   const report = dbStore.clearSeededData();

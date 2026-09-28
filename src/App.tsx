@@ -120,6 +120,15 @@ export default function App() {
         if (channelsData.length > 0 && !channelsData.some((c: Channel) => c.id === selectedChannelId)) {
           setSelectedChannelId(channelsData[0].id);
         }
+        // Cache connected channel IDs in localStorage for client resilience
+        const connectedReal = channelsData.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
+        if (connectedReal.length > 0) {
+          try {
+            localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
+          } catch {
+            // ignore
+          }
+        }
       }
       if (profilesData) setProfiles(profilesData);
       if (titlesData) setTitles(titlesData);
@@ -134,41 +143,23 @@ export default function App() {
     }
   };
 
-      useEffect(() => {
-    const saved = localStorage.getItem('amg_saved_channel');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setChannels([parsed]);
-        setSelectedChannelId(parsed.id);
-      } catch (e) {}
-    }
+  useEffect(() => {
     loadAllData();
   }, []);
 
-
-      const handleGisAuthorize = async (channelId?: string) => {
+  const handleGisAuthorize = async (channelId?: string) => {
     setIsRefreshing(true);
     try {
       const result = await authorizeAndFetchYouTubeChannel(true);
-      if (result && result.channel) {
-        const channelData = {
-          id: result.channel.id,
-          title: result.channel.title,
-          youtubeChannelId: result.channel.id,
-          status: 'CONNECTED',
-          thumbnailUrl: result.channel.thumbnailUrl,
-          subscriberCount: result.channel.subscriberCount,
-          videoCount: result.channel.videoCount,
-        };
-        // Simpan permanen di browser
-        localStorage.setItem('amg_saved_channel', JSON.stringify(channelData));
-        setChannels([channelData as any]);
-        setSelectedChannelId(result.channel.id);
-        alert(`Berhasil terhubung ke channel: ${result.channel.title}`);
-      } else {
-        alert('Otorisasi berhasil tetapi data channel tidak ditemukan atau kosong.');
+      const res = await api.gisSyncChannel({
+        channelId,
+        accessToken: result.accessToken,
+        channelData: result.channel,
+      });
+      if (res && res.channel?.id) {
+        setSelectedChannelId(res.channel.id);
       }
+      await loadAllData();
     } catch (err: any) {
       console.error('GIS Authorization error:', err);
       alert(`Google Identity Services: ${err.message || 'Otorisasi ditolak atau popup dibatalkan.'}`);
@@ -176,9 +167,6 @@ export default function App() {
       setIsRefreshing(false);
     }
   };
-
-      
-
 
   const unreadNotifsCount = notifications.filter((n) => !n.read).length;
   const unmanagedCount = videos.filter((v) => !v.isManaged).length;

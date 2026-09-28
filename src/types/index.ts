@@ -3,6 +3,7 @@ export type ChannelStatus =
   | 'DISCONNECTED'
   | 'AUTHORIZATION REQUIRED'
   | 'TOKEN EXPIRED'
+  | 'RECONNECT REQUIRED'
   | 'ERROR'
   | 'Connected'
   | 'Disconnected'
@@ -130,6 +131,10 @@ export interface Channel {
   unmanagedVideoCount?: number;
   hasOAuthConfigured?: boolean;
   isSeeded?: boolean;
+  connectedAt?: string;
+  platform?: string;
+  ownerId?: string;
+  channelUrl?: string;
   createdAt: string;
   updatedAt: string;
 }

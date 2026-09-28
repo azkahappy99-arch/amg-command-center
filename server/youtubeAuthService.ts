@@ -4,6 +4,9 @@
  * and token refreshes. Never leaks refresh tokens or client secrets to the browser.
  */
 
+import fs from 'fs';
+import path from 'path';
+
 export interface StoredCredentials {
   channelId: string;
   accessToken: string;
@@ -13,8 +16,44 @@ export interface StoredCredentials {
   accountEmail?: string;
 }
 
-// In-memory secure server-side credential vault
+// Persistent server-side credential vault
 const credentialsVault: Map<string, StoredCredentials> = new Map();
+const credentialsFilePath = path.resolve(process.cwd(), 'data/amg-credentials.json');
+
+function loadCredentialsFromDisk() {
+  try {
+    if (fs.existsSync(credentialsFilePath)) {
+      const raw = fs.readFileSync(credentialsFilePath, 'utf8');
+      const data = JSON.parse(raw);
+      if (Array.isArray(data)) {
+        for (const [id, cred] of data) {
+          credentialsVault.set(id, cred);
+        }
+      }
+      console.log(`[YoutubeAuthService] Loaded credentials for ${credentialsVault.size} channels from disk.`);
+    }
+  } catch (err) {
+    console.error('[YoutubeAuthService] Error reading credentials from disk:', err);
+  }
+}
+
+function saveCredentialsToDisk() {
+  try {
+    const dataDir = path.dirname(credentialsFilePath);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const entries = Array.from(credentialsVault.entries());
+    const tempFile = `${credentialsFilePath}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(entries, null, 2), 'utf8');
+    fs.renameSync(tempFile, credentialsFilePath);
+  } catch (err) {
+    console.error('[YoutubeAuthService] Error saving credentials to disk:', err);
+  }
+}
+
+// Initialize on startup
+loadCredentialsFromDisk();
 
 export const YOUTUBE_SCOPES = [
   'https://www.googleapis.com/auth/youtube',
@@ -36,6 +75,7 @@ export class YoutubeAuthService {
     this.redirectUri = process.env.GOOGLE_REDIRECT_URI || (process.env.APP_URL 
       ? `${process.env.APP_URL}/api/auth/youtube/callback`
       : 'http://localhost:3000/api/auth/youtube/callback');
+    loadCredentialsFromDisk();
   }
 
   public getRedirectUri(custom?: string): string {
@@ -155,6 +195,7 @@ export class YoutubeAuthService {
       creds.accessToken = tokenData.access_token;
       creds.tokenExpiresAt = Date.now() + (tokenData.expires_in || 3600) * 1000;
       credentialsVault.set(channelId, creds);
+      saveCredentialsToDisk();
 
       return creds.accessToken;
     } catch (err) {
@@ -168,6 +209,7 @@ export class YoutubeAuthService {
    */
   public storeCredentials(channelId: string, creds: StoredCredentials): void {
     credentialsVault.set(channelId, creds);
+    saveCredentialsToDisk();
   }
 
   /**
@@ -222,6 +264,7 @@ export class YoutubeAuthService {
 
   public revokeCredentials(channelId: string): void {
     credentialsVault.delete(channelId);
+    saveCredentialsToDisk();
   }
 }
 

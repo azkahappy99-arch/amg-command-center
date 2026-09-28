@@ -4,6 +4,8 @@
  * Supports Firestore schema mappings with persistent in-memory repository.
  */
 
+import fs from 'fs';
+import path from 'path';
 import {
   Channel,
   ContentProfile,
@@ -42,8 +44,142 @@ class DatabaseStore {
     youtubeApiKeyConfigured: !!process.env.YOUTUBE_API_KEY,
   };
 
+  private dbFilePath: string;
+
   constructor() {
+    const dataDir = path.resolve(process.cwd(), 'data');
+    if (!fs.existsSync(dataDir)) {
+      try {
+        fs.mkdirSync(dataDir, { recursive: true });
+      } catch (e) {
+        console.error('[DatabaseStore] Could not create data directory:', e);
+      }
+    }
+    this.dbFilePath = path.join(dataDir, 'amg-database.json');
+    this.initDatabase();
+  }
+
+  private initDatabase() {
+    if (fs.existsSync(this.dbFilePath)) {
+      try {
+        const raw = fs.readFileSync(this.dbFilePath, 'utf8');
+        const data = JSON.parse(raw);
+        if (data.channels && Array.isArray(data.channels)) {
+          this.channels = new Map(data.channels);
+        }
+        if (data.profiles && Array.isArray(data.profiles)) {
+          this.profiles = new Map(data.profiles);
+        }
+        if (data.masterTitles && Array.isArray(data.masterTitles)) {
+          this.masterTitles = new Map(data.masterTitles);
+        }
+        if (data.masterThumbnails && Array.isArray(data.masterThumbnails)) {
+          this.masterThumbnails = new Map(data.masterThumbnails);
+        }
+        if (data.videos && Array.isArray(data.videos)) {
+          this.videos = new Map(data.videos);
+        }
+        if (data.automationBatches && Array.isArray(data.automationBatches)) {
+          this.automationBatches = new Map(data.automationBatches);
+        }
+        if (data.automationJobs && Array.isArray(data.automationJobs)) {
+          this.automationJobs = new Map(data.automationJobs);
+        }
+        if (data.errorLogs && Array.isArray(data.errorLogs)) {
+          this.errorLogs = new Map(data.errorLogs);
+        }
+        if (data.activityLogs && Array.isArray(data.activityLogs)) {
+          this.activityLogs = data.activityLogs;
+        }
+        if (data.notifications && Array.isArray(data.notifications)) {
+          this.notifications = new Map(data.notifications);
+        }
+        if (data.settings) {
+          this.settings = { ...this.settings, ...data.settings };
+        }
+        console.log(`[DatabaseStore] Loaded persistent database: ${this.channels.size} channels, ${this.videos.size} videos from ${this.dbFilePath}`);
+        return;
+      } catch (err) {
+        console.error('[DatabaseStore] Failed to parse existing database file, seeding default:', err);
+      }
+    }
+
+    // Seed initial fixtures if file does not exist
     this.seedInitialData();
+    this.saveToDisk();
+  }
+
+  public saveToDisk(): void {
+    try {
+      const dataDir = path.dirname(this.dbFilePath);
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      const serialized = {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        channels: Array.from(this.channels.entries()),
+        profiles: Array.from(this.profiles.entries()),
+        masterTitles: Array.from(this.masterTitles.entries()),
+        masterThumbnails: Array.from(this.masterThumbnails.entries()),
+        videos: Array.from(this.videos.entries()),
+        automationBatches: Array.from(this.automationBatches.entries()),
+        automationJobs: Array.from(this.automationJobs.entries()),
+        errorLogs: Array.from(this.errorLogs.entries()),
+        activityLogs: this.activityLogs.slice(0, 500),
+        notifications: Array.from(this.notifications.entries()),
+        settings: this.settings,
+      };
+
+      const tempFile = `${this.dbFilePath}.tmp`;
+      fs.writeFileSync(tempFile, JSON.stringify(serialized, null, 2), 'utf8');
+      fs.renameSync(tempFile, this.dbFilePath);
+    } catch (err) {
+      console.error('[DatabaseStore] Error writing database to disk:', err);
+    }
+  }
+
+  public upsertChannel(channel: Channel): Channel {
+    const existing = this.getChannelByYoutubeId(channel.youtubeChannelId) || this.channels.get(channel.id);
+    if (existing) {
+      const updated: Channel = {
+        ...existing,
+        ...channel,
+        id: existing.id,
+        youtubeChannelId: channel.youtubeChannelId || existing.youtubeChannelId,
+        connectedAt: existing.connectedAt || channel.connectedAt || new Date().toISOString(),
+        createdAt: existing.createdAt,
+        updatedAt: new Date().toISOString(),
+        status: channel.status || 'CONNECTED',
+        isSeeded: false, // Confirmed permanent user channel
+      };
+      this.channels.set(existing.id, updated);
+      this.saveToDisk();
+      return updated;
+    }
+
+    const newChan: Channel = {
+      ...channel,
+      status: channel.status || 'CONNECTED',
+      connectedAt: channel.connectedAt || new Date().toISOString(),
+      createdAt: channel.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isSeeded: false,
+    };
+    this.channels.set(newChan.id, newChan);
+    this.saveToDisk();
+    return newChan;
+  }
+
+  public getChannelByYoutubeId(youtubeChannelId: string): Channel | undefined {
+    if (!youtubeChannelId) return undefined;
+    const norm = youtubeChannelId.trim().toLowerCase();
+    for (const c of this.channels.values()) {
+      if (c.youtubeChannelId && c.youtubeChannelId.trim().toLowerCase() === norm) {
+        return c;
+      }
+    }
+    return undefined;
   }
 
   private seedInitialData() {
@@ -847,6 +983,7 @@ class DatabaseStore {
     if (this.activityLogs.length > 500) {
       this.activityLogs.pop();
     }
+    this.saveToDisk();
     return log;
   }
 
@@ -858,6 +995,7 @@ class DatabaseStore {
       ...item,
     };
     this.errorLogs.set(error.id, error);
+    this.saveToDisk();
     return error;
   }
 
@@ -888,6 +1026,7 @@ class DatabaseStore {
       }
     }
 
+    this.saveToDisk();
     return { removedChannels, removedVideos, removedBatches };
   }
 
