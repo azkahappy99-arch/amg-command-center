@@ -369,6 +369,14 @@ export default function App() {
                 setSelectedChannelId(chanId);
                 setCurrentSection('automation');
               }}
+              onNavigateToTitles={(chanId) => {
+                setSelectedChannelId(chanId);
+                setCurrentSection('titles');
+              }}
+              onNavigateToThumbnails={(chanId) => {
+                setSelectedChannelId(chanId);
+                setCurrentSection('thumbnails');
+              }}
             />
           )}
 
@@ -398,6 +406,9 @@ export default function App() {
             <MasterTitlesView
               titles={titles}
               profiles={profiles}
+              channels={channels}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={setSelectedChannelId}
               onTitlesUpdated={loadAllData}
             />
           )}
@@ -407,12 +418,19 @@ export default function App() {
               thumbnails={thumbnails}
               titles={titles}
               profiles={profiles}
+              channels={channels}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={setSelectedChannelId}
               onThumbnailsUpdated={loadAllData}
             />
           )}
 
           {currentSection === 'scheduler' && (
-            <SchedulerView channels={channels} />
+            <SchedulerView
+              channels={channels}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={setSelectedChannelId}
+            />
           )}
 
           {currentSection === 'automation' && (

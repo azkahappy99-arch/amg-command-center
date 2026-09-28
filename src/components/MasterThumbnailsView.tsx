@@ -8,13 +8,16 @@ import {
   X,
   CheckCircle2,
 } from 'lucide-react';
-import { MasterThumbnail, MasterTitle, ContentProfile } from '../types/index.ts';
+import { MasterThumbnail, MasterTitle, ContentProfile, Channel } from '../types/index.ts';
 import { api } from '../services/api.ts';
 
 interface MasterThumbnailsViewProps {
   thumbnails: MasterThumbnail[];
   titles: MasterTitle[];
   profiles: ContentProfile[];
+  channels?: Channel[];
+  selectedChannelId?: string;
+  onSelectChannel?: (channelId: string) => void;
   onThumbnailsUpdated: () => void;
 }
 
@@ -22,9 +25,23 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
   thumbnails,
   titles,
   profiles,
+  channels = [],
+  selectedChannelId = '',
+  onSelectChannel,
   onThumbnailsUpdated,
 }) => {
-  const [selectedProfileId, setSelectedProfileId] = useState<string>(profiles[0]?.id || '');
+  // Active Channel & Profile Resolution
+  const activeChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
+  const activeProfile = profiles.find(
+    (p) =>
+      p.id === activeChannel?.contentProfileId ||
+      p.id === `profile-${activeChannel?.id}` ||
+      p.id === activeChannel?.id
+  ) || profiles[0];
+
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(
+    activeProfile?.id || profiles[0]?.id || ''
+  );
   const [newName, setNewName] = useState('');
   const [selectedImageBase64, setSelectedImageBase64] = useState<string>('');
   const [selectedFileName, setSelectedFileName] = useState<string>('');
@@ -32,25 +49,66 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
   const [matrixData, setMatrixData] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const profileThumbnails = thumbnails
-    .filter((th) => th.profileId === selectedProfileId)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
-
-  const profileTitles = titles
-    .filter((t) => t.profileId === selectedProfileId && t.isActive)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
-
-  // Load rotation matrix
+  // Sync profile when active channel changes
   useEffect(() => {
-    api
-      .getRotationMatrix(selectedProfileId, 12)
-      .then((res) => {
-        if (res && res.matrix) {
-          setMatrixData(res.matrix);
+    if (activeProfile?.id) {
+      setSelectedProfileId(activeProfile.id);
+    }
+  }, [activeChannel?.id, activeProfile?.id]);
+
+  // Filter thumbnails strictly for the active channel - 100% Isolated
+  const profileThumbnails = thumbnails
+    .filter((th) => {
+      if (activeChannel) {
+        if (th.channelId && (th.channelId === activeChannel.id || th.channelId === activeChannel.youtubeChannelId)) {
+          return true;
         }
-      })
-      .catch((err) => console.error(err));
-  }, [selectedProfileId, thumbnails, titles]);
+        if (activeChannel.contentProfileId && th.profileId === activeChannel.contentProfileId) {
+          return true;
+        }
+        if (th.profileId === `profile-${activeChannel.id}` || th.profileId === activeChannel.id) {
+          return true;
+        }
+        return false;
+      }
+      return th.profileId === selectedProfileId;
+    })
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+
+  // Filter titles strictly for the active channel - 100% Isolated
+  const profileTitles = titles
+    .filter((t) => {
+      if (activeChannel) {
+        if (t.channelId && (t.channelId === activeChannel.id || t.channelId === activeChannel.youtubeChannelId)) {
+          return true;
+        }
+        if (activeChannel.contentProfileId && t.profileId === activeChannel.contentProfileId) {
+          return true;
+        }
+        if (t.profileId === `profile-${activeChannel.id}` || t.profileId === activeChannel.id) {
+          return true;
+        }
+        return false;
+      }
+      return t.profileId === selectedProfileId;
+    })
+    .filter((t) => t.isActive)
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+
+  // Load rotation matrix strictly for the active channel / profile
+  useEffect(() => {
+    const targetFilter = activeChannel?.id || activeChannel?.contentProfileId || selectedProfileId;
+    if (targetFilter) {
+      api
+        .getRotationMatrix(targetFilter, 12)
+        .then((res) => {
+          if (res && res.matrix) {
+            setMatrixData(res.matrix);
+          }
+        })
+        .catch((err) => console.error(err));
+    }
+  }, [activeChannel?.id, activeChannel?.contentProfileId, selectedProfileId, thumbnails, titles]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -104,8 +162,14 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
 
     setIsAdding(true);
     try {
+      const targetChannelId = activeChannel?.id;
+      const targetProfileId =
+        activeChannel?.contentProfileId ||
+        (activeChannel ? `profile-${activeChannel.id}` : selectedProfileId);
+
       await api.createMasterThumbnail({
-        profileId: selectedProfileId,
+        channelId: targetChannelId,
+        profileId: targetProfileId,
         name: newName.trim(),
         url: selectedImageBase64,
         orderIndex: profileThumbnails.length,
@@ -144,20 +208,46 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
           </p>
         </div>
 
-        {/* Profile Selector */}
-        <div className="flex items-center space-x-2">
-          <span className="text-xs font-semibold text-neutral-400 uppercase">PROFIL:</span>
-          <select
-            value={selectedProfileId}
-            onChange={(e) => setSelectedProfileId(e.target.value)}
-            className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
-          >
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+        {/* Channel / Profile Selector */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {channels && channels.length > 0 ? (
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold text-neutral-300 uppercase tracking-wider">CHANNEL:</span>
+              <select
+                value={activeChannel?.id || ''}
+                onChange={(e) => onSelectChannel?.(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 text-neutral-100 text-xs font-bold focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer shadow-sm"
+              >
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id} className="bg-neutral-900 text-white font-medium">
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-semibold text-neutral-400 uppercase">PROFIL:</span>
+              <select
+                value={selectedProfileId}
+                onChange={(e) => setSelectedProfileId(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {activeChannel && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 text-[11px] text-neutral-300 border border-neutral-800">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Profil: <strong className="text-neutral-100">{activeProfile?.name || activeChannel.title}</strong>
+            </span>
+          )}
         </div>
       </div>
 
@@ -313,60 +403,66 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
       {/* Thumbnails Gallery Grid */}
       <div className="space-y-3">
         <div className="flex items-center justify-between text-xs font-bold text-neutral-300 uppercase tracking-wider">
-          <span>MASTER THUMBNAIL TERKONFIGURASI ({profileThumbnails.length})</span>
+          <span>MASTER THUMBNAIL TERKONFIGURASI KHUSUS {activeChannel?.title?.toUpperCase() || 'CHANNEL'} ({profileThumbnails.length})</span>
           <span className="text-neutral-500 font-normal">URUTAN MODULO INDEPENDEN</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {profileThumbnails.map((thumb, idx) => (
-            <div
-              key={thumb.id}
-              className="p-3 rounded-2xl bg-neutral-900/60 border border-neutral-800 hover:border-neutral-700 flex flex-col justify-between transition group"
-            >
-              <div className="space-y-2">
-                <div className="relative aspect-video rounded-xl overflow-hidden bg-neutral-950 border border-neutral-800">
-                  <img
-                    src={thumb.url}
-                    alt={thumb.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                  />
-                  <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-sm text-[10px] font-bold text-neutral-200">
-                    TH{idx + 1}
-                  </span>
-                </div>
-                <div>
-                  <div className="font-semibold text-xs text-neutral-200 truncate">{thumb.name}</div>
-                  <div className="text-[10px] text-neutral-500 truncate mt-0.5 font-mono">
-                    Indeks Urutan: #{idx}
+        {profileThumbnails.length === 0 ? (
+          <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-500 text-xs">
+            Belum ada Master Thumbnail untuk channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong>. Upload atau tambahkan thumbnail master pertama khusus channel ini melalui formulir di atas.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {profileThumbnails.map((thumb, idx) => (
+              <div
+                key={thumb.id}
+                className="p-3 rounded-2xl bg-neutral-900/60 border border-neutral-800 hover:border-neutral-700 flex flex-col justify-between transition group"
+              >
+                <div className="space-y-2">
+                  <div className="relative aspect-video rounded-xl overflow-hidden bg-neutral-950 border border-neutral-800">
+                    <img
+                      src={thumb.url}
+                      alt={thumb.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                    />
+                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-sm text-[10px] font-bold text-neutral-200">
+                      TH{idx + 1}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="font-semibold text-xs text-neutral-200 truncate">{thumb.name}</div>
+                    <div className="text-[10px] text-neutral-500 truncate mt-0.5 font-mono">
+                      Indeks Urutan: #{idx}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="pt-2 flex items-center justify-between border-t border-neutral-800/60 mt-3">
-                <span className="text-[10px] text-emerald-400 font-medium">Siap</span>
-                <button
-                  onClick={() => handleDelete(thumb)}
-                  className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition"
-                  title="Hapus thumbnail"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                <div className="pt-2 flex items-center justify-between border-t border-neutral-800/60 mt-3">
+                  <span className="text-[10px] text-emerald-400 font-medium">Siap</span>
+                  <button
+                    onClick={() => handleDelete(thumb)}
+                    className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
+                    title="Hapus thumbnail"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Dynamic N Titles x M Thumbnails Rotation Matrix Table */}
+      {/* Dynamic N Titles x M Thumbnails Rotation Matrix Table (100% Isolated to Active Channel) */}
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-neutral-800">
           <div>
             <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
               <RotateCw className="w-4 h-4 text-red-500" />
-              Matriks Rotasi Dinamis (Judul & Thumbnail Independen)
+              Matriks Rotasi Dinamis - Channel {activeChannel?.title || 'Aktif'}
             </h3>
             <p className="text-xs text-neutral-400 mt-0.5">
-              Menampilkan kombinasi rotasi judul dan thumbnail pada antrean upload video.
+              Kombinasi deterministik antara Master Judul {activeChannel?.title} ({profileTitles.length}) dan Master Thumbnail {activeChannel?.title} ({profileThumbnails.length}). Data terisolasi 100% per channel.
             </p>
           </div>
           <span className="text-xs font-mono px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-300 font-semibold self-start sm:self-auto">
@@ -374,51 +470,68 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
           </span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-neutral-300 divide-y divide-neutral-800">
-            <thead className="bg-neutral-950/80 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-              <tr>
-                <th className="py-2.5 px-3">VIDEO</th>
-                <th className="py-2.5 px-3">STATUS</th>
-                <th className="py-2.5 px-3">DIJADWALKAN</th>
-                <th className="py-2.5 px-3">JUDUL</th>
-                <th className="py-2.5 px-3">THUMBNAIL</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-800/60">
-              {matrixData.map((item, i) => (
-                <tr key={i} className="hover:bg-neutral-800/30 transition font-mono">
-                  <td className="py-2.5 px-3 font-bold text-neutral-200">
-                    Video #{item.videoIndex + 1}
-                  </td>
-                  <td className="py-2.5 px-3 font-sans">
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/40">
-                      TERVERIFIKASI
-                    </span>
-                  </td>
-                  <td className="py-2.5 px-3 font-sans text-neutral-300">
-                    Urutan #{item.videoIndex + 1}
-                  </td>
-                  <td className="py-2.5 px-3 font-sans font-medium text-emerald-400">
-                    {item.title?.text || `Judul ${item.titleIndex + 1}`}
-                  </td>
-                  <td className="py-2.5 px-3 font-sans flex items-center gap-2">
-                    {item.thumbnail?.url && (
-                      <img
-                        src={item.thumbnail.url}
-                        alt=""
-                        className="w-10 h-6 rounded object-cover border border-neutral-700"
-                      />
-                    )}
-                    <span className="text-neutral-300">
-                      {item.thumbnail?.name || `Thumbnail ${item.thumbnailIndex + 1}`}
-                    </span>
-                  </td>
+        {profileTitles.length === 0 || profileThumbnails.length === 0 ? (
+          <div className="p-8 rounded-xl bg-neutral-950/60 border border-neutral-800/80 text-center text-xs text-neutral-400 space-y-1.5">
+            <p className="font-semibold text-neutral-300">
+              Matriks Rotasi Memerlukan Aset Lengkap
+            </p>
+            <p className="text-neutral-500 text-[11px]">
+              Channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong> saat ini memiliki {profileTitles.length} Master Judul dan {profileThumbnails.length} Master Thumbnail.
+              Matriks akan otomatis terbentuk saat kedua aset terisi minimal 1 item.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-neutral-300 divide-y divide-neutral-800">
+              <thead className="bg-neutral-950/80 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                <tr>
+                  <th className="py-2.5 px-3">VIDEO</th>
+                  <th className="py-2.5 px-3">STATUS</th>
+                  <th className="py-2.5 px-3">URUTAN</th>
+                  <th className="py-2.5 px-3">JUDUL ({activeChannel?.title || 'CHANNEL'})</th>
+                  <th className="py-2.5 px-3">THUMBNAIL ({activeChannel?.title || 'CHANNEL'})</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-neutral-800/60">
+                {Array.from({ length: 12 }).map((_, idx) => {
+                  const assignedTitle = profileTitles[idx % profileTitles.length];
+                  const assignedThumb = profileThumbnails[idx % profileThumbnails.length];
+
+                  return (
+                    <tr key={idx} className="hover:bg-neutral-800/30 transition font-mono">
+                      <td className="py-2.5 px-3 font-bold text-neutral-200">
+                        Video #{idx + 1}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/40">
+                          TERVERIFIKASI
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-sans text-neutral-300">
+                        Slot #{idx + 1}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans font-medium text-emerald-400">
+                        {assignedTitle?.text || `Judul ${idx + 1}`}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans flex items-center gap-2">
+                        {assignedThumb?.url && (
+                          <img
+                            src={assignedThumb.url}
+                            alt=""
+                            className="w-10 h-6 rounded object-cover border border-neutral-700"
+                          />
+                        )}
+                        <span className="text-neutral-300">
+                          {assignedThumb?.name || `Thumbnail ${idx + 1}`}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

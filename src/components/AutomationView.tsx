@@ -98,6 +98,12 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   };
 
   useEffect(() => {
+    if (initialChannelId && initialChannelId !== selectedChannelId) {
+      setSelectedChannelId(initialChannelId);
+    }
+  }, [initialChannelId]);
+
+  useEffect(() => {
     if (selectedChannelId) {
       fetchPreview(selectedChannelId);
     }

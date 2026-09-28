@@ -666,7 +666,60 @@ export const api = {
   },
 
   // Content Profiles
-  getContentProfiles: async () => getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles),
+  getContentProfiles: async () => {
+    let profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+    let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+
+    // Ensure every channel has its own dedicated profile
+    let changed = false;
+    channels.forEach((chan) => {
+      const existing = profiles.find(
+        (p) =>
+          p.id === chan.contentProfileId ||
+          p.id === `profile-${chan.id}` ||
+          p.id === chan.id ||
+          p.name === chan.title
+      );
+      if (!existing) {
+        const profId = chan.contentProfileId || `profile-${chan.id}`;
+        const newProf: ContentProfile = {
+          id: profId,
+          name: chan.title || 'Channel Profile',
+          description: `Profil konfigurasi konten mandiri untuk channel ${chan.title}.`,
+          nicheCategory: chan.nicheCategory || 'General',
+          nicheBadge: chan.nicheBadge || 'cyan',
+          publishFrequency: chan.publishFrequency || '1/day',
+          publishTime: chan.publishTime || '16:00',
+          timezone: chan.timezone || 'Asia/Jakarta',
+          scheduleConfig: chan.scheduleConfig || {
+            mode: 'DAILY',
+            videosPerDay: 1,
+            times: ['16:00'],
+            timezone: 'Asia/Jakarta',
+            startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+          },
+          masterTitleIds: [],
+          masterThumbnailIds: [],
+          assignedChannelCount: 1,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        profiles.push(newProf);
+        chan.contentProfileId = profId;
+        changed = true;
+      } else if (!chan.contentProfileId) {
+        chan.contentProfileId = existing.id;
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      setStorageItem(KEYS.PROFILES, profiles);
+      setStorageItem(KEYS.CHANNELS, channels);
+    }
+    return profiles;
+  },
+
   createContentProfile: async (data: Partial<ContentProfile>) => {
     const list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     const newProfile: ContentProfile = {
@@ -695,6 +748,7 @@ export const api = {
     setStorageItem(KEYS.PROFILES, list);
     return newProfile;
   },
+
   updateContentProfile: async (id: string, data: Partial<ContentProfile>) => {
     const list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     const idx = list.findIndex((p) => p.id === id);
@@ -705,6 +759,7 @@ export const api = {
     }
     throw new Error('Profil tidak ditemukan');
   },
+
   deleteContentProfile: async (id: string) => {
     let list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     list = list.filter((p) => p.id !== id);
@@ -712,19 +767,65 @@ export const api = {
     return { success: true };
   },
 
-  // Master Titles
-  getMasterTitles: async (profileId?: string) => {
+  // Master Titles (100% Isolated Per Channel / Profile)
+  getMasterTitles: async (profileOrChannelId?: string) => {
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
-    if (profileId) return list.filter((t) => t.profileId === profileId);
-    return list;
+    if (!profileOrChannelId || profileOrChannelId === 'ALL') {
+      return list;
+    }
+
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+    const matchingChan = channels.find(
+      (c) =>
+        c.id === profileOrChannelId ||
+        c.youtubeChannelId === profileOrChannelId ||
+        c.contentProfileId === profileOrChannelId
+    );
+
+    return list.filter((t) => {
+      if (matchingChan) {
+        if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId)) {
+          return true;
+        }
+        if (matchingChan.contentProfileId && t.profileId === matchingChan.contentProfileId) {
+          return true;
+        }
+        if (t.profileId === `profile-${matchingChan.id}` || t.profileId === matchingChan.id) {
+          return true;
+        }
+      }
+      return t.profileId === profileOrChannelId || t.channelId === profileOrChannelId;
+    });
   },
-  createMasterTitle: async (data: Partial<MasterTitle>) => {
+
+  createMasterTitle: async (data: Partial<MasterTitle> & { channelId?: string }) => {
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+    const targetChan = channels.find(
+      (c) =>
+        c.id === data.channelId ||
+        c.youtubeChannelId === data.channelId ||
+        c.id === data.profileId ||
+        c.contentProfileId === data.profileId ||
+        (data.channelId && c.id === `chan-${data.channelId}`)
+    );
+
+    const resolvedProfileId =
+      data.profileId ||
+      targetChan?.contentProfileId ||
+      (targetChan ? `profile-${targetChan.id}` : 'default');
+    const resolvedChannelId = data.channelId || targetChan?.id || '';
+
     const newTitle: MasterTitle = {
       id: `title-${Date.now()}`,
       text: data.text || 'Judul Baru',
-      profileId: data.profileId || 'profile-ayam-warna',
-      orderIndex: list.length,
+      profileId: resolvedProfileId,
+      channelId: resolvedChannelId,
+      orderIndex: list.filter(
+        (t) =>
+          t.profileId === resolvedProfileId ||
+          (resolvedChannelId && t.channelId === resolvedChannelId)
+      ).length,
       isActive: data.isActive !== undefined ? data.isActive : true,
       createdAt: new Date().toISOString(),
     };
@@ -732,6 +833,7 @@ export const api = {
     setStorageItem(KEYS.TITLES, list);
     return newTitle;
   },
+
   updateMasterTitle: async (id: string, data: Partial<MasterTitle>) => {
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
     const idx = list.findIndex((t) => t.id === id);
@@ -742,6 +844,7 @@ export const api = {
     }
     throw new Error('Judul master tidak ditemukan');
   },
+
   deleteMasterTitle: async (id: string) => {
     let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
     list = list.filter((t) => t.id !== id);
@@ -749,20 +852,68 @@ export const api = {
     return { success: true };
   },
 
-  // Master Thumbnails
-  getMasterThumbnails: async (profileId?: string) => {
+  // Master Thumbnails (100% Isolated Per Channel / Profile)
+  getMasterThumbnails: async (profileOrChannelId?: string) => {
     const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
-    if (profileId) return list.filter((t) => t.profileId === profileId);
-    return list;
+    if (!profileOrChannelId || profileOrChannelId === 'ALL') {
+      return list;
+    }
+
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+    const matchingChan = channels.find(
+      (c) =>
+        c.id === profileOrChannelId ||
+        c.youtubeChannelId === profileOrChannelId ||
+        c.contentProfileId === profileOrChannelId
+    );
+
+    return list.filter((th) => {
+      if (matchingChan) {
+        if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId)) {
+          return true;
+        }
+        if (matchingChan.contentProfileId && th.profileId === matchingChan.contentProfileId) {
+          return true;
+        }
+        if (th.profileId === `profile-${matchingChan.id}` || th.profileId === matchingChan.id) {
+          return true;
+        }
+      }
+      return th.profileId === profileOrChannelId || th.channelId === profileOrChannelId;
+    });
   },
-  createMasterThumbnail: async (data: Partial<MasterThumbnail>) => {
+
+  createMasterThumbnail: async (data: Partial<MasterThumbnail> & { channelId?: string }) => {
     const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+    const targetChan = channels.find(
+      (c) =>
+        c.id === data.channelId ||
+        c.youtubeChannelId === data.channelId ||
+        c.id === data.profileId ||
+        c.contentProfileId === data.profileId ||
+        (data.channelId && c.id === `chan-${data.channelId}`)
+    );
+
+    const resolvedProfileId =
+      data.profileId ||
+      targetChan?.contentProfileId ||
+      (targetChan ? `profile-${targetChan.id}` : 'default');
+    const resolvedChannelId = data.channelId || targetChan?.id || '';
+
     const newThumb: MasterThumbnail = {
       id: `thumb-${Date.now()}`,
-      profileId: data.profileId || 'profile-ayam-warna',
+      profileId: resolvedProfileId,
+      channelId: resolvedChannelId,
       name: data.name || 'Thumbnail',
-      url: data.url || 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=640&auto=format&fit=crop&q=80',
-      orderIndex: list.length,
+      url:
+        data.url ||
+        'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=640&auto=format&fit=crop&q=80',
+      orderIndex: list.filter(
+        (th) =>
+          th.profileId === resolvedProfileId ||
+          (resolvedChannelId && th.channelId === resolvedChannelId)
+      ).length,
       isActive: data.isActive !== undefined ? data.isActive : true,
       createdAt: new Date().toISOString(),
     };
@@ -770,6 +921,7 @@ export const api = {
     setStorageItem(KEYS.THUMBNAILS, list);
     return newThumb;
   },
+
   deleteMasterThumbnail: async (id: string) => {
     let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
     list = list.filter((t) => t.id !== id);
@@ -777,29 +929,71 @@ export const api = {
     return { success: true };
   },
 
-  // Rotation Matrix
-  getRotationMatrix: async (profileId?: string, count: number = 12) => {
-    const titles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles).filter(
-      (t) => (!profileId || t.profileId === profileId) && t.isActive
-    );
-    const thumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails).filter(
-      (t) => (!profileId || t.profileId === profileId) && t.isActive
-    );
+  // Rotation Matrix (Strictly isolated for the active channel/profile; NO cross-channel data)
+  getRotationMatrix: async (profileOrChannelId?: string, count: number = 12) => {
+    const rawTitles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    const rawThumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
 
-    const safeTitles = titles.length > 0 ? titles : initialMasterTitles;
-    const safeThumbs = thumbs.length > 0 ? thumbs : initialMasterThumbnails;
+    let titles: MasterTitle[] = [];
+    let thumbs: MasterThumbnail[] = [];
+
+    if (profileOrChannelId && profileOrChannelId !== 'ALL') {
+      const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+      const matchingChan = channels.find(
+        (c) =>
+          c.id === profileOrChannelId ||
+          c.youtubeChannelId === profileOrChannelId ||
+          c.contentProfileId === profileOrChannelId
+      );
+
+      titles = rawTitles.filter((t) => {
+        if (!t.isActive) return false;
+        if (matchingChan) {
+          if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId)) return true;
+          if (matchingChan.contentProfileId && t.profileId === matchingChan.contentProfileId) return true;
+          if (t.profileId === `profile-${matchingChan.id}` || t.profileId === matchingChan.id) return true;
+        }
+        return t.profileId === profileOrChannelId || t.channelId === profileOrChannelId;
+      });
+
+      thumbs = rawThumbs.filter((th) => {
+        if (!th.isActive) return false;
+        if (matchingChan) {
+          if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId)) return true;
+          if (matchingChan.contentProfileId && th.profileId === matchingChan.contentProfileId) return true;
+          if (th.profileId === `profile-${matchingChan.id}` || th.profileId === matchingChan.id) return true;
+        }
+        return th.profileId === profileOrChannelId || th.channelId === profileOrChannelId;
+      });
+    } else {
+      titles = rawTitles.filter((t) => t.isActive);
+      thumbs = rawThumbs.filter((th) => th.isActive);
+    }
+
+    titles.sort((a, b) => a.orderIndex - b.orderIndex);
+    thumbs.sort((a, b) => a.orderIndex - b.orderIndex);
+
+    // If channel has no titles or no thumbnails, NEVER leak other channels' assets!
+    if (titles.length === 0 || thumbs.length === 0) {
+      return {
+        titleCount: titles.length,
+        thumbnailCount: thumbs.length,
+        totalVideosPreviewed: 0,
+        matrix: [],
+      };
+    }
 
     const matrix = Array.from({ length: count }).map((_, idx) => ({
       videoIndex: idx + 1,
-      titleIndex: idx % safeTitles.length,
-      thumbnailIndex: idx % safeThumbs.length,
-      title: safeTitles[idx % safeTitles.length],
-      thumbnail: safeThumbs[idx % safeThumbs.length],
+      titleIndex: idx % titles.length,
+      thumbnailIndex: idx % thumbs.length,
+      title: titles[idx % titles.length],
+      thumbnail: thumbs[idx % thumbs.length],
     }));
 
     return {
-      titleCount: safeTitles.length,
-      thumbnailCount: safeThumbs.length,
+      titleCount: titles.length,
+      thumbnailCount: thumbs.length,
       totalVideosPreviewed: count,
       matrix,
     };

@@ -162,6 +162,7 @@ export interface ContentProfile {
 export interface MasterTitle {
   id: string;
   profileId: string;
+  channelId?: string;
   text: string;
   orderIndex: number;
   isActive: boolean;
@@ -171,6 +172,7 @@ export interface MasterTitle {
 export interface MasterThumbnail {
   id: string;
   profileId: string;
+  channelId?: string;
   name: string;
   url: string;
   orderIndex: number;

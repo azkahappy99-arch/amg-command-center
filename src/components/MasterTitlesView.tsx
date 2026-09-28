@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Type,
   Plus,
@@ -12,29 +12,67 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { MasterTitle, ContentProfile } from '../types/index.ts';
+import { MasterTitle, ContentProfile, Channel } from '../types/index.ts';
 import { api } from '../services/api.ts';
 
 interface MasterTitlesViewProps {
   titles: MasterTitle[];
   profiles: ContentProfile[];
+  channels?: Channel[];
+  selectedChannelId?: string;
+  onSelectChannel?: (channelId: string) => void;
   onTitlesUpdated: () => void;
 }
 
 export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
   titles,
   profiles,
+  channels = [],
+  selectedChannelId = '',
+  onSelectChannel,
   onTitlesUpdated,
 }) => {
-  const [selectedProfileId, setSelectedProfileId] = useState<string>(profiles[0]?.id || '');
+  // Active Channel & Profile Resolution
+  const activeChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
+  const activeProfile = profiles.find(
+    (p) =>
+      p.id === activeChannel?.contentProfileId ||
+      p.id === `profile-${activeChannel?.id}` ||
+      p.id === activeChannel?.id
+  ) || profiles[0];
+
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(
+    activeProfile?.id || profiles[0]?.id || ''
+  );
   const [newTitleText, setNewTitleText] = useState('');
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [isAdding, setIsAdding] = useState(false);
 
-  // Filter titles for the selected profile
+  // Sync profile when active channel changes
+  useEffect(() => {
+    if (activeProfile?.id) {
+      setSelectedProfileId(activeProfile.id);
+    }
+  }, [activeChannel?.id, activeProfile?.id]);
+
+  // Filter titles strictly for the active channel / profile - 100% Isolated
   const profileTitles = titles
-    .filter((t) => t.profileId === selectedProfileId)
+    .filter((t) => {
+      if (activeChannel) {
+        if (t.channelId && (t.channelId === activeChannel.id || t.channelId === activeChannel.youtubeChannelId)) {
+          return true;
+        }
+        if (activeChannel.contentProfileId && t.profileId === activeChannel.contentProfileId) {
+          return true;
+        }
+        if (t.profileId === `profile-${activeChannel.id}` || t.profileId === activeChannel.id) {
+          return true;
+        }
+        return false;
+      }
+      return t.profileId === selectedProfileId;
+    })
     .sort((a, b) => a.orderIndex - b.orderIndex);
 
   const handleAddTitle = async (e: React.FormEvent) => {
@@ -42,8 +80,14 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
     if (!newTitleText.trim()) return;
     setIsAdding(true);
     try {
+      const targetChannelId = activeChannel?.id;
+      const targetProfileId =
+        activeChannel?.contentProfileId ||
+        (activeChannel ? `profile-${activeChannel.id}` : selectedProfileId);
+
       await api.createMasterTitle({
-        profileId: selectedProfileId,
+        channelId: targetChannelId,
+        profileId: targetProfileId,
         text: newTitleText.trim(),
         orderIndex: profileTitles.length,
       });
@@ -118,20 +162,46 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           </p>
         </div>
 
-        {/* Profile Selector */}
-        <div className="flex items-center space-x-2">
-          <span className="text-xs font-semibold text-neutral-400 uppercase">PROFIL:</span>
-          <select
-            value={selectedProfileId}
-            onChange={(e) => setSelectedProfileId(e.target.value)}
-            className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
-          >
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+        {/* Channel / Profile Selector */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {channels && channels.length > 0 ? (
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold text-neutral-300 uppercase tracking-wider">CHANNEL:</span>
+              <select
+                value={activeChannel?.id || ''}
+                onChange={(e) => onSelectChannel?.(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 text-neutral-100 text-xs font-bold focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer shadow-sm"
+              >
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id} className="bg-neutral-900 text-white font-medium">
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-semibold text-neutral-400 uppercase">PROFIL:</span>
+              <select
+                value={selectedProfileId}
+                onChange={(e) => setSelectedProfileId(e.target.value)}
+                className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
+              >
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {activeChannel && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 text-[11px] text-neutral-300 border border-neutral-800">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Profil: <strong className="text-neutral-100">{activeProfile?.name || activeChannel.title}</strong>
+            </span>
+          )}
         </div>
       </div>
 
@@ -141,13 +211,13 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           type="text"
           value={newTitleText}
           onChange={(e) => setNewTitleText(e.target.value)}
-          placeholder="Masukkan Master Judul baru..."
+          placeholder={`Masukkan Master Judul baru khusus channel ${activeChannel?.title || 'aktif'}...`}
           className="flex-1 px-4 py-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800 text-neutral-100 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none placeholder-neutral-500"
         />
         <button
           type="submit"
           disabled={isAdding || !newTitleText.trim()}
-          className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-md shadow-red-900/20"
+          className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 transition active:scale-95 shadow-md shadow-red-900/20 cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>+ Tambah Master Judul</span>
@@ -159,13 +229,13 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
         {/* Titles List (3 cols) */}
         <div className="lg:col-span-3 space-y-3">
           <div className="flex items-center justify-between text-xs font-bold text-neutral-300 uppercase tracking-wider">
-            <span>JUDUL TERKONFIGURASI ({profileTitles.length})</span>
-            <span className="text-neutral-500 font-normal">URUTKAN ULANG UNTUK MENGATUR INDEKS ROTASI</span>
+            <span>JUDUL TERKONFIGURASI KHUSUS {activeChannel?.title?.toUpperCase() || 'CHANNEL'} ({profileTitles.length})</span>
+            <span className="text-neutral-500 font-normal">URUTAN DETERMINISTIK</span>
           </div>
 
           {profileTitles.length === 0 ? (
             <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-500 text-xs">
-              Belum ada Master Judul untuk profil ini. Tambahkan judul pertama Anda di atas.
+              Belum ada Master Judul untuk channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong>. Tambahkan judul pertama khusus channel ini di atas.
             </div>
           ) : (
             <div className="space-y-2">
@@ -253,14 +323,14 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           <div className="flex items-center justify-between text-xs font-bold text-neutral-300 uppercase tracking-wider">
             <span className="flex items-center gap-1.5">
               <RotateCw className="w-3.5 h-3.5 text-red-500" />
-              SIMULATOR ROTASI
+              SIMULATOR ROTASI ({activeChannel?.title?.toUpperCase() || 'CHANNEL'})
             </span>
             <span className="text-[10px] text-emerald-400 font-semibold">100% DETERMINISTIK</span>
           </div>
 
           <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
             <p className="text-[11px] text-neutral-400 leading-relaxed">
-              Saat sistem memproses kumpulan video yang belum dikelola untuk profil ini, setiap video akan menerima judul sesuai urutan rotasi berikut:
+              Saat sistem memproses antrean video untuk channel <strong className="text-neutral-200">{activeChannel?.title || 'ini'}</strong>, setiap video akan menerima judul sesuai urutan rotasi deterministik berikut:
             </p>
 
             <div className="space-y-1.5 pt-1">

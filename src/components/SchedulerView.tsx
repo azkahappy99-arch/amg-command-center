@@ -15,16 +15,32 @@ import { api } from '../services/api.ts';
 
 interface SchedulerViewProps {
   channels: Channel[];
+  selectedChannelId?: string;
+  onSelectChannel?: (channelId: string) => void;
 }
 
-export const SchedulerView: React.FC<SchedulerViewProps> = ({ channels }) => {
-  const [selectedChannelId, setSelectedChannelId] = useState<string>(channels[0]?.id || '');
+export const SchedulerView: React.FC<SchedulerViewProps> = ({
+  channels,
+  selectedChannelId = '',
+  onSelectChannel,
+}) => {
+  const [internalChannelId, setInternalChannelId] = useState<string>(
+    selectedChannelId || channels[0]?.id || ''
+  );
   const [scheduleData, setScheduleData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const selectedChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
+  useEffect(() => {
+    if (selectedChannelId && selectedChannelId !== internalChannelId) {
+      setInternalChannelId(selectedChannelId);
+    }
+  }, [selectedChannelId]);
+
+  const activeChannelId = internalChannelId || selectedChannelId || channels[0]?.id || '';
+  const selectedChannel = channels.find((c) => c.id === activeChannelId) || channels[0];
 
   const fetchReconciliation = async (channelId: string) => {
+    if (!channelId) return;
     setIsLoading(true);
     try {
       const data = await api.getScheduleReconciliation(channelId);
@@ -37,10 +53,10 @@ export const SchedulerView: React.FC<SchedulerViewProps> = ({ channels }) => {
   };
 
   useEffect(() => {
-    if (selectedChannelId) {
-      fetchReconciliation(selectedChannelId);
+    if (activeChannelId) {
+      fetchReconciliation(activeChannelId);
     }
-  }, [selectedChannelId]);
+  }, [activeChannelId]);
 
   return (
     <div className="space-y-6">
@@ -60,8 +76,11 @@ export const SchedulerView: React.FC<SchedulerViewProps> = ({ channels }) => {
         <div className="flex items-center space-x-2">
           <span className="text-xs font-semibold text-neutral-400 uppercase">CHANNEL:</span>
           <select
-            value={selectedChannelId}
-            onChange={(e) => setSelectedChannelId(e.target.value)}
+            value={activeChannelId}
+            onChange={(e) => {
+              setInternalChannelId(e.target.value);
+              onSelectChannel?.(e.target.value);
+            }}
             className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
           >
             {channels.map((c) => (
@@ -72,9 +91,9 @@ export const SchedulerView: React.FC<SchedulerViewProps> = ({ channels }) => {
           </select>
 
           <button
-            onClick={() => fetchReconciliation(selectedChannelId)}
+            onClick={() => fetchReconciliation(activeChannelId)}
             disabled={isLoading}
-            className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white"
+            className="p-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
             title="Selaraskan dengan YouTube"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-red-500' : ''}`} />

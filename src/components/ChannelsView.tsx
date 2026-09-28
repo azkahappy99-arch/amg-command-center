@@ -53,6 +53,8 @@ interface ChannelsViewProps {
   profiles: ContentProfile[];
   onChannelUpdated: () => void;
   onNavigateToAutomation: (channelId: string) => void;
+  onNavigateToTitles?: (channelId: string) => void;
+  onNavigateToThumbnails?: (channelId: string) => void;
 }
 
 interface SyncModalData {
@@ -95,6 +97,8 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
   profiles,
   onChannelUpdated,
   onNavigateToAutomation,
+  onNavigateToTitles,
+  onNavigateToThumbnails,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -954,6 +958,32 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                                     <Clock className="w-3.5 h-3.5 text-rose-400" />
                                     <span className="flex-1">Sesuaikan Jadwal Tayang</span>
                                   </button>
+
+                                  {onNavigateToTitles && (
+                                    <button
+                                      onClick={() => {
+                                        setOpenMenuChannelId(null);
+                                        onNavigateToTitles(channel.id);
+                                      }}
+                                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                                    >
+                                      <Film className="w-3.5 h-3.5 text-red-400" />
+                                      <span className="flex-1">Master Judul Channel</span>
+                                    </button>
+                                  )}
+
+                                  {onNavigateToThumbnails && (
+                                    <button
+                                      onClick={() => {
+                                        setOpenMenuChannelId(null);
+                                        onNavigateToThumbnails(channel.id);
+                                      }}
+                                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                                    >
+                                      <Tag className="w-3.5 h-3.5 text-amber-400" />
+                                      <span className="flex-1">Master Thumbnail Channel</span>
+                                    </button>
+                                  )}
 
                                   <div className="my-1 border-t border-neutral-800/80" />
 
