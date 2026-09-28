@@ -9,8 +9,8 @@ interface ContentProfilesViewProps {
   profiles: ContentProfile[];
   channels: Channel[];
   onProfilesUpdated: () => void;
-  onNavigateToTitles: () => void;
-  onNavigateToThumbnails: () => void;
+  onNavigateToTitles: (channelOrProfileId?: string) => void;
+  onNavigateToThumbnails: (channelOrProfileId?: string) => void;
 }
 
 export const ContentProfilesView: React.FC<ContentProfilesViewProps> = ({
@@ -229,14 +229,14 @@ export const ContentProfilesView: React.FC<ContentProfilesViewProps> = ({
               <div className="pt-2 flex items-center justify-between gap-2 border-t border-neutral-800/60">
                 <div className="flex gap-2">
                   <button
-                    onClick={onNavigateToTitles}
-                    className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium"
+                    onClick={() => onNavigateToTitles(assignedChannels[0]?.id || profile.id)}
+                    className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer"
                   >
                     Master Judul
                   </button>
                   <button
-                    onClick={onNavigateToThumbnails}
-                    className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium"
+                    onClick={() => onNavigateToThumbnails(assignedChannels[0]?.id || profile.id)}
+                    className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium cursor-pointer"
                   >
                     Master Thumbnail
                   </button>

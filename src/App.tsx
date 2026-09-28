@@ -43,7 +43,7 @@ import {
   ActivityLog,
   AutomationBatch,
 } from './types/index.ts';
-import { api } from './services/api.ts';
+import { api, sanitizeChannel } from './services/api.ts';
 import {
   authorizeAndFetchYouTubeChannel,
   getStoredGisToken,
@@ -121,12 +121,13 @@ export default function App() {
         if (statsData.recentBatches) setRecentBatches(statsData.recentBatches);
       }
       if (channelsData) {
-        setChannels(channelsData);
-        if (channelsData.length > 0 && (!selectedChannelId || !channelsData.some((c: Channel) => c.id === selectedChannelId))) {
-          setSelectedChannelId(channelsData[0].id);
+        const cleanChannels = channelsData.map(sanitizeChannel);
+        setChannels(cleanChannels);
+        if (cleanChannels.length > 0 && (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId))) {
+          setSelectedChannelId(cleanChannels[0].id);
         }
         // Cache connected channel IDs in localStorage for client resilience
-        const connectedReal = channelsData.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
+        const connectedReal = cleanChannels.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
         if (connectedReal.length > 0) {
           try {
             localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
@@ -158,18 +159,20 @@ export default function App() {
       if (storedChannelsRaw) {
         const parsed = JSON.parse(storedChannelsRaw);
         if (Array.isArray(parsed)) {
-          // Purge fixture mock channels while strictly preserving connected user channel
-          const realChannels = parsed.filter(
-            (c: Channel) =>
-              !c.isSeeded &&
-              c.id !== 'chan-ayam-warna' &&
-              c.id !== 'chan-suara-alam' &&
-              c.id !== 'chan-murottal' &&
-              c.id !== 'chan-kucing-gemoy' &&
-              !c.title?.includes('[DEMO FIXTURE]') &&
-              !c.title?.includes('Demo Fixture') &&
-              !c.title?.toLowerCase().includes('fixture')
-          );
+          // Purge fixture mock channels and sanitize legacy mock monetization/revenue
+          const realChannels = parsed
+            .filter(
+              (c: Channel) =>
+                !c.isSeeded &&
+                c.id !== 'chan-ayam-warna' &&
+                c.id !== 'chan-suara-alam' &&
+                c.id !== 'chan-murottal' &&
+                c.id !== 'chan-kucing-gemoy' &&
+                !c.title?.includes('[DEMO FIXTURE]') &&
+                !c.title?.includes('Demo Fixture') &&
+                !c.title?.toLowerCase().includes('fixture')
+            )
+            .map(sanitizeChannel);
 
           if (storedConnectedRaw) {
             const live = JSON.parse(storedConnectedRaw);
@@ -178,14 +181,16 @@ export default function App() {
                 c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
             );
             if (idx >= 0) {
-              realChannels[idx].status = 'CONNECTED';
-              realChannels[idx].title = live.title || realChannels[idx].title;
-              realChannels[idx].thumbnailUrl = live.thumbnailUrl || realChannels[idx].thumbnailUrl;
+              realChannels[idx] = sanitizeChannel({
+                ...realChannels[idx],
+                status: 'CONNECTED',
+                title: live.title || realChannels[idx].title,
+                thumbnailUrl: live.thumbnailUrl || realChannels[idx].thumbnailUrl,
+              });
             }
           }
-          if (realChannels.length !== parsed.length) {
-            localStorage.setItem('amg_channels', JSON.stringify(realChannels));
-          }
+          // Always write back sanitized channels (wiping away any legacy mock revenue & fake YPP)
+          localStorage.setItem('amg_channels', JSON.stringify(realChannels));
           setChannels(realChannels);
           if (realChannels.length > 0) {
             setSelectedChannelId(realChannels[0].id);
@@ -397,8 +402,14 @@ export default function App() {
               profiles={profiles}
               channels={channels}
               onProfilesUpdated={loadAllData}
-              onNavigateToTitles={() => setCurrentSection('titles')}
-              onNavigateToThumbnails={() => setCurrentSection('thumbnails')}
+              onNavigateToTitles={(targetId) => {
+                if (targetId) setSelectedChannelId(targetId);
+                setCurrentSection('titles');
+              }}
+              onNavigateToThumbnails={(targetId) => {
+                if (targetId) setSelectedChannelId(targetId);
+                setCurrentSection('thumbnails');
+              }}
             />
           )}
 

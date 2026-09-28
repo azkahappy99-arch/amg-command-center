@@ -289,6 +289,13 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
           parsed[idx].status = 'CONNECTED';
           parsed[idx].connectedAt = parsed[idx].connectedAt || new Date().toISOString();
           parsed[idx].isSeeded = false;
+          // Ensure real monetization state
+          if (parsed[idx].monetizationStatus === 'MONETIZED' && (!parsed[idx].revenue || parsed[idx].revenue.totalChannelRevenue === 7000000 || parsed[idx].revenue.totalChannelRevenue === 10000000)) {
+            parsed[idx].monetizationStatus = 'NOT_MONETIZED';
+          }
+          if (!parsed[idx].revenue || parsed[idx].revenue.totalChannelRevenue === 7000000 || parsed[idx].revenue.totalChannelRevenue === 10000000 || parsed[idx].revenue.adSenseReguler === 5000000) {
+            parsed[idx].revenue = { adSenseReguler: 0, liveStream: 0, ytShopping: 0, channelMemberships: 0, totalChannelRevenue: 0 };
+          }
         } else {
           parsed.unshift({
             id: `chan-${channelData.id}`,
@@ -296,6 +303,15 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
             title: channelData.title,
             thumbnailUrl: channelData.thumbnailUrl || '',
             status: 'CONNECTED',
+            monetizationStatus: 'NOT_MONETIZED',
+            watchHours: 0,
+            revenue: {
+              adSenseReguler: 0,
+              liveStream: 0,
+              ytShopping: 0,
+              channelMemberships: 0,
+              totalChannelRevenue: 0,
+            },
             connectedAt: new Date().toISOString(),
             subscriberCount: channelData.subscriberCount || 0,
             videoCount: channelData.videoCount || 0,

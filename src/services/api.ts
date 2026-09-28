@@ -140,11 +140,57 @@ export function isRealVideo(v: ManagedVideo): boolean {
   return true;
 }
 
+// Helper to sanitize channel monetization & revenue: enforces Real Data Only (no fake mock revenue or fake YPP)
+export function sanitizeChannel(c: Channel): Channel {
+  if (!c) return c;
+
+  // Detect legacy mock/hardcoded values from past fixtures (e.g. 7000000, 5000000, 10000000, 26000000, etc.)
+  const isMockRevenue =
+    !c.revenue ||
+    c.revenue.totalChannelRevenue === 7000000 ||
+    c.revenue.totalChannelRevenue === 10000000 ||
+    c.revenue.totalChannelRevenue === 26000000 ||
+    c.revenue.totalChannelRevenue === 450000 ||
+    c.revenue.totalChannelRevenue === 20600000 ||
+    c.revenue.totalChannelRevenue === 41000000 ||
+    c.revenue.adSenseReguler === 5000000 ||
+    c.revenue.adSenseReguler === 7500000 ||
+    c.revenue.adSenseReguler === 18500000 ||
+    c.revenue.adSenseReguler === 12200000 ||
+    c.revenue.adSenseReguler === 28400000;
+
+  const cleanRevenue = (isMockRevenue || !c.revenue)
+    ? {
+        adSenseReguler: 0,
+        liveStream: 0,
+        ytShopping: 0,
+        channelMemberships: 0,
+        totalChannelRevenue: 0,
+      }
+    : c.revenue;
+
+  // Real YPP status must follow actual YouTube verification:
+  // Reset fake mock 'MONETIZED' status to 'NOT_MONETIZED'
+  const isMockYpp =
+    c.monetizationStatus === 'MONETIZED' &&
+    (isMockRevenue || cleanRevenue.totalChannelRevenue === 0 || c.watchHours === 14500 || c.watchHours === 12450 || c.isSeeded);
+
+  const cleanMonetizationStatus = isMockYpp ? 'NOT_MONETIZED' : (c.monetizationStatus || 'NOT_MONETIZED');
+  const cleanWatchHours = (c.watchHours === 14500 || c.watchHours === 12450) ? 0 : (c.watchHours || 0);
+
+  return {
+    ...c,
+    monetizationStatus: cleanMonetizationStatus,
+    watchHours: cleanWatchHours,
+    revenue: cleanRevenue,
+  };
+}
+
 // Ensure connected GIS channels in localStorage are synced into amg_channels
 function syncConnectedChannelState(channels: Channel[]): Channel[] {
   try {
-    // Purge any seeded dummy channels from previous fixtures
-    channels = channels.filter(isRealChannel);
+    // Purge any seeded dummy channels from previous fixtures and sanitize mock monetization
+    channels = channels.filter(isRealChannel).map(sanitizeChannel);
 
     const storedConnected = localStorage.getItem(KEYS.CONNECTED_CHANNEL);
     const storedToken = localStorage.getItem(KEYS.ACCESS_TOKEN);
@@ -160,7 +206,7 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
         );
 
         if (idx >= 0) {
-          channels[idx] = {
+          channels[idx] = sanitizeChannel({
             ...channels[idx],
             title: liveData.title || channels[idx].title,
             thumbnailUrl: liveData.thumbnailUrl || channels[idx].thumbnailUrl,
@@ -170,7 +216,7 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
             isSeeded: false,
             subscriberCount: liveData.subscriberCount ?? channels[idx].subscriberCount ?? 0,
             videoCount: liveData.videoCount ?? channels[idx].videoCount ?? 0,
-          };
+          });
         } else {
           channels.push({
             id: `chan-${liveData.id}`,
@@ -593,6 +639,7 @@ export const api = {
         hasOAuthConfigured: true,
         isSeeded: false,
       };
+      channels[existingIdx] = sanitizeChannel(channels[existingIdx]);
       targetChannel = channels[existingIdx];
     } else {
       targetChannel = {
@@ -602,14 +649,14 @@ export const api = {
         customUrl: data.channelData.customUrl || `@${data.channelData.id}`,
         thumbnailUrl: data.channelData.thumbnailUrl || '',
         status: 'CONNECTED',
-        monetizationStatus: 'MONETIZED',
-        watchHours: 14500,
+        monetizationStatus: 'NOT_MONETIZED',
+        watchHours: 0,
         revenue: {
-          adSenseReguler: 7500000,
-          liveStream: 1200000,
-          ytShopping: 800000,
-          channelMemberships: 500000,
-          totalChannelRevenue: 10000000,
+          adSenseReguler: 0,
+          liveStream: 0,
+          ytShopping: 0,
+          channelMemberships: 0,
+          totalChannelRevenue: 0,
         },
         nicheCategory: 'General',
         nicheBadge: 'cyan',
