@@ -12,6 +12,10 @@ import {
   Menu,
   Shield,
   Layers,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  X,
 } from 'lucide-react';
 import { Sidebar, NavSection } from './components/Sidebar.tsx';
 import { Header } from './components/Header.tsx';
@@ -144,8 +148,64 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Immediate direct localStorage inspection upon mount (100% static, no backend needed)
+    try {
+      const storedConnectedRaw = localStorage.getItem('amg_youtube_connected_channel');
+      const storedToken = localStorage.getItem('amg_youtube_access_token');
+      const storedChannelsRaw = localStorage.getItem('amg_channels');
+
+      if (storedChannelsRaw) {
+        const parsed = JSON.parse(storedChannelsRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (storedConnectedRaw) {
+            const live = JSON.parse(storedConnectedRaw);
+            const idx = parsed.findIndex(
+              (c: Channel) =>
+                c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
+            );
+            if (idx >= 0) {
+              parsed[idx].status = 'CONNECTED';
+            }
+          }
+          setChannels(parsed);
+          const connCount = parsed.filter(
+            (c: Channel) => c.status === 'CONNECTED' || c.status === 'Connected'
+          ).length;
+          setStats((prev) => ({
+            ...prev,
+            metrics: {
+              ...prev.metrics,
+              totalChannels: parsed.length,
+              connectedChannels: connCount > 0 ? connCount : (storedToken ? 1 : 0),
+            },
+          }));
+        }
+      } else if (storedConnectedRaw || storedToken) {
+        setStats((prev) => ({
+          ...prev,
+          metrics: {
+            ...prev.metrics,
+            connectedChannels: 1,
+          },
+        }));
+      }
+    } catch (e) {
+      console.warn('Initial direct localStorage load:', e);
+    }
+
     loadAllData();
   }, []);
+
+  const [toastMessage, setToastMessage] = useState<{
+    text: string;
+    type: 'info' | 'success' | 'warning' | 'error';
+  } | null>(null);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => setToastMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
 
   const handleGisAuthorize = async (channelId?: string) => {
     setIsRefreshing(true);
@@ -159,10 +219,34 @@ export default function App() {
       if (res && res.channel?.id) {
         setSelectedChannelId(res.channel.id);
       }
+      setToastMessage({
+        text: `Akun YouTube "${result.channel.title}" berhasil dihubungkan dan tersimpan permanen!`,
+        type: 'success',
+      });
       await loadAllData();
     } catch (err: any) {
-      console.error('GIS Authorization error:', err);
-      alert(`Google Identity Services: ${err.message || 'Otorisasi ditolak atau popup dibatalkan.'}`);
+      const isPopupClosed =
+        err?.isPopupClosed ||
+        err?.type === 'popup_closed' ||
+        (typeof err?.message === 'string' && (
+          err.message.toLowerCase().includes('closed') ||
+          err.message.toLowerCase().includes('dibatalkan') ||
+          err.message.toLowerCase().includes('cancel')
+        ));
+
+      if (isPopupClosed) {
+        console.warn('[GIS] Otorisasi Google ditutup atau dibatalkan oleh pengguna.');
+        setToastMessage({
+          text: 'Otorisasi Google dibatalkan (jendela login ditutup).',
+          type: 'info',
+        });
+      } else {
+        console.warn('GIS Authorization notice:', err?.message || err);
+        setToastMessage({
+          text: `Google Identity Services: ${err?.message || 'Gagal mengotorisasi akun Google.'}`,
+          type: 'error',
+        });
+      }
     } finally {
       setIsRefreshing(false);
     }
@@ -372,6 +456,37 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* In-App Floating Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-5 right-5 z-50 max-w-sm sm:max-w-md animate-in fade-in slide-in-from-top-4 duration-200">
+          <div
+            className={`p-3.5 rounded-xl border shadow-xl flex items-start gap-3 backdrop-blur-md ${
+              toastMessage.type === 'success'
+                ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200 shadow-emerald-950/40'
+                : toastMessage.type === 'error'
+                ? 'bg-rose-950/90 border-rose-500/50 text-rose-200 shadow-rose-950/40'
+                : toastMessage.type === 'warning'
+                ? 'bg-amber-950/90 border-amber-500/50 text-amber-200 shadow-amber-950/40'
+                : 'bg-neutral-900/90 border-neutral-700 text-neutral-200 shadow-black/50'
+            }`}
+          >
+            {toastMessage.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />}
+            {toastMessage.type === 'error' && <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />}
+            {toastMessage.type === 'warning' && <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />}
+            {toastMessage.type === 'info' && <Info className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />}
+            <div className="flex-1 text-xs leading-relaxed font-medium">
+              {toastMessage.text}
+            </div>
+            <button
+              onClick={() => setToastMessage(null)}
+              className="text-neutral-400 hover:text-white p-0.5 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

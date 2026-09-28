@@ -164,8 +164,18 @@ export async function requestGisAccessToken(promptConsent: boolean = false): Pro
         scope: GIS_CONFIG.SCOPE,
         callback: (resp: any) => {
           if (resp.error) {
-            console.error('[GIS] OAuth Error:', resp);
-            reject(new Error(resp.error_description || resp.error || 'Google OAuth Authorization declined.'));
+            const isUserCancel =
+              resp.error === 'access_denied' ||
+              resp.error === 'user_cancelled' ||
+              resp.error === 'popup_closed';
+            if (isUserCancel) {
+              console.warn('[GIS] OAuth Authorization cancelled or dismissed by user:', resp.error);
+            } else {
+              console.warn('[GIS] OAuth notice:', resp);
+            }
+            const errObj = new Error(resp.error_description || resp.error || 'Google OAuth Authorization declined.');
+            if (isUserCancel) (errObj as any).isPopupClosed = true;
+            reject(errObj);
             return;
           }
 
@@ -179,8 +189,26 @@ export async function requestGisAccessToken(promptConsent: boolean = false): Pro
           resolve(resp.access_token);
         },
         error_callback: (err: any) => {
-          console.error('[GIS] Token Client Error:', err);
-          reject(new Error(err?.message || 'Google OAuth popup was closed or blocked.'));
+          const errMsg = typeof err?.message === 'string' ? err.message : '';
+          const errType = err?.type || '';
+          const isClosed =
+            errType === 'popup_closed' ||
+            errType === 'popup_failed_to_open' ||
+            errMsg.toLowerCase().includes('popup window closed') ||
+            errMsg.toLowerCase().includes('closed') ||
+            errMsg.toLowerCase().includes('cancel') ||
+            errMsg.toLowerCase().includes('dismiss');
+
+          if (isClosed) {
+            console.warn('[GIS] Token Client: Popup window closed by user.');
+          } else {
+            console.warn('[GIS] Token Client notice:', err);
+          }
+
+          const errorObj = new Error(errMsg || (isClosed ? 'Popup window closed' : 'Google OAuth popup was closed or blocked.'));
+          (errorObj as any).isPopupClosed = isClosed;
+          (errorObj as any).type = errType;
+          reject(errorObj);
         },
       });
 
@@ -241,8 +269,42 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
   try {
     localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelData));
     savePersistedConnectedChannel(channelData);
+
+    // Also directly ensure amg_channels has this channel marked as CONNECTED in localStorage
+    const rawChannels = localStorage.getItem('amg_channels');
+    if (rawChannels) {
+      const parsed = JSON.parse(rawChannels);
+      if (Array.isArray(parsed)) {
+        const idx = parsed.findIndex(
+          (c: any) =>
+            c.youtubeChannelId === channelData.id ||
+            c.id === channelData.id ||
+            c.id === `chan-${channelData.id}`
+        );
+        if (idx >= 0) {
+          parsed[idx].title = channelData.title || parsed[idx].title;
+          parsed[idx].thumbnailUrl = channelData.thumbnailUrl || parsed[idx].thumbnailUrl;
+          parsed[idx].status = 'CONNECTED';
+          parsed[idx].connectedAt = parsed[idx].connectedAt || new Date().toISOString();
+          parsed[idx].isSeeded = false;
+        } else {
+          parsed.unshift({
+            id: `chan-${channelData.id}`,
+            youtubeChannelId: channelData.id,
+            title: channelData.title,
+            thumbnailUrl: channelData.thumbnailUrl || '',
+            status: 'CONNECTED',
+            connectedAt: new Date().toISOString(),
+            subscriberCount: channelData.subscriberCount || 0,
+            videoCount: channelData.videoCount || 0,
+            isSeeded: false,
+          });
+        }
+        localStorage.setItem('amg_channels', JSON.stringify(parsed));
+      }
+    }
   } catch (e) {
-    console.warn('Could not cache channel data:', e);
+    console.warn('Could not cache channel data in localStorage:', e);
   }
 
   return channelData;

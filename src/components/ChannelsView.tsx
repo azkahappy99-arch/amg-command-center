@@ -269,13 +269,30 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 
       onChannelUpdated();
     } catch (err: any) {
-      console.error('GIS Authorization error:', err);
-      setBannerMessage({
-        text: `Gagal otorisasi Google Identity Services: ${err.message || 'Izin akses dibatalkan atau popup diblokir.'}`,
-        type: 'error',
-      });
-      // Fallback: buka modal OAuth jika popup diblokir atau gagal
-      setSelectedChannelForOAuth(channel);
+      const isPopupClosed =
+        err?.isPopupClosed ||
+        err?.type === 'popup_closed' ||
+        (typeof err?.message === 'string' && (
+          err.message.toLowerCase().includes('closed') ||
+          err.message.toLowerCase().includes('dibatalkan') ||
+          err.message.toLowerCase().includes('cancel')
+        ));
+
+      if (isPopupClosed) {
+        console.warn('[GIS] Otorisasi Google dibatalkan karena jendela login ditutup.');
+        setBannerMessage({
+          text: 'Otorisasi Google dibatalkan (jendela login ditutup).',
+          type: 'info',
+        });
+      } else {
+        console.warn('[GIS] Otorisasi ditolak atau gagal:', err?.message || err);
+        setBannerMessage({
+          text: `Gagal otorisasi Google Identity Services: ${err.message || 'Izin akses dibatalkan atau popup diblokir.'}`,
+          type: 'error',
+        });
+        // Fallback: buka modal OAuth jika popup diblokir atau gagal
+        setSelectedChannelForOAuth(channel);
+      }
     } finally {
       setSyncingChannelId(null);
     }
@@ -440,8 +457,9 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
         useProfileSchedule: useProfileScheduleState,
       });
       if (res.success) {
+        const cfg = res.resolvedScheduleConfig || scheduleConfigState;
         setBannerMessage({
-          text: `Updated schedule rule for "${selectedChannelForSchedule.title}": ${res.resolvedScheduleConfig.videosPerDay} videos/day @ [${res.resolvedScheduleConfig.times.join(', ')}] ${res.resolvedScheduleConfig.timezone}.`,
+          text: `Updated schedule rule for "${selectedChannelForSchedule.title}": ${cfg?.videosPerDay || 1} videos/day @ [${(cfg?.times || []).join(', ')}] ${cfg?.timezone || 'Asia/Jakarta'}.`,
           type: 'success',
         });
         setSelectedChannelForSchedule(null);
@@ -1355,7 +1373,27 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                     });
                     onChannelUpdated();
                   } catch (err: any) {
-                    alert(`Gagal menautkan channel: ${err.message}`);
+                    const isClosed =
+                      err?.isPopupClosed ||
+                      err?.type === 'popup_closed' ||
+                      (typeof err?.message === 'string' && (
+                        err.message.toLowerCase().includes('closed') ||
+                        err.message.toLowerCase().includes('dibatalkan') ||
+                        err.message.toLowerCase().includes('cancel')
+                      ));
+                    if (isClosed) {
+                      console.warn('[GIS] Otorisasi dibatalkan pengguna atau jendela login ditutup.');
+                      setBannerMessage({
+                        text: 'Otorisasi YouTube dibatalkan (jendela Google ditutup).',
+                        type: 'info',
+                      });
+                    } else {
+                      console.warn('[GIS] Gagal menautkan channel:', err?.message || err);
+                      setBannerMessage({
+                        text: `Gagal menautkan channel: ${err?.message || 'Terjadi kendala otorisasi.'}`,
+                        type: 'error',
+                      });
+                    }
                   } finally {
                     setIsAdding(false);
                   }

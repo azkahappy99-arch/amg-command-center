@@ -90,11 +90,25 @@ export const YouTubeOAuthModal: React.FC<YouTubeOAuthModalProps> = ({
         onClose();
       }, 1600);
     } catch (err: any) {
-      console.error('[GIS OAuth Error]', err);
-      setErrorMessage(
-        err.message ||
-          'Gagal mengotorisasi akun Google melalui Google Identity Services. Pastikan popup tidak diblokir.'
-      );
+      const isClosed =
+        err?.isPopupClosed ||
+        err?.type === 'popup_closed' ||
+        (typeof err?.message === 'string' && (
+          err.message.toLowerCase().includes('closed') ||
+          err.message.toLowerCase().includes('cancel') ||
+          err.message.toLowerCase().includes('batal')
+        ));
+
+      if (isClosed) {
+        console.warn('[GIS OAuth] Otorisasi dibatalkan pengguna atau jendela popup ditutup.');
+        setErrorMessage('Jendela otorisasi Google ditutup sebelum proses selesai.');
+      } else {
+        console.warn('[GIS OAuth notice]:', err?.message || err);
+        setErrorMessage(
+          err.message ||
+            'Gagal mengotorisasi akun Google melalui Google Identity Services. Pastikan popup tidak diblokir.'
+        );
+      }
     } finally {
       setIsGisAuthorizing(false);
     }
