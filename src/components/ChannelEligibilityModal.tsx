@@ -32,12 +32,12 @@ export const ChannelEligibilityModal: React.FC<ChannelEligibilityModalProps> = (
   const [patterns, setPatterns] = useState<string[]>(
     channel.eligibleTitlePatterns && channel.eligibleTitlePatterns.length > 0
       ? [...channel.eligibleTitlePatterns]
-      : ['Salinan dari A', 'Copy of A']
+      : []
   );
   const [newPatternInput, setNewPatternInput] = useState('');
   const [autoEnroll, setAutoEnroll] = useState<boolean>(channel.autoEnroll ?? false);
   const [latestManagedUploadAt, setLatestManagedUploadAt] = useState<string>(
-    channel.latestManagedUploadAt || '2026-09-23T03:15:00.000Z'
+    channel.latestManagedUploadAt || ''
   );
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

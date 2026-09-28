@@ -26,18 +26,34 @@ import { NicheBadge, NICHE_PRESETS } from '../utils/nicheCategories';
 interface VideosViewProps {
   videos: ManagedVideo[];
   channels: Channel[];
+  selectedChannelId?: string;
+  onSelectChannel?: (channelId: string) => void;
   onRefresh: () => void;
+  onSyncChannel?: (channelId?: string) => Promise<void>;
   isRefreshing: boolean;
 }
 
 export const VideosView: React.FC<VideosViewProps> = ({
   videos,
   channels,
+  selectedChannelId: propSelectedChannelId,
+  onSelectChannel,
   onRefresh,
+  onSyncChannel,
   isRefreshing,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedChannelId, setSelectedChannelId] = useState<string>('ALL');
+  const [channelFilter, setChannelFilter] = useState<string>(
+    propSelectedChannelId || channels[0]?.id || 'ALL'
+  );
+
+  React.useEffect(() => {
+    if (propSelectedChannelId) {
+      setChannelFilter(propSelectedChannelId);
+    }
+  }, [propSelectedChannelId]);
+
+  const selectedChannelId = channelFilter;
   const [nicheCategoryFilter, setNicheCategoryFilter] = useState<string>('ALL');
   const [managedFilter, setManagedFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -52,8 +68,24 @@ export const VideosView: React.FC<VideosViewProps> = ({
     return map;
   }, [channels]);
 
+  const currentChannelObj = useMemo(() => {
+    return channels.find(
+      (c) => c.id === selectedChannelId || c.youtubeChannelId === selectedChannelId
+    );
+  }, [channels, selectedChannelId]);
+
   // Scope statistics across current channel or all channels
-  const channelVideos = selectedChannelId === 'ALL' ? videos : videos.filter(v => v.channelId === selectedChannelId);
+  const channelVideos =
+    selectedChannelId === 'ALL'
+      ? videos
+      : videos.filter(
+          (v) =>
+            v.channelId === selectedChannelId ||
+            v.channelId === `chan-${selectedChannelId}` ||
+            (currentChannelObj?.youtubeChannelId &&
+              (v.channelId === currentChannelObj.youtubeChannelId ||
+                v.channelId === `chan-${currentChannelObj.youtubeChannelId}`))
+        );
   const includedCount = channelVideos.filter(v => v.managementScope === 'REGULAR' && v.isAmgEligible).length;
   const needsScopeCount = channelVideos.filter(v => v.managementScope === 'UNCLASSIFIED' || !v.managementScope).length;
   const excludedCount = channelVideos.filter(v => v.managementScope === 'EXCLUDED').length;
@@ -64,7 +96,13 @@ export const VideosView: React.FC<VideosViewProps> = ({
       (v.titleAssigned && v.titleAssigned.toLowerCase().includes(searchQuery.toLowerCase())) ||
       v.youtubeVideoId.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesChannel = selectedChannelId === 'ALL' || v.channelId === selectedChannelId;
+    const matchesChannel =
+      selectedChannelId === 'ALL' ||
+      v.channelId === selectedChannelId ||
+      v.channelId === `chan-${selectedChannelId}` ||
+      (currentChannelObj?.youtubeChannelId &&
+        (v.channelId === currentChannelObj.youtubeChannelId ||
+          v.channelId === `chan-${currentChannelObj.youtubeChannelId}`));
     const parentChannel = channelMap.get(v.channelId);
     const videoNiche = parentChannel?.nicheCategory || 'General';
     const matchesNiche = nicheCategoryFilter === 'ALL' || videoNiche === nicheCategoryFilter;
@@ -249,12 +287,18 @@ export const VideosView: React.FC<VideosViewProps> = ({
         </div>
 
         <button
-          onClick={onRefresh}
+          onClick={() => {
+            if (onSyncChannel) {
+              onSyncChannel(selectedChannelId !== 'ALL' ? selectedChannelId : undefined);
+            } else {
+              onRefresh();
+            }
+          }}
           disabled={isRefreshing}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 text-xs font-semibold transition"
+          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 text-xs font-semibold transition active:scale-95 cursor-pointer shadow-sm"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-red-500' : ''}`} />
-          <span>Segarkan Video</span>
+          <span>{isRefreshing ? 'Menyinkronkan...' : 'Sinkronkan Video YouTube'}</span>
         </button>
       </div>
 
@@ -410,7 +454,12 @@ export const VideosView: React.FC<VideosViewProps> = ({
           {/* Channel selector */}
           <select
             value={selectedChannelId}
-            onChange={(e) => setSelectedChannelId(e.target.value)}
+            onChange={(e) => {
+              setChannelFilter(e.target.value);
+              if (onSelectChannel && e.target.value !== 'ALL') {
+                onSelectChannel(e.target.value);
+              }
+            }}
             className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
           >
             <option value="ALL">Semua Channel</option>
@@ -490,8 +539,32 @@ export const VideosView: React.FC<VideosViewProps> = ({
             <tbody className="divide-y divide-neutral-800/60">
               {filteredVideos.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-neutral-500">
-                    Tidak ada video yang cocok dengan filter Anda.
+                  <td colSpan={8} className="py-14 text-center">
+                    <div className="flex flex-col items-center justify-center max-w-md mx-auto space-y-3">
+                      <div className="w-14 h-14 rounded-2xl bg-neutral-900/90 border border-neutral-800 flex items-center justify-center text-neutral-500 shadow-inner">
+                        <Film className="w-7 h-7 text-neutral-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold text-neutral-200">
+                          Belum ada video dari channel ini
+                        </h3>
+                        <p className="text-xs text-neutral-400 mt-1 max-w-xs">
+                          {currentChannelObj
+                            ? `Tarik video asli langsung dari YouTube Data API v3 untuk channel "${currentChannelObj.title}".`
+                            : 'Hubungkan atau sinkronkan channel YouTube untuk memuat video riil.'}
+                        </p>
+                      </div>
+                      {onSyncChannel && (
+                        <button
+                          onClick={() => onSyncChannel(selectedChannelId !== 'ALL' ? selectedChannelId : undefined)}
+                          disabled={isRefreshing}
+                          className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-semibold shadow-md shadow-red-950/40 transition active:scale-95 cursor-pointer"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                          <span>Tarik Video dari YouTube</span>
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ) : (

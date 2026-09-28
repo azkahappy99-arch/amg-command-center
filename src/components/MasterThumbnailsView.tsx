@@ -24,7 +24,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
   profiles,
   onThumbnailsUpdated,
 }) => {
-  const [selectedProfileId, setSelectedProfileId] = useState<string>(profiles[0]?.id || 'profile-ayam-warna');
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(profiles[0]?.id || '');
   const [newName, setNewName] = useState('');
   const [selectedImageBase64, setSelectedImageBase64] = useState<string>('');
   const [selectedFileName, setSelectedFileName] = useState<string>('');

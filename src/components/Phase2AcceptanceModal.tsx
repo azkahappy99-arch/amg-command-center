@@ -23,8 +23,8 @@ interface Phase2AcceptanceModalProps {
 export const Phase2AcceptanceModal: React.FC<Phase2AcceptanceModalProps> = ({
   isOpen,
   onClose,
-  channelId = 'chan-ayam-warna',
-  channelTitle = '[DEMO FIXTURE] Ayam Warna',
+  channelId = '',
+  channelTitle = 'YouTube Channel',
 }) => {
   const [isRunning, setIsRunning] = useState(false);
   const [testResponse, setTestResponse] = useState<{

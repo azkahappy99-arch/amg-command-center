@@ -4,6 +4,8 @@
  * Scope: https://www.googleapis.com/auth/youtube.readonly
  */
 
+import { ManagedVideo } from '../types/index.ts';
+
 export const GIS_CONFIG = {
   CLIENT_ID: '140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com',
   SCOPE: 'https://www.googleapis.com/auth/youtube.readonly',
@@ -348,11 +350,17 @@ export function removePersistedConnectedChannel(channelId: string): void {
  * Complete interactive flow:
  * 1. Opens GIS popup and obtains token
  * 2. Fetches YouTube Channel details via YouTube Data API v3
- * 3. Persists to backend & localStorage
+ * 3. Fetches live videos and persists to localStorage
  */
 export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = false): Promise<GisAuthResult> {
   const token = await requestGisAccessToken(promptConsent);
   const channel = await fetchMyYouTubeChannel(token);
+
+  try {
+    await fetchChannelVideosFromYouTube(token, `chan-${channel.id}`);
+  } catch (videoErr) {
+    console.warn('Initial YouTube videos sync warning:', videoErr);
+  }
 
   return {
     accessToken: token,
@@ -360,4 +368,230 @@ export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = f
     channel,
   };
 }
+
+/**
+ * Fetches real uploaded videos for the active/connected YouTube channel using YouTube Data API v3
+ * Uses contentDetails.relatedPlaylists.uploads -> playlistItems and videos endpoints
+ * Caches results into localStorage under 'amg_videos'
+ */
+export async function fetchChannelVideosFromYouTube(
+  accessToken: string,
+  targetChannelId?: string
+): Promise<ManagedVideo[]> {
+  try {
+    // 1. Fetch channel's uploads playlist ID and stats
+    const chanRes = await fetch(
+      'https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics&mine=true',
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    if (!chanRes.ok) {
+      const err = await chanRes.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `Gagal mengambil profil YouTube channel (${chanRes.status})`);
+    }
+
+    const chanData = await chanRes.json();
+    if (!chanData.items || chanData.items.length === 0) {
+      return [];
+    }
+
+    const channelItem = chanData.items[0];
+    const chanId = channelItem.id;
+    const chanTitle = channelItem.snippet?.title || 'YouTube Channel';
+    const uploadsPlaylistId =
+      channelItem.contentDetails?.relatedPlaylists?.uploads ||
+      (chanId.startsWith('UC') ? 'UU' + chanId.slice(2) : '');
+
+    let videoIds: string[] = [];
+
+    // 2. Fetch playlist items from the Uploads playlist
+    if (uploadsPlaylistId) {
+      try {
+        const plRes = await fetch(
+          `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&playlistId=${uploadsPlaylistId}&maxResults=50`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        if (plRes.ok) {
+          const plData = await plRes.json();
+          if (Array.isArray(plData.items)) {
+            videoIds = plData.items
+              .map((it: any) => it.contentDetails?.videoId || it.snippet?.resourceId?.videoId)
+              .filter(Boolean);
+          }
+        }
+      } catch (plErr) {
+        console.warn('PlaylistItems fetch error, trying search fallback:', plErr);
+      }
+    }
+
+    // Fallback: If playlist was empty or unavailable, try search
+    if (videoIds.length === 0) {
+      try {
+        const searchRes = await fetch(
+          'https://www.googleapis.com/youtube/v3/search?part=snippet&forMine=true&type=video&maxResults=50',
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          if (Array.isArray(searchData.items)) {
+            videoIds = searchData.items.map((it: any) => it.id?.videoId).filter(Boolean);
+          }
+        }
+      } catch (sErr) {
+        console.warn('Search fallback notice:', sErr);
+      }
+    }
+
+    const assignedChanId = targetChannelId || `chan-${chanId}`;
+
+    if (videoIds.length === 0) {
+      // Channel has 0 videos uploaded yet
+      updateChannelVideosInStorage(assignedChanId, chanId, chanTitle, []);
+      return [];
+    }
+
+    // 3. Fetch detailed video metrics (definition for HD, status, durations)
+    const videosRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status,statistics&id=${videoIds.slice(0, 50).join(',')}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+
+    let detailedItems: any[] = [];
+    if (videosRes.ok) {
+      const vData = await videosRes.json();
+      detailedItems = vData.items || [];
+    }
+
+    const managedVideos: ManagedVideo[] = detailedItems.map((v: any) => {
+      const isHd = v.contentDetails?.definition === 'hd';
+      const privacy = (v.status?.privacyStatus || 'public') as any;
+      const thumb =
+        v.snippet?.thumbnails?.high?.url ||
+        v.snippet?.thumbnails?.medium?.url ||
+        v.snippet?.thumbnails?.default?.url ||
+        '';
+
+      return {
+        id: `yt-vid-${v.id}`,
+        youtubeVideoId: v.id,
+        channelId: assignedChanId,
+        channelTitle: chanTitle,
+        titleBefore: v.snippet?.title || 'Video Tanpa Judul',
+        titleAssigned: '',
+        thumbnailBefore: thumb,
+        thumbnailAssigned: '',
+        originalUploadAt: v.snippet?.publishedAt || new Date().toISOString(),
+        uploadedAt: v.snippet?.publishedAt,
+        processingStatus: 'processed',
+        privacyStatus: privacy,
+        managementStatus: 'DISCOVERED',
+        managementScope: 'REGULAR',
+        isAmgEligible: true,
+        isManaged: false, // Counts towards "VIDEO BARU"
+        retryCount: 0,
+        definition: isHd ? 'hd' : 'sd', // Counts towards "SIAP HD" if 'hd'
+        duration: v.contentDetails?.duration,
+        isSeeded: false,
+        createdAt: v.snippet?.publishedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    updateChannelVideosInStorage(assignedChanId, chanId, chanTitle, managedVideos);
+    return managedVideos;
+  } catch (err) {
+    console.warn('fetchChannelVideosFromYouTube error:', err);
+    throw err;
+  }
+}
+
+function updateChannelVideosInStorage(
+  channelId: string,
+  youtubeChannelId: string,
+  channelTitle: string,
+  newVideos: ManagedVideo[]
+) {
+  try {
+    const rawVideos = localStorage.getItem('amg_videos');
+    let existing: ManagedVideo[] = [];
+    if (rawVideos) {
+      try {
+        existing = JSON.parse(rawVideos);
+      } catch {
+        existing = [];
+      }
+    }
+    // Clean out any seeded dummy videos
+    const cleanExisting = Array.isArray(existing)
+      ? existing.filter(
+          (v: any) =>
+            !v.isSeeded &&
+            !v.id?.startsWith('vid-old-') &&
+            !v.id?.startsWith('vid-new-') &&
+            !v.titleBefore?.includes('Copy of A') &&
+            !v.titleBefore?.includes('[DEMO FIXTURE]') &&
+            !v.titleBefore?.includes('Demo Fixture') &&
+            v.channelId !== 'chan-ayam-warna' &&
+            v.channelId !== 'chan-suara-alam' &&
+            v.channelId !== 'chan-murottal' &&
+            v.channelId !== 'chan-kucing-gemoy'
+        )
+      : [];
+
+    // Keep videos for other channels
+    const otherChannelsVideos = cleanExisting.filter(
+      (v) =>
+        v.channelId !== channelId &&
+        v.channelId !== youtubeChannelId &&
+        v.channelId !== `chan-${youtubeChannelId}`
+    );
+
+    const mergedVideos = [...newVideos, ...otherChannelsVideos];
+    localStorage.setItem('amg_videos', JSON.stringify(mergedVideos));
+
+    // Also update channel's videoCount in amg_channels
+    const rawChannels = localStorage.getItem('amg_channels');
+    if (rawChannels) {
+      const parsedChannels = JSON.parse(rawChannels);
+      if (Array.isArray(parsedChannels)) {
+        const cIdx = parsedChannels.findIndex(
+          (c: any) =>
+            c.id === channelId ||
+            c.youtubeChannelId === youtubeChannelId ||
+            c.id === `chan-${youtubeChannelId}` ||
+            c.youtubeChannelId === channelId
+        );
+        if (cIdx >= 0) {
+          parsedChannels[cIdx].videoCount = newVideos.length;
+          parsedChannels[cIdx].unmanagedVideoCount = newVideos.filter((v) => !v.isManaged).length;
+          parsedChannels[cIdx].lastSyncAt = new Date().toISOString();
+          localStorage.setItem('amg_channels', JSON.stringify(parsedChannels));
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Could not updateChannelVideosInStorage:', e);
+  }
+}
+
 

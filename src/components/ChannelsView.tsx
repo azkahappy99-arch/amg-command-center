@@ -126,9 +126,9 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
   const [newTitle, setNewTitle] = useState('');
   const [newChannelId, setNewChannelId] = useState('');
   const [newProfileId, setNewProfileId] = useState(profiles[0]?.id || '');
-  const [newNicheCategory, setNewNicheCategory] = useState<string>('Ayam Warna Warni');
+  const [newNicheCategory, setNewNicheCategory] = useState<string>('Music');
   const [newCustomNiche, setNewCustomNiche] = useState<string>('');
-  const [newNicheBadge, setNewNicheBadge] = useState<string>('amber');
+  const [newNicheBadge, setNewNicheBadge] = useState<string>('cyan');
   const [newPublishTime, setNewPublishTime] = useState('16:00');
   const [newFrequency, setNewFrequency] = useState('1/day');
   const [newTimezone, setNewTimezone] = useState('Asia/Jakarta');
@@ -142,7 +142,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
   const [selectedNicheTab, setSelectedNicheTab] = useState<string>('ALL');
   const [openMenuChannelId, setOpenMenuChannelId] = useState<string | null>(null);
 
-  // Interactive Niche Tab definitions matching: Semua Niche, Ayam Warna Warni, Musik, ASMR, Murottal (+ custom)
+  // Interactive Niche Tab definitions matching: Semua Niche, Relaksasi & Suara Alam, Musik, ASMR, Murottal (+ custom)
   const nicheTabs = useMemo(() => {
     const tabs: Array<{
       id: string;
@@ -159,11 +159,11 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
         matcher: () => true,
       },
       {
-        id: 'ayam',
-        label: 'Ayam Warna Warni',
+        id: 'relaksasi',
+        label: 'Relaksasi & Alam',
         dotClass: 'bg-amber-400',
         badgeClass: 'bg-amber-950/80 text-amber-300 border-amber-800/60 ring-1 ring-amber-500/40',
-        matcher: (cat: string) => cat.toLowerCase().includes('ayam'),
+        matcher: (cat: string) => cat.toLowerCase().includes('relaksasi') || cat.toLowerCase().includes('alam') || cat.toLowerCase().includes('ayam'),
       },
       {
         id: 'musik',
@@ -1422,7 +1422,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                   required
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder="contoh: Ayam Warna Series"
+                  placeholder="contoh: Channel Edukasi & Musik"
                   className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-100 focus:ring-1 focus:ring-red-500 focus:outline-none"
                 />
               </div>

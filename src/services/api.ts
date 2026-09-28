@@ -39,6 +39,7 @@ import {
   initialNotifications,
   initialSettings,
 } from './initialSeedData.ts';
+import { fetchChannelVideosFromYouTube } from './youtubeGisAuth.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -82,9 +83,69 @@ function setStorageItem<T>(key: string, val: T): void {
   }
 }
 
+// Helper to identify and preserve only authentic channels (purge mock fixtures)
+export function isRealChannel(c: Channel): boolean {
+  if (!c) return false;
+  if (c.isSeeded) return false;
+  const id = c.id || '';
+  if (
+    id === 'chan-ayam-warna' ||
+    id === 'chan-suara-alam' ||
+    id === 'chan-murottal' ||
+    id === 'chan-kucing-gemoy'
+  ) {
+    return false;
+  }
+  const title = (c.title || '').toLowerCase();
+  if (
+    title.includes('demo fixture') ||
+    title.includes('[demo fixture]') ||
+    title.includes('fixture')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+// Helper to identify and preserve only authentic real videos (purge dummy list like "Copy of A")
+export function isRealVideo(v: ManagedVideo): boolean {
+  if (!v) return false;
+  if (v.isSeeded) return false;
+  const id = v.id || '';
+  if (id.startsWith('vid-old-') || id.startsWith('vid-new-')) {
+    return false;
+  }
+  const title = (v.titleBefore || '').toLowerCase();
+  if (
+    title.includes('copy of a') ||
+    title.includes('demo fixture') ||
+    title.includes('[demo fixture]') ||
+    title.includes('fixture')
+  ) {
+    return false;
+  }
+  const chanTitle = (v.channelTitle || '').toLowerCase();
+  if (chanTitle.includes('demo fixture') || chanTitle.includes('fixture')) {
+    return false;
+  }
+  const cId = v.channelId || '';
+  if (
+    cId === 'chan-ayam-warna' ||
+    cId === 'chan-suara-alam' ||
+    cId === 'chan-murottal' ||
+    cId === 'chan-kucing-gemoy'
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // Ensure connected GIS channels in localStorage are synced into amg_channels
 function syncConnectedChannelState(channels: Channel[]): Channel[] {
   try {
+    // Purge any seeded dummy channels from previous fixtures
+    channels = channels.filter(isRealChannel);
+
     const storedConnected = localStorage.getItem(KEYS.CONNECTED_CHANNEL);
     const storedToken = localStorage.getItem(KEYS.ACCESS_TOKEN);
 
@@ -92,7 +153,10 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
       const liveData = JSON.parse(storedConnected);
       if (liveData && liveData.id) {
         const idx = channels.findIndex(
-          (c) => c.youtubeChannelId === liveData.id || c.id === liveData.id || c.id === `chan-${liveData.id}`
+          (c) =>
+            c.youtubeChannelId === liveData.id ||
+            c.id === liveData.id ||
+            c.id === `chan-${liveData.id}`
         );
 
         if (idx >= 0) {
@@ -100,9 +164,12 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
             ...channels[idx],
             title: liveData.title || channels[idx].title,
             thumbnailUrl: liveData.thumbnailUrl || channels[idx].thumbnailUrl,
+            customUrl: liveData.customUrl || channels[idx].customUrl,
             status: 'CONNECTED',
             connectedAt: channels[idx].connectedAt || new Date().toISOString(),
             isSeeded: false,
+            subscriberCount: liveData.subscriberCount ?? channels[idx].subscriberCount ?? 0,
+            videoCount: liveData.videoCount ?? channels[idx].videoCount ?? 0,
           };
         } else {
           channels.push({
@@ -112,14 +179,14 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
             customUrl: liveData.customUrl || `@${liveData.id}`,
             thumbnailUrl: liveData.thumbnailUrl || '',
             status: 'CONNECTED',
-            monetizationStatus: 'MONETIZED',
-            watchHours: 12000,
+            monetizationStatus: 'NOT_MONETIZED',
+            watchHours: 0,
             revenue: {
-              adSenseReguler: 5000000,
-              liveStream: 1000000,
-              ytShopping: 500000,
-              channelMemberships: 500000,
-              totalChannelRevenue: 7000000,
+              adSenseReguler: 0,
+              liveStream: 0,
+              ytShopping: 0,
+              channelMemberships: 0,
+              totalChannelRevenue: 0,
             },
             nicheCategory: 'General',
             nicheBadge: 'cyan',
@@ -145,21 +212,23 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             connectedAt: new Date().toISOString(),
-            scheduleBufferDays: 7,
-            scheduleStockCount: 5,
+            scheduleBufferDays: 0,
+            scheduleStockCount: 0,
             scheduleAlertStatus: 'SAFE',
           });
         }
         setStorageItem(KEYS.CHANNELS, channels);
       }
     } else if (storedToken) {
-      // If token exists, make sure at least one channel stays marked as connected
+      // If token exists, ensure connected channel is preserved
       const conn = channels.find((c) => c.status === 'CONNECTED' || c.status === 'Connected');
       if (!conn && channels.length > 0) {
         channels[0].status = 'CONNECTED';
         channels[0].connectedAt = channels[0].connectedAt || new Date().toISOString();
         setStorageItem(KEYS.CHANNELS, channels);
       }
+    } else {
+      setStorageItem(KEYS.CHANNELS, channels);
     }
   } catch (e) {
     console.warn('syncConnectedChannelState notice:', e);
@@ -169,7 +238,7 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
 
 export const api = {
   // Stats & Dashboard
-  getStats: async () => {
+  getStats: async (channelId?: string) => {
     let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     channels = syncConnectedChannelState(channels);
 
@@ -177,7 +246,24 @@ export const api = {
       (c) => c.status === 'CONNECTED' || c.status === 'Connected'
     ).length;
 
-    const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
+    // Purge any dummy fixture videos from storage
+    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
+    const cleanVideos = rawVideos.filter(isRealVideo);
+    if (cleanVideos.length !== rawVideos.length) {
+      setStorageItem(KEYS.VIDEOS, cleanVideos);
+    }
+
+    // Filter videos by target active channel or calculate across all real videos
+    const activeTarget = channelId ? channels.find((c) => c.id === channelId || c.youtubeChannelId === channelId) : null;
+    const targetVideos = activeTarget
+      ? cleanVideos.filter(
+          (v) =>
+            v.channelId === activeTarget.id ||
+            v.channelId === activeTarget.youtubeChannelId ||
+            v.channelId === `chan-${activeTarget.youtubeChannelId}`
+        )
+      : cleanVideos;
+
     const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
     const jobs = getStorageItem<AutomationJob[]>(KEYS.JOBS, initialAutomationJobs);
     const errors = getStorageItem<ErrorLog[]>(KEYS.ERRORS, initialErrorLogs);
@@ -219,11 +305,11 @@ export const api = {
       metrics: {
         totalChannels: channels.length,
         connectedChannels,
-        newVideos: videos.filter((v) => !v.isManaged).length,
-        hdReady: videos.filter((v) => v.definition === 'hd').length,
-        processing: videos.filter((v) => v.managementStatus === 'PROCESSING').length,
-        scheduled: videos.filter((v) => v.managementStatus === 'SCHEDULED').length,
-        completedVideos: videos.filter((v) => v.managementStatus === 'COMPLETED').length,
+        newVideos: targetVideos.filter((v) => !v.isManaged).length,
+        hdReady: targetVideos.filter((v) => v.definition === 'hd').length,
+        processing: targetVideos.filter((v) => v.managementStatus === 'PROCESSING').length,
+        scheduled: targetVideos.filter((v) => v.managementStatus === 'SCHEDULED').length,
+        completedVideos: targetVideos.filter((v) => v.managementStatus === 'COMPLETED').length,
         automationJobs: jobs.length,
         errors: errors.filter((e) => e.status === 'open').length,
       },
@@ -272,14 +358,14 @@ export const api = {
       customUrl: data.customUrl || `@${id}`,
       thumbnailUrl: data.thumbnailUrl || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=160&auto=format&fit=crop&q=80',
       status: 'CONNECTED',
-      monetizationStatus: data.monetizationStatus || 'MONETIZED',
-      watchHours: 4200,
+      monetizationStatus: data.monetizationStatus || 'NOT_MONETIZED',
+      watchHours: 0,
       revenue: {
-        adSenseReguler: 1500000,
-        liveStream: 500000,
-        ytShopping: 200000,
-        channelMemberships: 300000,
-        totalChannelRevenue: 2500000,
+        adSenseReguler: 0,
+        liveStream: 0,
+        ytShopping: 0,
+        channelMemberships: 0,
+        totalChannelRevenue: 0,
       },
       nicheCategory: data.nicheCategory || 'General',
       nicheBadge: data.nicheBadge || 'cyan',
@@ -297,16 +383,16 @@ export const api = {
       eligibilityWindowDays: 7,
       eligibleTitlePatterns: [],
       autoEnroll: false,
-      subscriberCount: data.subscriberCount || 1000,
-      videoCount: data.videoCount || 10,
-      unmanagedVideoCount: 2,
+      subscriberCount: data.subscriberCount || 0,
+      videoCount: data.videoCount || 0,
+      unmanagedVideoCount: 0,
       hasOAuthConfigured: true,
       isSeeded: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       connectedAt: new Date().toISOString(),
-      scheduleBufferDays: 5,
-      scheduleStockCount: 3,
+      scheduleBufferDays: 0,
+      scheduleStockCount: 0,
       scheduleAlertStatus: 'SAFE',
     };
 
@@ -334,43 +420,70 @@ export const api = {
   },
 
   syncChannel: async (id: string) => {
-    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
-    const idx = channels.findIndex((c) => c.id === id);
-    const now = new Date().toISOString();
-    let title = 'Channel';
+    const token = localStorage.getItem(KEYS.ACCESS_TOKEN);
+    let fetchedVideos: ManagedVideo[] = [];
+    if (token) {
+      try {
+        fetchedVideos = await fetchChannelVideosFromYouTube(token, id);
+      } catch (err) {
+        console.warn('syncChannel live fetch warning:', err);
+      }
+    }
+
+    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []).filter(isRealVideo);
+    let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+    channels = syncConnectedChannelState(channels);
+    const idx = channels.findIndex(
+      (c) => c.id === id || c.youtubeChannelId === id || c.id === `chan-${id}`
+    );
+    let channelTitle = 'YouTube Channel';
     let yId = '';
+
+    if (idx >= 0) {
+      yId = channels[idx].youtubeChannelId || '';
+      channelTitle = channels[idx].title || 'YouTube Channel';
+    }
+
+    const channelVideos = rawVideos.filter(
+      (v) =>
+        v.channelId === id ||
+        v.channelId === `chan-${id}` ||
+        (yId && (v.channelId === yId || v.channelId === `chan-${yId}`))
+    );
+    const now = new Date().toISOString();
 
     if (idx >= 0) {
       channels[idx].lastSyncAt = now;
       channels[idx].status = 'CONNECTED';
-      title = channels[idx].title;
-      yId = channels[idx].youtubeChannelId;
+      channels[idx].videoCount = channelVideos.length;
+      channels[idx].unmanagedVideoCount = channelVideos.filter((v) => !v.isManaged).length;
       setStorageItem(KEYS.CHANNELS, channels);
     }
+
+    const unmanaged = channelVideos.filter((v) => !v.isManaged).length;
+    const managed = channelVideos.filter((v) => v.isManaged).length;
 
     return {
       success: true,
       readOnlyMode: true,
       channelId: id,
-      channelTitle: title,
+      channelTitle,
       youtubeChannelId: yId,
       uploadPlaylistId: `UU_${yId}`,
       syncTimestamp: now,
-      detectedTotal: 18,
-      newUnmanaged: 2,
-      alreadyManaged: 16,
+      detectedTotal: channelVideos.length,
+      newUnmanaged: unmanaged,
+      alreadyManaged: managed,
       errors: 0,
-      hasLiveYouTubeApi: true,
-      actualFetchedFromYouTube: 18,
-      sampleVideos: [
-        {
-          id: `vid-${Date.now()}-1`,
-          title: `${title} - Edisi Terbaru`,
-          privacyStatus: 'private',
-          uploadStatus: 'processed',
-          definition: 'hd',
-        },
-      ],
+      hasLiveYouTubeApi: !!token,
+      actualFetchedFromYouTube: fetchedVideos.length || channelVideos.length,
+      sampleVideos: channelVideos.slice(0, 5).map((v) => ({
+        id: v.id,
+        title: v.titleBefore,
+        privacyStatus: v.privacyStatus,
+        uploadStatus: 'processed',
+        definition: v.definition || 'hd',
+      })),
     };
   },
 
@@ -694,11 +807,24 @@ export const api = {
 
   // Videos
   getVideos: async (params?: { channelId?: string; status?: string; isManaged?: boolean; scope?: string }) => {
-    let list = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
-    if (params?.channelId) list = list.filter((v) => v.channelId === params.channelId);
-    if (params?.status) list = list.filter((v) => v.managementStatus === params.status);
+    const raw = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
+    const clean = raw.filter(isRealVideo);
+    if (clean.length !== raw.length) {
+      setStorageItem(KEYS.VIDEOS, clean);
+    }
+    let list = clean;
+    if (params?.channelId && params.channelId !== 'ALL') {
+      const targetId = params.channelId;
+      list = list.filter(
+        (v) =>
+          v.channelId === targetId ||
+          v.channelId === `chan-${targetId}` ||
+          (targetId.startsWith('chan-') && v.channelId === targetId.replace('chan-', ''))
+      );
+    }
+    if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);
     if (params?.isManaged !== undefined) list = list.filter((v) => v.isManaged === params.isManaged);
-    if (params?.scope) list = list.filter((v) => v.managementScope === params.scope);
+    if (params?.scope && params.scope !== 'ALL') list = list.filter((v) => v.managementScope === params.scope);
     return list;
   },
 

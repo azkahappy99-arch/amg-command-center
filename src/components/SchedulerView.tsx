@@ -18,7 +18,7 @@ interface SchedulerViewProps {
 }
 
 export const SchedulerView: React.FC<SchedulerViewProps> = ({ channels }) => {
-  const [selectedChannelId, setSelectedChannelId] = useState<string>(channels[0]?.id || 'chan-ayam-warna');
+  const [selectedChannelId, setSelectedChannelId] = useState<string>(channels[0]?.id || '');
   const [scheduleData, setScheduleData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(false);
 

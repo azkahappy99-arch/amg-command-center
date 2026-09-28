@@ -23,14 +23,14 @@ export const NICHE_PRESETS: Array<{
   description: string;
 }> = [
   {
-    category: 'Ayam Warna Warni',
+    category: 'Relaksasi & Suara Alam',
     badgeKey: 'amber',
-    label: 'Ayam Warna Warni',
+    label: 'Relaksasi & Suara Alam',
     badgeClass: 'bg-amber-950/80 text-amber-300 border-amber-800/60',
     dotClass: 'bg-amber-400',
     borderClass: 'border-amber-800/50 hover:border-amber-700',
     bgLightClass: 'from-amber-950/20 to-neutral-900/40',
-    description: 'Anak ayam warna-warni & suara peternakan ceria',
+    description: 'Suara hujan alami, relaksasi malam hari, dan atmosfer alam santai',
   },
   {
     category: 'ASMR',

@@ -44,7 +44,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   onNavigateToQueue,
 }) => {
   const [selectedChannelId, setSelectedChannelId] = useState<string>(
-    initialChannelId || channels[0]?.id || 'chan-ayam-warna'
+    initialChannelId || channels[0]?.id || ''
   );
   const [previewItems, setPreviewItems] = useState<AutomationPreviewItem[]>([]);
   const [scopeSummary, setScopeSummary] = useState<AutomationScopeSummary | null>(null);

@@ -26,7 +26,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
   profiles,
   onTitlesUpdated,
 }) => {
-  const [selectedProfileId, setSelectedProfileId] = useState<string>(profiles[0]?.id || 'profile-ayam-warna');
+  const [selectedProfileId, setSelectedProfileId] = useState<string>(profiles[0]?.id || '');
   const [newTitleText, setNewTitleText] = useState('');
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');

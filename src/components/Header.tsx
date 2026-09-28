@@ -8,6 +8,7 @@ interface HeaderProps {
   selectedChannelId: string;
   onSelectChannel: (channelId: string) => void;
   onRefresh: () => void;
+  onSyncChannel?: (channelId?: string) => Promise<void>;
   isRefreshing: boolean;
   unreadCount: number;
   onOpenNotifications: () => void;
@@ -19,6 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
   selectedChannelId,
   onSelectChannel,
   onRefresh,
+  onSyncChannel,
   isRefreshing,
   unreadCount,
   onOpenNotifications,
@@ -72,13 +74,19 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center space-x-1.5 sm:space-x-3 shrink-0 ml-2">
         {/* Sync / Refresh */}
         <button
-          onClick={onRefresh}
+          onClick={() => {
+            if (onSyncChannel) {
+              onSyncChannel(selectedChannelId);
+            } else {
+              onRefresh();
+            }
+          }}
           disabled={isRefreshing}
-          className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-800 text-xs font-medium transition cursor-pointer"
-          title="Sinkronkan status channel dan basis data"
+          className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-800 text-xs font-semibold transition active:scale-95 cursor-pointer shadow-sm"
+          title="Sinkronkan data video riil dari YouTube Data API v3"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-red-500' : ''}`} />
-          <span className="hidden sm:inline">Sinkronkan</span>
+          <span className="hidden sm:inline">Sinkronkan Channel</span>
         </button>
 
         {/* Notifications */}

@@ -52,6 +52,7 @@ interface DashboardViewProps {
   channels: Channel[];
   onNavigate: (section: any) => void;
   onSyncAll: () => void;
+  onSyncChannel?: (channelId?: string) => Promise<void>;
   isSyncing: boolean;
   onOpenCandidateDetection?: (channel: Channel) => void;
   onGisAuthorize?: (channelId?: string) => Promise<void>;
@@ -63,6 +64,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   channels,
   onNavigate,
   onSyncAll,
+  onSyncChannel,
   isSyncing,
   onGisAuthorize,
 }) => {
@@ -143,15 +145,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             onClick={() => {
               if (metrics.connectedChannels === 0 && onGisAuthorize) {
                 onGisAuthorize(channels[0]?.id);
+              } else if (onSyncChannel) {
+                onSyncChannel(channels[0]?.id);
               } else {
                 onSyncAll();
               }
             }}
             disabled={isSyncing}
-            className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-3 sm:px-3.5 py-2 text-xs font-semibold rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 transition active:scale-95 cursor-pointer"
+            className="flex-1 sm:flex-none justify-center flex items-center gap-2 px-3 sm:px-3.5 py-2 text-xs font-semibold rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 transition active:scale-95 cursor-pointer shadow-sm"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-red-500' : ''}`} />
-            <span>{isSyncing ? 'Mendeteksi...' : 'Sinkronkan Channel'}</span>
+            <span>{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan Channel'}</span>
           </button>
 
           <button

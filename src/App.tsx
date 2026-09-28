@@ -53,7 +53,7 @@ export default function App() {
   const [currentSection, setCurrentSection] = useState<NavSection>('dashboard');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [selectedChannelId, setSelectedChannelId] = useState<string>('chan-ayam-warna');
+  const [selectedChannelId, setSelectedChannelId] = useState<string>('');
 
   // Core Data States
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -92,8 +92,9 @@ export default function App() {
     actionRequired: [],
   });
 
-  const loadAllData = async () => {
+  const loadAllData = async (targetChanId?: string) => {
     setIsRefreshing(true);
+    const activeId = targetChanId || selectedChannelId;
     try {
       const [
         statsData,
@@ -105,7 +106,7 @@ export default function App() {
         notifsData,
         logsData,
       ] = await Promise.all([
-        api.getStats().catch(() => null),
+        api.getStats(activeId).catch(() => null),
         api.getChannels().catch(() => []),
         api.getContentProfiles().catch(() => []),
         api.getMasterTitles().catch(() => []),
@@ -121,7 +122,7 @@ export default function App() {
       }
       if (channelsData) {
         setChannels(channelsData);
-        if (channelsData.length > 0 && !channelsData.some((c: Channel) => c.id === selectedChannelId)) {
+        if (channelsData.length > 0 && (!selectedChannelId || !channelsData.some((c: Channel) => c.id === selectedChannelId))) {
           setSelectedChannelId(channelsData[0].id);
         }
         // Cache connected channel IDs in localStorage for client resilience
@@ -156,26 +157,47 @@ export default function App() {
 
       if (storedChannelsRaw) {
         const parsed = JSON.parse(storedChannelsRaw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
+          // Purge fixture mock channels while strictly preserving connected user channel
+          const realChannels = parsed.filter(
+            (c: Channel) =>
+              !c.isSeeded &&
+              c.id !== 'chan-ayam-warna' &&
+              c.id !== 'chan-suara-alam' &&
+              c.id !== 'chan-murottal' &&
+              c.id !== 'chan-kucing-gemoy' &&
+              !c.title?.includes('[DEMO FIXTURE]') &&
+              !c.title?.includes('Demo Fixture') &&
+              !c.title?.toLowerCase().includes('fixture')
+          );
+
           if (storedConnectedRaw) {
             const live = JSON.parse(storedConnectedRaw);
-            const idx = parsed.findIndex(
+            const idx = realChannels.findIndex(
               (c: Channel) =>
                 c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
             );
             if (idx >= 0) {
-              parsed[idx].status = 'CONNECTED';
+              realChannels[idx].status = 'CONNECTED';
+              realChannels[idx].title = live.title || realChannels[idx].title;
+              realChannels[idx].thumbnailUrl = live.thumbnailUrl || realChannels[idx].thumbnailUrl;
             }
           }
-          setChannels(parsed);
-          const connCount = parsed.filter(
+          if (realChannels.length !== parsed.length) {
+            localStorage.setItem('amg_channels', JSON.stringify(realChannels));
+          }
+          setChannels(realChannels);
+          if (realChannels.length > 0) {
+            setSelectedChannelId(realChannels[0].id);
+          }
+          const connCount = realChannels.filter(
             (c: Channel) => c.status === 'CONNECTED' || c.status === 'Connected'
           ).length;
           setStats((prev) => ({
             ...prev,
             metrics: {
               ...prev.metrics,
-              totalChannels: parsed.length,
+              totalChannels: realChannels.length,
               connectedChannels: connCount > 0 ? connCount : (storedToken ? 1 : 0),
             },
           }));
@@ -206,6 +228,36 @@ export default function App() {
     const timer = setTimeout(() => setToastMessage(null), 4000);
     return () => clearTimeout(timer);
   }, [toastMessage]);
+
+  const handleSyncActiveChannel = async (channelIdToSync?: string) => {
+    setIsRefreshing(true);
+    const targetId = channelIdToSync || selectedChannelId || channels[0]?.id;
+    try {
+      const storedToken = localStorage.getItem('amg_youtube_access_token');
+      if (storedToken && targetId) {
+        const syncRes = await api.syncChannel(targetId);
+        const count = syncRes.actualFetchedFromYouTube ?? syncRes.detectedTotal ?? 0;
+        setToastMessage({
+          text: `Sinkronisasi YouTube berhasil: ${count} video riil terdeteksi untuk "${syncRes.channelTitle}"!`,
+          type: 'success',
+        });
+      } else if (!storedToken) {
+        // Prompt user to connect via GIS if no token
+        await handleGisAuthorize(targetId);
+        return;
+      }
+      await loadAllData(targetId);
+    } catch (err: any) {
+      console.warn('Sync channel error:', err);
+      setToastMessage({
+        text: `Gagal menyinkronkan data YouTube: ${err.message || 'Periksa koneksi atau otorisasi token.'}`,
+        type: 'warning',
+      });
+      await loadAllData();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const handleGisAuthorize = async (channelId?: string) => {
     setIsRefreshing(true);
@@ -281,6 +333,7 @@ export default function App() {
           selectedChannelId={selectedChannelId}
           onSelectChannel={setSelectedChannelId}
           onRefresh={loadAllData}
+          onSyncChannel={handleSyncActiveChannel}
           isRefreshing={isRefreshing}
           unreadCount={unreadNotifsCount}
           onOpenNotifications={() => setCurrentSection('notifications')}
@@ -297,6 +350,7 @@ export default function App() {
               channels={channels}
               onNavigate={setCurrentSection}
               onSyncAll={loadAllData}
+              onSyncChannel={handleSyncActiveChannel}
               isSyncing={isRefreshing}
               onGisAuthorize={handleGisAuthorize}
             />
@@ -322,7 +376,10 @@ export default function App() {
             <VideosView
               videos={videos}
               channels={channels}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={setSelectedChannelId}
               onRefresh={loadAllData}
+              onSyncChannel={handleSyncActiveChannel}
               isRefreshing={isRefreshing}
             />
           )}
