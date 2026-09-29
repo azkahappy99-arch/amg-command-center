@@ -29,6 +29,7 @@ export interface GisAuthResult {
   accessToken: string;
   expiresIn: number;
   channel: YouTubeChannelSnippet;
+  allChannels?: YouTubeChannelSnippet[];
 }
 
 // Global declaration for Google Identity Services
@@ -223,10 +224,11 @@ export async function requestGisAccessToken(promptConsent: boolean = false): Pro
 
 /**
  * Directly calls YouTube Data API v3 endpoint:
- * https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true
+ * https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics&mine=true
+ * Returns ALL channels owned by the authenticated Google account.
  */
-export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTubeChannelSnippet> {
-  const url = 'https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true';
+export async function fetchAllMyYouTubeChannels(accessToken: string): Promise<YouTubeChannelSnippet[]> {
+  const url = 'https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics&mine=true';
 
   const res = await fetch(url, {
     headers: {
@@ -245,87 +247,50 @@ export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTub
 
   const data = await res.json();
   if (!data.items || data.items.length === 0) {
-    throw new Error('No YouTube channel found for this Google account. Please create a channel first on YouTube.');
+    throw new Error('Tidak ada channel YouTube yang ditemukan untuk akun Google ini. Pastikan Anda telah membuat channel di YouTube.');
   }
 
-  const item = data.items[0];
-  const snippet = item.snippet || {};
-  const stats = item.statistics || {};
-  const thumbnails = snippet.thumbnails || {};
+  const channelsList: YouTubeChannelSnippet[] = data.items.map((item: any) => {
+    const snippet = item.snippet || {};
+    const stats = item.statistics || {};
+    const thumbnails = snippet.thumbnails || {};
 
-  const channelData: YouTubeChannelSnippet = {
-    id: item.id,
-    title: snippet.title || 'Untitled Channel',
-    description: snippet.description || '',
-    customUrl: snippet.customUrl || `@${item.id}`,
-    thumbnailUrl:
-      thumbnails.high?.url ||
-      thumbnails.medium?.url ||
-      thumbnails.default?.url ||
-      '',
-    subscriberCount: parseInt(stats.subscriberCount || '0', 10),
-    videoCount: parseInt(stats.videoCount || '0', 10),
-    viewCount: parseInt(stats.viewCount || '0', 10),
-  };
+    return {
+      id: item.id,
+      title: snippet.title || 'Untitled Channel',
+      description: snippet.description || '',
+      customUrl: snippet.customUrl || `@${item.id}`,
+      thumbnailUrl:
+        thumbnails.high?.url ||
+        thumbnails.medium?.url ||
+        thumbnails.default?.url ||
+        '',
+      subscriberCount: parseInt(stats.subscriberCount || '0', 10),
+      videoCount: parseInt(stats.videoCount || '0', 10),
+      viewCount: parseInt(stats.viewCount || '0', 10),
+    };
+  });
 
   try {
-    localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelData));
-    savePersistedConnectedChannel(channelData);
-
-    // Also directly ensure amg_channels has this channel marked as CONNECTED in localStorage
-    const rawChannels = localStorage.getItem('amg_channels');
-    if (rawChannels) {
-      const parsed = JSON.parse(rawChannels);
-      if (Array.isArray(parsed)) {
-        const idx = parsed.findIndex(
-          (c: any) =>
-            c.youtubeChannelId === channelData.id ||
-            c.id === channelData.id ||
-            c.id === `chan-${channelData.id}`
-        );
-        if (idx >= 0) {
-          parsed[idx].title = channelData.title || parsed[idx].title;
-          parsed[idx].thumbnailUrl = channelData.thumbnailUrl || parsed[idx].thumbnailUrl;
-          parsed[idx].status = 'CONNECTED';
-          parsed[idx].connectedAt = parsed[idx].connectedAt || new Date().toISOString();
-          parsed[idx].isSeeded = false;
-          // Ensure real monetization state
-          if (parsed[idx].monetizationStatus === 'MONETIZED' && (!parsed[idx].revenue || parsed[idx].revenue.totalChannelRevenue === 7000000 || parsed[idx].revenue.totalChannelRevenue === 10000000)) {
-            parsed[idx].monetizationStatus = 'NOT_MONETIZED';
-          }
-          if (!parsed[idx].revenue || parsed[idx].revenue.totalChannelRevenue === 7000000 || parsed[idx].revenue.totalChannelRevenue === 10000000 || parsed[idx].revenue.adSenseReguler === 5000000) {
-            parsed[idx].revenue = { adSenseReguler: 0, liveStream: 0, ytShopping: 0, channelMemberships: 0, totalChannelRevenue: 0 };
-          }
-        } else {
-          parsed.unshift({
-            id: `chan-${channelData.id}`,
-            youtubeChannelId: channelData.id,
-            title: channelData.title,
-            thumbnailUrl: channelData.thumbnailUrl || '',
-            status: 'CONNECTED',
-            monetizationStatus: 'NOT_MONETIZED',
-            watchHours: 0,
-            revenue: {
-              adSenseReguler: 0,
-              liveStream: 0,
-              ytShopping: 0,
-              channelMemberships: 0,
-              totalChannelRevenue: 0,
-            },
-            connectedAt: new Date().toISOString(),
-            subscriberCount: channelData.subscriberCount || 0,
-            videoCount: channelData.videoCount || 0,
-            isSeeded: false,
-          });
-        }
-        localStorage.setItem('amg_channels', JSON.stringify(parsed));
+    if (channelsList.length > 0) {
+      localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelsList[0]));
+      for (const ch of channelsList) {
+        savePersistedConnectedChannel(ch);
       }
     }
   } catch (e) {
     console.warn('Could not cache channel data in localStorage:', e);
   }
 
-  return channelData;
+  return channelsList;
+}
+
+/**
+ * Fetches the primary/first authenticated YouTube channel
+ */
+export async function fetchMyYouTubeChannel(accessToken: string): Promise<YouTubeChannelSnippet> {
+  const all = await fetchAllMyYouTubeChannels(accessToken);
+  return all[0];
 }
 
 export function getPersistedConnectedChannels(): YouTubeChannelSnippet[] {
@@ -355,22 +320,65 @@ export function savePersistedConnectedChannel(channel: YouTubeChannelSnippet): v
 
 export function removePersistedConnectedChannel(channelId: string): void {
   try {
-    const list = getPersistedConnectedChannels().filter((c) => c.id !== channelId);
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
+    const list = getPersistedConnectedChannels().filter(
+      (c) => c.id !== channelId && c.id !== cleanId && `chan-${c.id}` !== channelId
+    );
     localStorage.setItem('amg_persistent_channels_list', JSON.stringify(list));
+
+    const storedConnectedRaw = localStorage.getItem(GIS_CONFIG.STORAGE_KEY_CHANNEL);
+    if (storedConnectedRaw) {
+      try {
+        const parsed = JSON.parse(storedConnectedRaw);
+        if (parsed.id === channelId || parsed.id === cleanId || `chan-${parsed.id}` === channelId) {
+          if (list.length > 0) {
+            localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(list[0]));
+          } else {
+            localStorage.removeItem(GIS_CONFIG.STORAGE_KEY_CHANNEL);
+          }
+        }
+      } catch {}
+    }
   } catch (e) {
     console.warn('Could not remove channel from localStorage:', e);
   }
 }
 
+export function markChannelAsUnlinked(channelId: string): void {
+  try {
+    if (!channelId) return;
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
+    const raw = localStorage.getItem('amg_unlinked_channel_ids');
+    const list: string[] = raw ? JSON.parse(raw) : [];
+    if (!list.includes(channelId)) list.push(channelId);
+    if (!list.includes(cleanId)) list.push(cleanId);
+    if (!list.includes(`chan-${cleanId}`)) list.push(`chan-${cleanId}`);
+    localStorage.setItem('amg_unlinked_channel_ids', JSON.stringify(list));
+  } catch {}
+}
+
+export function unmarkChannelAsUnlinked(channelId: string): void {
+  try {
+    if (!channelId) return;
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
+    const raw = localStorage.getItem('amg_unlinked_channel_ids');
+    if (!raw) return;
+    const list: string[] = JSON.parse(raw);
+    const filtered = list.filter((id) => id !== channelId && id !== cleanId && id !== `chan-${cleanId}`);
+    localStorage.setItem('amg_unlinked_channel_ids', JSON.stringify(filtered));
+  } catch {}
+}
+
 /**
  * Complete interactive flow:
  * 1. Opens GIS popup and obtains token
- * 2. Fetches YouTube Channel details via YouTube Data API v3
- * 3. Fetches live videos and persists to localStorage
+ * 2. Fetches ALL YouTube Channels belonging to the authenticated account
+ * 3. Returns all channels for comprehensive sync
  */
 export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = false): Promise<GisAuthResult> {
   const token = await requestGisAccessToken(promptConsent);
-  const channel = await fetchMyYouTubeChannel(token);
+  const allChannels = await fetchAllMyYouTubeChannels(token);
+  const channel = allChannels[0];
 
   try {
     await fetchChannelVideosFromYouTube(token, `chan-${channel.id}`);
@@ -382,6 +390,7 @@ export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = f
     accessToken: token,
     expiresIn: 3600,
     channel,
+    allChannels,
   };
 }
 

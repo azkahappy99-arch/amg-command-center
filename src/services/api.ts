@@ -39,7 +39,13 @@ import {
   initialNotifications,
   initialSettings,
 } from './initialSeedData.ts';
-import { fetchChannelVideosFromYouTube } from './youtubeGisAuth.ts';
+import {
+  fetchChannelVideosFromYouTube,
+  markChannelAsUnlinked,
+  unmarkChannelAsUnlinked,
+  removePersistedConnectedChannel,
+  savePersistedConnectedChannel,
+} from './youtubeGisAuth.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -189,15 +195,20 @@ export function sanitizeChannel(c: Channel): Channel {
 // Ensure connected GIS channels in localStorage are synced into amg_channels
 function syncConnectedChannelState(channels: Channel[]): Channel[] {
   try {
-    // Purge any seeded dummy channels from previous fixtures and sanitize mock monetization
-    channels = channels.filter(isRealChannel).map(sanitizeChannel);
+    const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+    const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+    const isUnlinked = (cid?: string) => (cid ? unlinkedIds.includes(cid) : false);
+
+    // Purge any seeded dummy channels and unlinked channels
+    channels = channels
+      .filter((c) => isRealChannel(c) && !isUnlinked(c.id) && !isUnlinked(c.youtubeChannelId) && !isUnlinked(`chan-${c.youtubeChannelId}`))
+      .map(sanitizeChannel);
 
     const storedConnected = localStorage.getItem(KEYS.CONNECTED_CHANNEL);
-    const storedToken = localStorage.getItem(KEYS.ACCESS_TOKEN);
 
     if (storedConnected) {
       const liveData = JSON.parse(storedConnected);
-      if (liveData && liveData.id) {
+      if (liveData && liveData.id && !isUnlinked(liveData.id) && !isUnlinked(`chan-${liveData.id}`)) {
         const idx = channels.findIndex(
           (c) =>
             c.youtubeChannelId === liveData.id ||
@@ -217,65 +228,11 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
             subscriberCount: liveData.subscriberCount ?? channels[idx].subscriberCount ?? 0,
             videoCount: liveData.videoCount ?? channels[idx].videoCount ?? 0,
           });
-        } else {
-          channels.push({
-            id: `chan-${liveData.id}`,
-            youtubeChannelId: liveData.id,
-            title: liveData.title || 'Connected YouTube Channel',
-            customUrl: liveData.customUrl || `@${liveData.id}`,
-            thumbnailUrl: liveData.thumbnailUrl || '',
-            status: 'CONNECTED',
-            monetizationStatus: 'NOT_MONETIZED',
-            watchHours: 0,
-            revenue: {
-              adSenseReguler: 0,
-              liveStream: 0,
-              ytShopping: 0,
-              channelMemberships: 0,
-              totalChannelRevenue: 0,
-            },
-            nicheCategory: 'General',
-            nicheBadge: 'cyan',
-            publishFrequency: '1/day',
-            publishTime: '16:00',
-            timezone: 'Asia/Jakarta',
-            useProfileSchedule: false,
-            scheduleConfig: {
-              mode: 'DAILY',
-              videosPerDay: 1,
-              times: ['16:00'],
-              timezone: 'Asia/Jakarta',
-              startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-            },
-            eligibilityWindowDays: 7,
-            eligibleTitlePatterns: [],
-            autoEnroll: false,
-            subscriberCount: liveData.subscriberCount || 0,
-            videoCount: liveData.videoCount || 0,
-            unmanagedVideoCount: 0,
-            hasOAuthConfigured: true,
-            isSeeded: false,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            connectedAt: new Date().toISOString(),
-            scheduleBufferDays: 0,
-            scheduleStockCount: 0,
-            scheduleAlertStatus: 'SAFE',
-          });
         }
-        setStorageItem(KEYS.CHANNELS, channels);
       }
-    } else if (storedToken) {
-      // If token exists, ensure connected channel is preserved
-      const conn = channels.find((c) => c.status === 'CONNECTED' || c.status === 'Connected');
-      if (!conn && channels.length > 0) {
-        channels[0].status = 'CONNECTED';
-        channels[0].connectedAt = channels[0].connectedAt || new Date().toISOString();
-        setStorageItem(KEYS.CHANNELS, channels);
-      }
-    } else {
-      setStorageItem(KEYS.CHANNELS, channels);
     }
+
+    setStorageItem(KEYS.CHANNELS, channels);
   } catch (e) {
     console.warn('syncConnectedChannelState notice:', e);
   }
@@ -460,8 +417,61 @@ export const api = {
 
   deleteChannel: async (id: string) => {
     let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
-    channels = channels.filter((c) => c.id !== id);
+    const target = channels.find((c) => c.id === id || c.youtubeChannelId === id || c.id === `chan-${id}`);
+    const targetId = target ? target.id : id;
+    const targetYoutubeId = target?.youtubeChannelId || (id.startsWith('chan-') ? id.replace('chan-', '') : id);
+
+    // 1. Mark as unlinked so that refresh or sync never resurrects it
+    markChannelAsUnlinked(targetId);
+    markChannelAsUnlinked(targetYoutubeId);
+    markChannelAsUnlinked(id);
+
+    // 2. Remove from active channels list
+    channels = channels.filter(
+      (c) =>
+        c.id !== targetId &&
+        c.id !== id &&
+        c.youtubeChannelId !== targetYoutubeId &&
+        c.youtubeChannelId !== id
+    );
     setStorageItem(KEYS.CHANNELS, channels);
+
+    // 3. Remove from GIS persistent list & connected channel
+    removePersistedConnectedChannel(targetId);
+    removePersistedConnectedChannel(targetYoutubeId);
+    removePersistedConnectedChannel(id);
+
+    // 4. Update permanent channel ids cache
+    try {
+      const permRaw = localStorage.getItem('amg_permanent_channel_ids');
+      if (permRaw) {
+        const permList: string[] = JSON.parse(permRaw);
+        const filtered = permList.filter((cid) => cid !== targetId && cid !== targetYoutubeId && cid !== id);
+        localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(filtered));
+      }
+    } catch {}
+
+    // 5. Clean up videos for this channel
+    try {
+      const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
+      const remainingVideos = videos.filter(
+        (v) =>
+          v.channelId !== targetId &&
+          v.channelId !== targetYoutubeId &&
+          v.channelId !== id &&
+          v.channelId !== `chan-${targetYoutubeId}`
+      );
+      setStorageItem(KEYS.VIDEOS, remainingVideos);
+    } catch {}
+
+    // 6. Delete on server backend if available
+    try {
+      fetch(`/api/channels/${encodeURIComponent(targetId)}`, { method: 'DELETE' }).catch(() => {});
+      if (targetYoutubeId && targetYoutubeId !== targetId) {
+        fetch(`/api/channels/${encodeURIComponent(targetYoutubeId)}`, { method: 'DELETE' }).catch(() => {});
+      }
+    } catch {}
+
     return { success: true };
   },
 
@@ -614,6 +624,24 @@ export const api = {
     localStorage.setItem(KEYS.ACCESS_TOKEN, data.accessToken);
     localStorage.setItem(KEYS.TOKEN_EXPIRES, (Date.now() + 3600 * 1000).toString());
     localStorage.setItem(KEYS.CONNECTED_CHANNEL, JSON.stringify(data.channelData));
+
+    // Remove from unlinked blacklist because user is explicitly connecting it
+    if (data.channelData && data.channelData.id) {
+      unmarkChannelAsUnlinked(data.channelData.id);
+      unmarkChannelAsUnlinked(`chan-${data.channelData.id}`);
+    }
+    if (data.channelId) {
+      unmarkChannelAsUnlinked(data.channelId);
+    }
+
+    // Attempt backend sync in background if server is online
+    try {
+      fetch('/api/auth/youtube/gis-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }).catch(() => {});
+    } catch {}
 
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     const now = new Date().toISOString();

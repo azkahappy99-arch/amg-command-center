@@ -258,16 +258,21 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
       // 1. Inisialisasi google.accounts.oauth2.initTokenClient & buka popup login interaktif
       // 2. Fetch profil & stats langsung dari endpoint YouTube Data API v3 (mine=true)
       const result = await authorizeAndFetchYouTubeChannel(true);
+      const channelsToSync = result.allChannels && result.allChannels.length > 0
+        ? result.allChannels
+        : [result.channel];
 
-      // 3. Simpan token & sinkronkan detail channel ke backend
-      const syncRes = await api.gisSyncChannel({
-        channelId: channel.id,
-        accessToken: result.accessToken,
-        channelData: result.channel,
-      });
+      // 3. Simpan token & sinkronkan seluruh channel owner ke database & browser storage
+      for (const chan of channelsToSync) {
+        await api.gisSyncChannel({
+          channelId: chan.id === channel.youtubeChannelId ? channel.id : undefined,
+          accessToken: result.accessToken,
+          channelData: chan,
+        });
+      }
 
       setBannerMessage({
-        text: `Otorisasi Berhasil! Channel "${result.channel.title}" (${result.channel.id}) telah terhubung langsung via YouTube Data API v3. Status: CONNECTED.`,
+        text: `Otorisasi Berhasil! ${channelsToSync.length} Channel YouTube (${channelsToSync.map(c => c.title).join(', ')}) telah terhubung langsung via YouTube Data API v3. Status: CONNECTED.`,
         type: 'success',
       });
 
@@ -628,17 +633,40 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
               try {
                 setBannerMessage({ text: 'Membuka dialog Google Identity Services...', type: 'info' });
                 const result = await authorizeAndFetchYouTubeChannel(true);
-                await api.gisSyncChannel({
-                  accessToken: result.accessToken,
-                  channelData: result.channel,
-                });
+                const channelsToSync = result.allChannels && result.allChannels.length > 0 
+                  ? result.allChannels 
+                  : [result.channel];
+
+                for (const chan of channelsToSync) {
+                  await api.gisSyncChannel({
+                    accessToken: result.accessToken,
+                    channelData: chan,
+                  });
+                }
+
+                const titles = channelsToSync.map((c) => c.title).join(', ');
                 setBannerMessage({
-                  text: `Channel "${result.channel.title}" (${result.channel.id}) berhasil ditautkan dan tersimpan permanen!`,
+                  text: `${channelsToSync.length} Channel YouTube (${titles}) berhasil ditautkan dan tersimpan permanen!`,
                   type: 'success',
                 });
                 onChannelUpdated();
               } catch (err: any) {
-                setBannerMessage({ text: `Gagal otorisasi Google Identity Services: ${err.message}`, type: 'error' });
+                const isPopupClosed =
+                  err?.isPopupClosed ||
+                  err?.type === 'popup_closed' ||
+                  (typeof err?.message === 'string' && (
+                    err.message.toLowerCase().includes('closed') ||
+                    err.message.toLowerCase().includes('dibatalkan') ||
+                    err.message.toLowerCase().includes('cancel')
+                  ));
+                if (isPopupClosed) {
+                  setBannerMessage({
+                    text: 'Otorisasi Google dibatalkan (jendela login ditutup).',
+                    type: 'info',
+                  });
+                } else {
+                  setBannerMessage({ text: `Gagal otorisasi Google Identity Services: ${err.message}`, type: 'error' });
+                }
               }
             }}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-emerald-950/40 cursor-pointer"

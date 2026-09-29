@@ -121,19 +121,30 @@ export default function App() {
         if (statsData.recentBatches) setRecentBatches(statsData.recentBatches);
       }
       if (channelsData) {
-        const cleanChannels = channelsData.map(sanitizeChannel);
+        const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+        const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+        const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
+
+        const cleanChannels = channelsData
+          .filter((c: Channel) => !isUnlinked(c.id) && !isUnlinked(c.youtubeChannelId) && !isUnlinked(`chan-${c.youtubeChannelId}`))
+          .map(sanitizeChannel);
+
         setChannels(cleanChannels);
-        if (cleanChannels.length > 0 && (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId))) {
-          setSelectedChannelId(cleanChannels[0].id);
+        if (cleanChannels.length > 0) {
+          if (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId)) {
+            setSelectedChannelId(cleanChannels[0].id);
+          }
+        } else {
+          setSelectedChannelId('');
         }
+        localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
+
         // Cache connected channel IDs in localStorage for client resilience
         const connectedReal = cleanChannels.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
-        if (connectedReal.length > 0) {
-          try {
-            localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
-          } catch {
-            // ignore
-          }
+        try {
+          localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
+        } catch {
+          // ignore
         }
       }
       if (profilesData) setProfiles(profilesData);
@@ -152,6 +163,10 @@ export default function App() {
   useEffect(() => {
     // Immediate direct localStorage inspection upon mount (100% static, no backend needed)
     try {
+      const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+      const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+      const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
+
       const storedConnectedRaw = localStorage.getItem('amg_youtube_connected_channel');
       const storedToken = localStorage.getItem('amg_youtube_access_token');
       const storedChannelsRaw = localStorage.getItem('amg_channels');
@@ -159,11 +174,14 @@ export default function App() {
       if (storedChannelsRaw) {
         const parsed = JSON.parse(storedChannelsRaw);
         if (Array.isArray(parsed)) {
-          // Purge fixture mock channels and sanitize legacy mock monetization/revenue
+          // Purge fixture mock channels, unlinked channels, and sanitize legacy mock monetization/revenue
           const realChannels = parsed
             .filter(
               (c: Channel) =>
                 !c.isSeeded &&
+                !isUnlinked(c.id) &&
+                !isUnlinked(c.youtubeChannelId) &&
+                !isUnlinked(`chan-${c.youtubeChannelId}`) &&
                 c.id !== 'chan-ayam-warna' &&
                 c.id !== 'chan-suara-alam' &&
                 c.id !== 'chan-murottal' &&
@@ -176,17 +194,19 @@ export default function App() {
 
           if (storedConnectedRaw) {
             const live = JSON.parse(storedConnectedRaw);
-            const idx = realChannels.findIndex(
-              (c: Channel) =>
-                c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
-            );
-            if (idx >= 0) {
-              realChannels[idx] = sanitizeChannel({
-                ...realChannels[idx],
-                status: 'CONNECTED',
-                title: live.title || realChannels[idx].title,
-                thumbnailUrl: live.thumbnailUrl || realChannels[idx].thumbnailUrl,
-              });
+            if (live && live.id && !isUnlinked(live.id) && !isUnlinked(`chan-${live.id}`)) {
+              const idx = realChannels.findIndex(
+                (c: Channel) =>
+                  c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
+              );
+              if (idx >= 0) {
+                realChannels[idx] = sanitizeChannel({
+                  ...realChannels[idx],
+                  status: 'CONNECTED',
+                  title: live.title || realChannels[idx].title,
+                  thumbnailUrl: live.thumbnailUrl || realChannels[idx].thumbnailUrl,
+                });
+              }
             }
           }
           // Always write back sanitized channels (wiping away any legacy mock revenue & fake YPP)
@@ -194,6 +214,8 @@ export default function App() {
           setChannels(realChannels);
           if (realChannels.length > 0) {
             setSelectedChannelId(realChannels[0].id);
+          } else {
+            setSelectedChannelId('');
           }
           const connCount = realChannels.filter(
             (c: Channel) => c.status === 'CONNECTED' || c.status === 'Connected'
@@ -203,16 +225,16 @@ export default function App() {
             metrics: {
               ...prev.metrics,
               totalChannels: realChannels.length,
-              connectedChannels: connCount > 0 ? connCount : (storedToken ? 1 : 0),
+              connectedChannels: connCount > 0 ? connCount : (storedToken && realChannels.length > 0 ? 1 : 0),
             },
           }));
         }
-      } else if (storedConnectedRaw || storedToken) {
+      } else if (storedToken) {
         setStats((prev) => ({
           ...prev,
           metrics: {
             ...prev.metrics,
-            connectedChannels: 1,
+            connectedChannels: 0,
           },
         }));
       }

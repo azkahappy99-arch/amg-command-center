@@ -74,15 +74,20 @@ export const YouTubeOAuthModal: React.FC<YouTubeOAuthModalProps> = ({
       setRetrievedChannel(result.channel);
 
       // 3. Persist to backend and update channel to CONNECTED
-      const syncRes = await api.gisSyncChannel({
-        channelId: channel.id,
-        accessToken: result.accessToken,
-        channelData: result.channel,
-      });
+      const channelsToSync = result.allChannels && result.allChannels.length > 0
+        ? result.allChannels
+        : [result.channel];
+
+      for (const chan of channelsToSync) {
+        await api.gisSyncChannel({
+          channelId: chan.id === channel.youtubeChannelId ? channel.id : undefined,
+          accessToken: result.accessToken,
+          channelData: chan,
+        });
+      }
 
       setSuccessMessage(
-        syncRes.message ||
-          `Channel "${result.channel.title}" berhasil dihubungkan! Status kini CONNECTED.`
+        `${channelsToSync.length} Channel YouTube (${channelsToSync.map(c => c.title).join(', ')}) berhasil dihubungkan! Status kini CONNECTED.`
       );
 
       setTimeout(() => {

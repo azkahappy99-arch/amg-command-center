@@ -494,24 +494,49 @@ app.post('/api/schedule/preview', (req: Request, res: Response) => {
 });
 
 app.delete('/api/channels/:id', (req: Request, res: Response) => {
-  const channel = dbStore.channels.get(req.params.id);
-  if (!channel) return res.status(404).json({ error: 'Channel not found' });
+  const targetId = req.params.id;
+  const channel =
+    dbStore.channels.get(targetId) ||
+    dbStore.getChannelByYoutubeId(targetId) ||
+    Array.from(dbStore.channels.values()).find(
+      (c) => c.id === targetId || c.youtubeChannelId === targetId || c.id === `chan-${targetId}`
+    );
 
-  dbStore.channels.delete(channel.id);
-  youtubeAuthService.revokeCredentials(channel.id);
-  dbStore.saveToDisk();
+  if (channel) {
+    dbStore.channels.delete(channel.id);
+    youtubeAuthService.revokeCredentials(channel.id);
+    if (channel.youtubeChannelId) {
+      youtubeAuthService.revokeCredentials(channel.youtubeChannelId);
+      youtubeAuthService.revokeCredentials(`chan-${channel.youtubeChannelId}`);
+    }
 
-  dbStore.logActivity({
-    user: 'Administrator',
-    channelId: channel.id,
-    channelTitle: channel.title,
-    operation: 'Channel Unlinked / Removed',
-    previousValue: channel.status,
-    newValue: 'Unlinked permanently by user',
-    result: 'SUCCESS',
-  });
+    // Clean up associated videos from memory & persistence
+    for (const [vId, v] of dbStore.videos.entries()) {
+      if (
+        v.channelId === channel.id ||
+        v.channelId === channel.youtubeChannelId ||
+        v.channelId === `chan-${channel.youtubeChannelId}`
+      ) {
+        dbStore.videos.delete(vId);
+      }
+    }
 
-  res.json({ success: true, message: `Channel "${channel.title}" berhasil diputuskan dan dihapus.` });
+    dbStore.saveToDisk();
+
+    dbStore.logActivity({
+      user: 'Administrator',
+      channelId: channel.id,
+      channelTitle: channel.title,
+      operation: 'Channel Unlinked / Removed',
+      previousValue: channel.status,
+      newValue: 'Unlinked permanently by user',
+      result: 'SUCCESS',
+    });
+
+    return res.json({ success: true, message: `Channel "${channel.title}" berhasil diputuskan dan dihapus.` });
+  }
+
+  res.json({ success: true, message: `Channel "${targetId}" telah diputuskan.` });
 });
 
 // REAL YOUTUBE SYNC ENDPOINT
