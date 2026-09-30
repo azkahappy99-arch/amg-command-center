@@ -1,14 +1,15 @@
 {
   "version": 1,
-  "savedAt": "2026-09-27T17:02:21.396Z",
+  "savedAt": "2026-09-29T14:53:52.334Z",
   "channels": [],
   "profiles": [
     [
       "profile-ayam-warna",
       {
         "id": "profile-ayam-warna",
-        "name": "AYAM WARNA",
-        "description": "Master profile for colorful chicks, relaxing ambient audio and rain series videos.",
+        "blockId": "profile-ayam-warna",
+        "name": "AYAM WARNA-WARNI",
+        "description": "Blok rotasi khusus konten anak ayam warna-warni, animasi ceria dan video bermain.",
         "nicheCategory": "Ayam Warna Warni",
         "nicheBadge": "amber",
         "publishFrequency": "3/day",
@@ -26,6 +27,42 @@
           "startPolicy": "CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE"
         },
         "masterTitleIds": [
+          "ayam-t-1",
+          "ayam-t-2",
+          "ayam-t-3"
+        ],
+        "masterThumbnailIds": [
+          "ayam-th-1",
+          "ayam-th-2",
+          "ayam-th-3"
+        ],
+        "assignedChannelCount": 0,
+        "createdAt": "2026-09-15T08:00:00.000Z",
+        "updatedAt": "2026-09-20T08:00:00.000Z"
+      }
+    ],
+    [
+      "profile-relaksasi",
+      {
+        "id": "profile-relaksasi",
+        "blockId": "profile-relaksasi",
+        "name": "SUARA ALAM & ASMR HUJAN",
+        "description": "Blok rotasi judul dan thumbnail untuk konten relaksasi, suara hujan malam, dan musik alam.",
+        "nicheCategory": "Music",
+        "nicheBadge": "cyan",
+        "publishFrequency": "1/day",
+        "publishTime": "16:00",
+        "timezone": "Asia/Jakarta",
+        "scheduleConfig": {
+          "mode": "DAILY",
+          "videosPerDay": 1,
+          "times": [
+            "16:00"
+          ],
+          "timezone": "Asia/Jakarta",
+          "startPolicy": "CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE"
+        },
+        "masterTitleIds": [
           "title-1",
           "title-2",
           "title-3"
@@ -36,7 +73,7 @@
           "thumb-3",
           "thumb-4"
         ],
-        "assignedChannelCount": 1,
+        "assignedChannelCount": 0,
         "createdAt": "2026-09-15T08:00:00.000Z",
         "updatedAt": "2026-09-20T08:00:00.000Z"
       }
@@ -45,6 +82,7 @@
       "profile-asmr",
       {
         "id": "profile-asmr",
+        "blockId": "profile-asmr",
         "name": "DEEP ASMR SOUNDS",
         "description": "Gentle whispering, rain tapping, and deep binaural triggers.",
         "nicheCategory": "ASMR",
@@ -69,7 +107,7 @@
           "asmr-th-1",
           "asmr-th-2"
         ],
-        "assignedChannelCount": 1,
+        "assignedChannelCount": 0,
         "createdAt": "2026-09-16T08:00:00.000Z",
         "updatedAt": "2026-09-20T08:00:00.000Z"
       }
@@ -78,6 +116,7 @@
       "profile-murottal",
       {
         "id": "profile-murottal",
+        "blockId": "profile-murottal",
         "name": "MUROTTAL MERDU 30 JUZ",
         "description": "Lantunan ayat suci Al-Quran merdu dan terjemahan bahasa Indonesia.",
         "nicheCategory": "Murottal",
@@ -103,7 +142,7 @@
           "murottal-th-1",
           "murottal-th-2"
         ],
-        "assignedChannelCount": 1,
+        "assignedChannelCount": 0,
         "createdAt": "2026-09-17T08:00:00.000Z",
         "updatedAt": "2026-09-20T08:00:00.000Z"
       }
@@ -111,11 +150,84 @@
   ],
   "masterTitles": [
     [
+      "ayam-t-1",
+      {
+        "id": "ayam-t-1",
+        "blockId": "profile-ayam-warna",
+        "profileId": "profile-ayam-warna",
+        "text": "Ayam Warna-Warni Lucu Bermain di Taman Hijau",
+        "orderIndex": 0,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "ayam-t-2",
+      {
+        "id": "ayam-t-2",
+        "blockId": "profile-ayam-warna",
+        "profileId": "profile-ayam-warna",
+        "text": "Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria",
+        "orderIndex": 1,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "ayam-t-3",
+      {
+        "id": "ayam-t-3",
+        "blockId": "profile-ayam-warna",
+        "profileId": "profile-ayam-warna",
+        "text": "Ayam Warna-Warni Lucu Bikin Tertawa Seharian",
+        "orderIndex": 2,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "title-1",
+      {
+        "id": "title-1",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "text": "Tidur Nyenyak dengan Suara Hujan Deras di Hutan",
+        "orderIndex": 0,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "title-2",
+      {
+        "id": "title-2",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "text": "Suara Hujan & Gemericik Air untuk Relaksasi Relaks",
+        "orderIndex": 1,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "title-3",
+      {
+        "id": "title-3",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "text": "Hujan Malam di Kamar Cozy Pengantar Tidur Nyenyak",
+        "orderIndex": 2,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
       "asmr-t-1",
       {
         "id": "asmr-t-1",
+        "blockId": "profile-asmr",
         "profileId": "profile-asmr",
-        "text": "Deep ASMR Rain Whispers for Insomnia Relief",
+        "text": "Deep ASMR Whispers for Insomnia Relief",
         "orderIndex": 0,
         "isActive": true,
         "createdAt": "2026-09-16T08:00:00.000Z"
@@ -125,6 +237,7 @@
       "asmr-t-2",
       {
         "id": "asmr-t-2",
+        "blockId": "profile-asmr",
         "profileId": "profile-asmr",
         "text": "100% Tingles Binaural Tapping & Gentle Brushing",
         "orderIndex": 1,
@@ -136,6 +249,7 @@
       "murottal-t-1",
       {
         "id": "murottal-t-1",
+        "blockId": "profile-murottal",
         "profileId": "profile-murottal",
         "text": "Murottal Surat Ar-Rahman Penenang Jiwa & Hati",
         "orderIndex": 0,
@@ -147,52 +261,112 @@
       "murottal-t-2",
       {
         "id": "murottal-t-2",
+        "blockId": "profile-murottal",
         "profileId": "profile-murottal",
         "text": "Lantunan Surat Al-Mulk Pengantar Tidur Nyenyak",
         "orderIndex": 1,
         "isActive": true,
         "createdAt": "2026-09-17T08:00:00.000Z"
       }
-    ],
+    ]
+  ],
+  "masterThumbnails": [
     [
-      "title-1",
+      "ayam-th-1",
       {
-        "id": "title-1",
+        "id": "ayam-th-1",
+        "blockId": "profile-ayam-warna",
         "profileId": "profile-ayam-warna",
-        "text": "Tidur Nyenyak dengan Suara Hujan",
+        "name": "Ayam Warna Ceria TH1",
+        "url": "https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800&auto=format&fit=crop&q=80",
         "orderIndex": 0,
         "isActive": true,
         "createdAt": "2026-09-15T08:00:00.000Z"
       }
     ],
     [
-      "title-2",
+      "ayam-th-2",
       {
-        "id": "title-2",
+        "id": "ayam-th-2",
+        "blockId": "profile-ayam-warna",
         "profileId": "profile-ayam-warna",
-        "text": "Suara Hujan untuk Relaksasi",
+        "name": "Ayam Warna Bermain TH2",
+        "url": "https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800&auto=format&fit=crop&q=80",
         "orderIndex": 1,
         "isActive": true,
         "createdAt": "2026-09-15T08:00:00.000Z"
       }
     ],
     [
-      "title-3",
+      "ayam-th-3",
       {
-        "id": "title-3",
+        "id": "ayam-th-3",
+        "blockId": "profile-ayam-warna",
         "profileId": "profile-ayam-warna",
-        "text": "Hujan Malam untuk Teman Tidur",
+        "name": "Ayam Warna Gemoy TH3",
+        "url": "https://images.unsplash.com/photo-1563281577-a7be47e20db9?w=800&auto=format&fit=crop&q=80",
         "orderIndex": 2,
         "isActive": true,
         "createdAt": "2026-09-15T08:00:00.000Z"
       }
-    ]
-  ],
-  "masterThumbnails": [
+    ],
+    [
+      "thumb-1",
+      {
+        "id": "thumb-1",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "name": "Rain Window Aesthetic TH1",
+        "url": "https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800&auto=format&fit=crop&q=80",
+        "orderIndex": 0,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "thumb-2",
+      {
+        "id": "thumb-2",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "name": "Cozy Bedroom Rain TH2",
+        "url": "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80",
+        "orderIndex": 1,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "thumb-3",
+      {
+        "id": "thumb-3",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "name": "Night Forest Rain TH3",
+        "url": "https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=800&auto=format&fit=crop&q=80",
+        "orderIndex": 2,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
+    [
+      "thumb-4",
+      {
+        "id": "thumb-4",
+        "blockId": "profile-relaksasi",
+        "profileId": "profile-relaksasi",
+        "name": "Soft Lantern Cabin TH4",
+        "url": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80",
+        "orderIndex": 3,
+        "isActive": true,
+        "createdAt": "2026-09-15T08:00:00.000Z"
+      }
+    ],
     [
       "asmr-th-1",
       {
         "id": "asmr-th-1",
+        "blockId": "profile-asmr",
         "profileId": "profile-asmr",
         "name": "ASMR Microphone Soft Light",
         "url": "https://images.unsplash.com/photo-1590602847861-f357a9332bbc?w=800&auto=format&fit=crop&q=80",
@@ -205,6 +379,7 @@
       "asmr-th-2",
       {
         "id": "asmr-th-2",
+        "blockId": "profile-asmr",
         "profileId": "profile-asmr",
         "name": "Cozy Binaural Headphones Night",
         "url": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&auto=format&fit=crop&q=80",
@@ -217,6 +392,7 @@
       "murottal-th-1",
       {
         "id": "murottal-th-1",
+        "blockId": "profile-murottal",
         "profileId": "profile-murottal",
         "name": "Quran Mosque Silhouette",
         "url": "https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?w=800&auto=format&fit=crop&q=80",
@@ -229,60 +405,13 @@
       "murottal-th-2",
       {
         "id": "murottal-th-2",
+        "blockId": "profile-murottal",
         "profileId": "profile-murottal",
         "name": "Holy Quran Wooden Rehal",
         "url": "https://images.unsplash.com/photo-1609599006353-e629aaabfeae?w=800&auto=format&fit=crop&q=80",
         "orderIndex": 1,
         "isActive": true,
         "createdAt": "2026-09-17T08:00:00.000Z"
-      }
-    ],
-    [
-      "thumb-1",
-      {
-        "id": "thumb-1",
-        "profileId": "profile-ayam-warna",
-        "name": "Rain Window Aesthetic TH1",
-        "url": "https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800&auto=format&fit=crop&q=80",
-        "orderIndex": 0,
-        "isActive": true,
-        "createdAt": "2026-09-15T08:00:00.000Z"
-      }
-    ],
-    [
-      "thumb-2",
-      {
-        "id": "thumb-2",
-        "profileId": "profile-ayam-warna",
-        "name": "Cozy Bedroom Rain TH2",
-        "url": "https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80",
-        "orderIndex": 1,
-        "isActive": true,
-        "createdAt": "2026-09-15T08:00:00.000Z"
-      }
-    ],
-    [
-      "thumb-3",
-      {
-        "id": "thumb-3",
-        "profileId": "profile-ayam-warna",
-        "name": "Night Forest Rain TH3",
-        "url": "https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=800&auto=format&fit=crop&q=80",
-        "orderIndex": 2,
-        "isActive": true,
-        "createdAt": "2026-09-15T08:00:00.000Z"
-      }
-    ],
-    [
-      "thumb-4",
-      {
-        "id": "thumb-4",
-        "profileId": "profile-ayam-warna",
-        "name": "Soft Lantern Cabin TH4",
-        "url": "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80",
-        "orderIndex": 3,
-        "isActive": true,
-        "createdAt": "2026-09-15T08:00:00.000Z"
       }
     ]
   ],
@@ -313,6 +442,50 @@
   "automationJobs": [],
   "errorLogs": [],
   "activityLogs": [
+    {
+      "id": "act-1790693632334-bhpzg",
+      "timestamp": "2026-09-29T14:53:52.334Z",
+      "user": "Administrator",
+      "channelId": "chan-UC_OWNER_AYAM_TOBI_101",
+      "channelTitle": "Ayam TOBI Official",
+      "operation": "Channel Unlinked / Removed",
+      "previousValue": "CONNECTED",
+      "newValue": "Unlinked permanently by user",
+      "result": "SUCCESS"
+    },
+    {
+      "id": "act-1790693632263-bg5e3",
+      "timestamp": "2026-09-29T14:53:52.263Z",
+      "user": "Administrator",
+      "channelId": "chan-UC_OWNER_AYAM_YAHYA_202",
+      "channelTitle": "Ayam YAHYA Kids",
+      "operation": "Channel Unlinked / Removed",
+      "previousValue": "CONNECTED",
+      "newValue": "Unlinked permanently by user",
+      "result": "SUCCESS"
+    },
+    {
+      "id": "act-1790693632256-i5acs",
+      "timestamp": "2026-09-29T14:53:52.256Z",
+      "user": "GIS OAuth Client",
+      "channelId": "chan-UC_OWNER_AYAM_YAHYA_202",
+      "channelTitle": "Ayam YAHYA Kids",
+      "operation": "YouTube Channel Connected & Persisted",
+      "previousValue": "DISCONNECTED",
+      "newValue": "Tersambung permanen: Ayam YAHYA Kids (UC_OWNER_AYAM_YAHYA_202) via Google Identity Services. Status: CONNECTED",
+      "result": "SUCCESS"
+    },
+    {
+      "id": "act-1790693632241-l5pyr",
+      "timestamp": "2026-09-29T14:53:52.241Z",
+      "user": "GIS OAuth Client",
+      "channelId": "chan-UC_OWNER_AYAM_TOBI_101",
+      "channelTitle": "Ayam TOBI Official",
+      "operation": "YouTube Channel Connected & Persisted",
+      "previousValue": "DISCONNECTED",
+      "newValue": "Tersambung permanen: Ayam TOBI Official (UC_OWNER_AYAM_TOBI_101) via Google Identity Services. Status: CONNECTED",
+      "result": "SUCCESS"
+    },
     {
       "id": "act-1790528541396-8p2u7",
       "timestamp": "2026-09-27T17:02:21.396Z",
@@ -518,6 +691,30 @@
         "channelId": "chan-1790528541332",
         "read": false,
         "createdAt": "2026-09-27T17:02:21.338Z"
+      }
+    ],
+    [
+      "notif-buffer-chan-UC_OWNER_AYAM_TOBI_101",
+      {
+        "id": "notif-buffer-chan-UC_OWNER_AYAM_TOBI_101",
+        "type": "ALERT",
+        "title": "Stok Jadwal Menipis: Ayam TOBI Official",
+        "message": "Cadangan jadwal channel Ayam TOBI Official tersisa 0 hari (habis pada Belum ada jadwal). Tersisa 0 video terjadwal di antrean. Segera periksa kandidat video baru.",
+        "channelId": "chan-UC_OWNER_AYAM_TOBI_101",
+        "read": false,
+        "createdAt": "2026-09-29T14:53:52.252Z"
+      }
+    ],
+    [
+      "notif-buffer-chan-UC_OWNER_AYAM_YAHYA_202",
+      {
+        "id": "notif-buffer-chan-UC_OWNER_AYAM_YAHYA_202",
+        "type": "ALERT",
+        "title": "Stok Jadwal Menipis: Ayam YAHYA Kids",
+        "message": "Cadangan jadwal channel Ayam YAHYA Kids tersisa 0 hari (habis pada Belum ada jadwal). Tersisa 0 video terjadwal di antrean. Segera periksa kandidat video baru.",
+        "channelId": "chan-UC_OWNER_AYAM_YAHYA_202",
+        "read": false,
+        "createdAt": "2026-09-29T14:53:52.259Z"
       }
     ]
   ],

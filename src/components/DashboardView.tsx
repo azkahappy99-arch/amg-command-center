@@ -15,9 +15,10 @@ import {
   ChevronRight,
   Key,
 } from 'lucide-react';
-import { Channel, AutomationBatch, ActivityLog } from '../types/index.ts';
+import { Channel, ContentProfile, MasterTitle, MasterThumbnail, ManagedVideo, AutomationBatch, ActivityLog } from '../types/index.ts';
 import { QueueMonitor } from './QueueMonitor';
 import { formatIDR } from './MonetizationBadge';
+import { calculateDetectedVideosCount } from '../utils/blockIsolation';
 
 export interface ActionRequiredItem {
   id: string;
@@ -50,6 +51,12 @@ interface DashboardViewProps {
   recentBatches: AutomationBatch[];
   recentActivity: ActivityLog[];
   channels: Channel[];
+  profiles?: ContentProfile[];
+  titles?: MasterTitle[];
+  thumbnails?: MasterThumbnail[];
+  videos?: ManagedVideo[];
+  selectedChannelId?: string;
+  onSelectChannel?: (channelId: string) => void;
   onNavigate: (section: any) => void;
   onSyncAll: () => void;
   onSyncChannel?: (channelId?: string) => Promise<void>;
@@ -62,12 +69,51 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   metrics,
   actionRequired,
   channels,
+  profiles = [],
+  titles = [],
+  thumbnails = [],
+  videos = [],
+  selectedChannelId,
+  onSelectChannel,
   onNavigate,
   onSyncAll,
   onSyncChannel,
   isSyncing,
   onGisAuthorize,
 }) => {
+  // Active Channel & Active Block Resolution (Requirements 2, 11, 12)
+  const activeChannel = useMemo(() => {
+    return channels.find((c) => c.id === selectedChannelId) || channels[0];
+  }, [channels, selectedChannelId]);
+
+  const activeBlockId = useMemo(() => {
+    return activeChannel?.blockId || activeChannel?.contentProfileId || profiles[0]?.id || '';
+  }, [activeChannel, profiles]);
+
+  const activeProfile = useMemo(() => {
+    return profiles.find((p) => p.id === activeBlockId || p.blockId === activeBlockId) || profiles[0];
+  }, [profiles, activeBlockId]);
+
+  // Block-isolated Video Metrics
+  const activeBlockVideos = useMemo(() => {
+    if (!activeChannel) return [];
+    return videos.filter(
+      (v) =>
+        v.channelId === activeChannel.id ||
+        v.channelId === activeChannel.youtubeChannelId ||
+        v.channelId === `chan-${activeChannel.youtubeChannelId}` ||
+        v.blockId === activeBlockId
+    );
+  }, [videos, activeChannel, activeBlockId]);
+
+  const blockDetectedCount = useMemo(() => {
+    return calculateDetectedVideosCount(videos, channels, profiles, activeChannel?.id);
+  }, [videos, channels, profiles, activeChannel?.id]);
+
+  const blockCompletedCount = useMemo(() => {
+    return activeBlockVideos.filter((v) => v.managementStatus === 'COMPLETED' || v.isManaged).length;
+  }, [activeBlockVideos]);
+
   // Master Revenue and Monetization Aggregation
   const revenueSummary = useMemo(() => {
     let totalRevenue = 0;
@@ -205,23 +251,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 3. Grid Metrik Utama (8 Primary Cards) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-        {/* Total Channels */}
-        <div
-          onClick={() => onNavigate('channels')}
-          className="p-3.5 rounded-xl bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-[11px] font-medium uppercase tracking-wider">Channel</span>
-            <Tv className="w-3.5 h-3.5 text-neutral-500 group-hover:text-neutral-300" />
-          </div>
-          <div className="text-2xl font-bold text-neutral-100">{metrics.totalChannels}</div>
-          <div className="text-[10px] text-emerald-400 mt-1 font-medium">
-            {metrics.connectedChannels} Aktif
-          </div>
-        </div>
-
+      {/* 3. Grid Metrik Utama (Block-Aware Primary Cards) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {/* Connected Channels */}
         <div
           onClick={() => onNavigate('channels')}
@@ -253,17 +284,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* New / Unmanaged Videos */}
+        {/* Video Terdeteksi (Kandidat AMG) */}
         <div
           onClick={() => onNavigate('videos')}
           className="p-3.5 rounded-xl bg-neutral-900/70 border border-amber-900/40 hover:border-amber-700/60 transition cursor-pointer group"
         >
           <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-[11px] font-medium uppercase tracking-wider">Video Baru</span>
+            <span className="text-[11px] font-medium uppercase tracking-wider">Video Terdeteksi</span>
             <Film className="w-3.5 h-3.5 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-amber-400">{metrics.newVideos}</div>
-          <div className="text-[10px] text-amber-300 mt-1 font-medium">Belum Dikelola</div>
+          <div className="text-2xl font-bold text-amber-400">{blockDetectedCount}</div>
+          <div className="text-[10px] text-amber-300 mt-1 font-medium">Kandidat AMG ({activeProfile?.name || 'Blok'})</div>
+        </div>
+
+        {/* Video Sudah Dikelola */}
+        <div
+          onClick={() => onNavigate('videos')}
+          className="p-3.5 rounded-xl bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition cursor-pointer group"
+        >
+          <div className="flex items-center justify-between text-neutral-400 mb-1">
+            <span className="text-[11px] font-medium uppercase tracking-wider">Sudah Dikelola</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+          </div>
+          <div className="text-2xl font-bold text-neutral-100">{blockCompletedCount}</div>
+          <div className="text-[10px] text-emerald-400 mt-1 font-medium">Diproses AMG</div>
         </div>
 
         {/* HD Ready */}
@@ -275,21 +319,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-[11px] font-medium uppercase tracking-wider">Siap HD</span>
             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-neutral-100">{metrics.hdReady}</div>
-          <div className="text-[10px] text-emerald-400 mt-1 font-medium">Diproses</div>
-        </div>
-
-        {/* Processing */}
-        <div
-          onClick={() => onNavigate('videos')}
-          className="p-3.5 rounded-xl bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition cursor-pointer group"
-        >
-          <div className="flex items-center justify-between text-neutral-400 mb-1">
-            <span className="text-[11px] font-medium uppercase tracking-wider">Memproses</span>
-            <Clock className="w-3.5 h-3.5 text-blue-400" />
+          <div className="text-2xl font-bold text-neutral-100">
+            {activeBlockVideos.filter((v) => v.definition === 'hd').length || metrics.hdReady}
           </div>
-          <div className="text-2xl font-bold text-neutral-100">{metrics.processing}</div>
-          <div className="text-[10px] text-neutral-500 mt-1 font-medium">Transcoding</div>
+          <div className="text-[10px] text-emerald-400 mt-1 font-medium">Transcoding Selesai</div>
         </div>
 
         {/* Scheduled */}
@@ -301,7 +334,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-[11px] font-medium uppercase tracking-wider">Terjadwal</span>
             <Calendar className="w-3.5 h-3.5 text-purple-400" />
           </div>
-          <div className="text-2xl font-bold text-neutral-100">{metrics.scheduled}</div>
+          <div className="text-2xl font-bold text-neutral-100">
+            {activeBlockVideos.filter((v) => v.managementStatus === 'SCHEDULED' || v.scheduledPublishAt).length || metrics.scheduled}
+          </div>
           <div className="text-[10px] text-purple-400 mt-1 font-medium">Slot Masa Depan</div>
         </div>
 

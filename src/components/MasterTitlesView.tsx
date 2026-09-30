@@ -11,6 +11,7 @@ import {
   Eye,
   Layers,
   Sparkles,
+  AlertTriangle,
 } from 'lucide-react';
 import { MasterTitle, ContentProfile, Channel } from '../types/index.ts';
 import { api } from '../services/api.ts';
@@ -36,6 +37,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
   const activeChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
   const activeProfile = profiles.find(
     (p) =>
+      p.id === activeChannel?.blockId ||
       p.id === activeChannel?.contentProfileId ||
       p.id === `profile-${activeChannel?.id}` ||
       p.id === activeChannel?.id
@@ -56,22 +58,15 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
     }
   }, [activeChannel?.id, activeProfile?.id]);
 
-  // Filter titles strictly for the active channel / profile - 100% Isolated
+  // Filter titles strictly for the active block / profile - 100% Isolated
+  const currentBlockId = selectedProfileId || activeProfile?.id || activeChannel?.blockId || activeChannel?.contentProfileId || '';
   const profileTitles = titles
     .filter((t) => {
-      if (activeChannel) {
-        if (t.channelId && (t.channelId === activeChannel.id || t.channelId === activeChannel.youtubeChannelId)) {
-          return true;
-        }
-        if (activeChannel.contentProfileId && t.profileId === activeChannel.contentProfileId) {
-          return true;
-        }
-        if (t.profileId === `profile-${activeChannel.id}` || t.profileId === activeChannel.id) {
-          return true;
-        }
-        return false;
+      const titleBlock = t.blockId || t.profileId;
+      if (currentBlockId) {
+        return titleBlock === currentBlockId;
       }
-      return t.profileId === selectedProfileId;
+      return false;
     })
     .sort((a, b) => a.orderIndex - b.orderIndex);
 
@@ -80,14 +75,10 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
     if (!newTitleText.trim()) return;
     setIsAdding(true);
     try {
-      const targetChannelId = activeChannel?.id;
-      const targetProfileId =
-        activeChannel?.contentProfileId ||
-        (activeChannel ? `profile-${activeChannel.id}` : selectedProfileId);
-
       await api.createMasterTitle({
-        channelId: targetChannelId,
-        profileId: targetProfileId,
+        blockId: currentBlockId,
+        profileId: currentBlockId,
+        channelId: activeChannel?.id,
         text: newTitleText.trim(),
         orderIndex: profileTitles.length,
       });
@@ -234,8 +225,14 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           </div>
 
           {profileTitles.length === 0 ? (
-            <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-500 text-xs">
-              Belum ada Master Judul untuk channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong>. Tambahkan judul pertama khusus channel ini di atas.
+            <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-400 text-xs space-y-1">
+              <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5">
+                <AlertTriangle className="w-4 h-4" />
+                <span>Master Judul belum tersedia pada blok ini</span>
+              </div>
+              <p className="text-neutral-500 text-[11px]">
+                Silakan tambahkan judul pertama khusus blok <strong className="text-neutral-300">{activeProfile?.name || 'ini'}</strong> di atas. Anti-fallback aktif.
+              </p>
             </div>
           ) : (
             <div className="space-y-2">

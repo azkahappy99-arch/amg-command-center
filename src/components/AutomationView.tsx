@@ -65,7 +65,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [batchToRollback, setBatchToRollback] = useState<AutomationBatch | null>(null);
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
-  const selectedProfile = profiles.find((p) => p.id === selectedChannel?.contentProfileId);
+  const selectedProfile = profiles.find((p) => p.id === selectedChannel?.contentProfileId || p.id === selectedChannel?.blockId || p.blockId === selectedChannel?.blockId);
 
   const fetchPreview = async (channelId: string) => {
     setIsLoadingPreview(true);

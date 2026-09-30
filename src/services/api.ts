@@ -46,6 +46,13 @@ import {
   removePersistedConnectedChannel,
   savePersistedConnectedChannel,
 } from './youtubeGisAuth.ts';
+import {
+  resolveBlockId,
+  getBlockMasters,
+  validateBlockIsolation,
+  evaluateVideoEligibilityWithBlock,
+  calculateDetectedVideosCount,
+} from '../utils/blockIsolation.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -304,11 +311,14 @@ export const api = {
       }
     });
 
+    const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+    const detectedCandidatesCount = calculateDetectedVideosCount(targetVideos, channels, profiles, channelId);
+
     return {
       metrics: {
         totalChannels: channels.length,
         connectedChannels,
-        newVideos: targetVideos.filter((v) => !v.isManaged).length,
+        newVideos: detectedCandidatesCount,
         hdReady: targetVideos.filter((v) => v.definition === 'hd').length,
         processing: targetVideos.filter((v) => v.managementStatus === 'PROCESSING').length,
         scheduled: targetVideos.filter((v) => v.managementStatus === 'SCHEDULED').length,
@@ -854,7 +864,8 @@ export const api = {
       (c) =>
         c.id === profileOrChannelId ||
         c.youtubeChannelId === profileOrChannelId ||
-        c.contentProfileId === profileOrChannelId
+        c.contentProfileId === profileOrChannelId ||
+        c.blockId === profileOrChannelId
     );
 
     return list.filter((t) => {
@@ -862,14 +873,17 @@ export const api = {
         if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId)) {
           return true;
         }
-        if (matchingChan.contentProfileId && t.profileId === matchingChan.contentProfileId) {
+        if (matchingChan.blockId && (t.blockId === matchingChan.blockId || t.profileId === matchingChan.blockId)) {
+          return true;
+        }
+        if (matchingChan.contentProfileId && (t.profileId === matchingChan.contentProfileId || t.blockId === matchingChan.contentProfileId)) {
           return true;
         }
         if (t.profileId === `profile-${matchingChan.id}` || t.profileId === matchingChan.id) {
           return true;
         }
       }
-      return t.profileId === profileOrChannelId || t.channelId === profileOrChannelId;
+      return t.profileId === profileOrChannelId || t.blockId === profileOrChannelId || t.channelId === profileOrChannelId;
     });
   },
 
@@ -887,18 +901,22 @@ export const api = {
 
     const resolvedProfileId =
       data.profileId ||
+      data.blockId ||
       targetChan?.contentProfileId ||
+      targetChan?.blockId ||
       (targetChan ? `profile-${targetChan.id}` : 'default');
     const resolvedChannelId = data.channelId || targetChan?.id || '';
 
     const newTitle: MasterTitle = {
       id: `title-${Date.now()}`,
-      text: data.text || 'Judul Baru',
+      blockId: resolvedProfileId,
       profileId: resolvedProfileId,
       channelId: resolvedChannelId,
+      text: data.text || 'Judul Baru',
       orderIndex: list.filter(
         (t) =>
           t.profileId === resolvedProfileId ||
+          t.blockId === resolvedProfileId ||
           (resolvedChannelId && t.channelId === resolvedChannelId)
       ).length,
       isActive: data.isActive !== undefined ? data.isActive : true,
@@ -939,7 +957,8 @@ export const api = {
       (c) =>
         c.id === profileOrChannelId ||
         c.youtubeChannelId === profileOrChannelId ||
-        c.contentProfileId === profileOrChannelId
+        c.contentProfileId === profileOrChannelId ||
+        c.blockId === profileOrChannelId
     );
 
     return list.filter((th) => {
@@ -947,14 +966,17 @@ export const api = {
         if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId)) {
           return true;
         }
-        if (matchingChan.contentProfileId && th.profileId === matchingChan.contentProfileId) {
+        if (matchingChan.blockId && (th.blockId === matchingChan.blockId || th.profileId === matchingChan.blockId)) {
+          return true;
+        }
+        if (matchingChan.contentProfileId && (th.profileId === matchingChan.contentProfileId || th.blockId === matchingChan.contentProfileId)) {
           return true;
         }
         if (th.profileId === `profile-${matchingChan.id}` || th.profileId === matchingChan.id) {
           return true;
         }
       }
-      return th.profileId === profileOrChannelId || th.channelId === profileOrChannelId;
+      return th.profileId === profileOrChannelId || th.blockId === profileOrChannelId || th.channelId === profileOrChannelId;
     });
   },
 
@@ -972,12 +994,15 @@ export const api = {
 
     const resolvedProfileId =
       data.profileId ||
+      data.blockId ||
       targetChan?.contentProfileId ||
+      targetChan?.blockId ||
       (targetChan ? `profile-${targetChan.id}` : 'default');
     const resolvedChannelId = data.channelId || targetChan?.id || '';
 
     const newThumb: MasterThumbnail = {
       id: `thumb-${Date.now()}`,
+      blockId: resolvedProfileId,
       profileId: resolvedProfileId,
       channelId: resolvedChannelId,
       name: data.name || 'Thumbnail',
@@ -987,6 +1012,7 @@ export const api = {
       orderIndex: list.filter(
         (th) =>
           th.profileId === resolvedProfileId ||
+          th.blockId === resolvedProfileId ||
           (resolvedChannelId && th.channelId === resolvedChannelId)
       ).length,
       isActive: data.isActive !== undefined ? data.isActive : true,
@@ -1041,8 +1067,16 @@ export const api = {
         return th.profileId === profileOrChannelId || th.channelId === profileOrChannelId;
       });
     } else {
-      titles = rawTitles.filter((t) => t.isActive);
-      thumbs = rawThumbs.filter((th) => th.isActive);
+      // If no specific channel/profile is selected, pick the first valid block (never mix across blocks)
+      const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+      const defaultBlock = profiles[0];
+      if (defaultBlock) {
+        titles = rawTitles.filter((t) => (t.blockId === defaultBlock.id || t.profileId === defaultBlock.id) && t.isActive);
+        thumbs = rawThumbs.filter((th) => (th.blockId === defaultBlock.id || th.profileId === defaultBlock.id) && th.isActive);
+      } else {
+        titles = [];
+        thumbs = [];
+      }
     }
 
     titles.sort((a, b) => a.orderIndex - b.orderIndex);
@@ -1247,16 +1281,52 @@ export const api = {
   // Automation
   getAutomationPreview: async (channelId: string, profileId?: string) => {
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
-    const channel = channels.find((c) => c.id === channelId) || channels[0];
-    const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(
-      (v) => v.channelId === channelId && !v.isManaged
-    );
-    const titles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
-    const thumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
+    const channel = channels.find((c) => c.id === channelId);
+    if (!channel) {
+      throw new Error(`Channel dengan ID "${channelId}" tidak ditemukan.`);
+    }
 
-    const preview: AutomationPreviewItem[] = videos.slice(0, 5).map((v, i) => {
-      const assignedT = titles[i % titles.length]?.text || v.titleAssigned || v.titleBefore;
-      const assignedThumb = thumbs[i % thumbs.length]?.url || v.thumbnailAssigned || v.thumbnailBefore;
+    const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+    const targetBlockId = profileId || channel.contentProfileId || channel.blockId;
+    const targetBlock = profiles.find((p) => p.id === targetBlockId);
+
+    if (!targetBlockId || !targetBlock) {
+      throw new Error(`Channel "${channel.title}" belum memiliki blok yang ditentukan (Unassigned). Otomasi dicegah.`);
+    }
+
+    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(isRealVideo);
+    const channelVideos = rawVideos.filter(
+      (v) =>
+        v.channelId === channel.id ||
+        v.channelId === channel.youtubeChannelId ||
+        v.channelId === `chan-${channel.youtubeChannelId}`
+    );
+
+    const allTitles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    const allThumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
+
+    const { titles, thumbnails, hasTitles, hasThumbnails } = getBlockMasters(
+      targetBlock.id,
+      allTitles,
+      allThumbs
+    );
+
+    if (!hasTitles) {
+      throw new Error(`Master Judul belum tersedia pada blok "${targetBlock.name}". Otomasi dicegah untuk menghindari cross-niche.`);
+    }
+    if (!hasThumbnails) {
+      throw new Error(`Master Thumbnail belum tersedia pada blok "${targetBlock.name}". Otomasi dicegah untuk menghindari cross-niche.`);
+    }
+
+    // Filter candidate videos strictly matching all 8 criteria
+    const candidateVideos = channelVideos.filter((v) => {
+      const evalRes = evaluateVideoEligibilityWithBlock(v, channel, targetBlock);
+      return evalRes.isEligible && evalRes.category === 'NEW_PRIVATE_CANDIDATE';
+    });
+
+    const preview: AutomationPreviewItem[] = candidateVideos.slice(0, 10).map((v, i) => {
+      const assignedT = titles[i % titles.length].text;
+      const assignedThumb = thumbnails[i % thumbnails.length].url;
       return {
         sequence: i + 1,
         videoId: v.id,
@@ -1265,12 +1335,12 @@ export const api = {
         originalThumbnail: v.thumbnailBefore,
         assignedThumbnail: assignedThumb,
         publishDate: new Date(Date.now() + (i + 1) * 86400000).toISOString().split('T')[0],
-        publishTime: '16:00',
-        targetChannelId: channelId,
-        targetChannelTitle: channel?.title || 'Channel',
-        contentProfileName: 'AYAM WARNA',
+        publishTime: targetBlock.scheduleConfig?.times?.[0] || '16:00',
+        targetChannelId: channel.id,
+        targetChannelTitle: channel.title,
+        contentProfileName: targetBlock.name,
         status: 'READY',
-        managementScope: v.managementScope || 'REGULAR',
+        managementScope: 'REGULAR',
         isAmgEligible: true,
       };
     });
@@ -1278,27 +1348,33 @@ export const api = {
     return {
       success: true,
       preview,
-      channelTitle: channel?.title || 'Channel',
-      profileName: 'AYAM WARNA',
-      unmanagedCount: videos.length,
+      channelTitle: channel.title,
+      profileName: targetBlock.name,
+      unmanagedCount: candidateVideos.length,
       scopeSummary: {
-        totalDetected: videos.length,
-        includedCount: videos.length,
-        excludedCount: 0,
+        totalDetected: channelVideos.length,
+        includedCount: candidateVideos.length,
+        excludedCount: channelVideos.length - candidateVideos.length,
         needsScopeAssignmentCount: 0,
-        eligibleCount: videos.length,
+        eligibleCount: candidateVideos.length,
       } as AutomationScopeSummary,
     };
   },
 
   executeDryRun: async (channelId: string, profileId?: string) => {
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    const channel = channels.find((c) => c.id === channelId) || channels[0];
+    const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+    const targetBlockId = profileId || channel?.contentProfileId || channel?.blockId;
+    const targetBlock = profiles.find((p) => p.id === targetBlockId) || profiles[0];
+
     const newBatch: AutomationBatch = {
       id: `batch-dry-${Date.now()}`,
       batchNumber: `BAT-${Date.now().toString().slice(-4)}`,
       channelId,
-      channelTitle: 'Simulasi Otomasi',
-      profileId: profileId || 'profile-ayam-warna',
-      profileName: 'AYAM WARNA',
+      channelTitle: channel?.title || 'Simulasi Otomasi',
+      profileId: targetBlock?.id || 'profile-ayam-warna',
+      profileName: targetBlock?.name || 'AYAM WARNA-WARNI',
       status: 'completed',
       detectedCount: 3,
       processedCount: 3,
@@ -1314,14 +1390,21 @@ export const api = {
   },
 
   startBatchAutomation: async (channelId: string, profileId?: string) => {
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    const channelIdx = channels.findIndex((c) => c.id === channelId);
+    const channel = channelIdx >= 0 ? channels[channelIdx] : channels[0];
+    const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+    const targetBlockId = profileId || channel?.contentProfileId || channel?.blockId;
+    const targetBlock = profiles.find((p) => p.id === targetBlockId) || profiles[0];
+
     const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
     const newBatch: AutomationBatch = {
       id: `batch-${Date.now()}`,
       batchNumber: `BAT-${Date.now().toString().slice(-4)}`,
       channelId,
-      channelTitle: 'Otomasi Produksi',
-      profileId: profileId || 'profile-ayam-warna',
-      profileName: 'AYAM WARNA',
+      channelTitle: channel?.title || 'Otomasi Produksi',
+      profileId: targetBlock?.id || 'profile-ayam-warna',
+      profileName: targetBlock?.name || 'AYAM WARNA-WARNI',
       status: 'running',
       detectedCount: 5,
       processedCount: 2,
@@ -1331,6 +1414,14 @@ export const api = {
       isDryRun: false,
       startedAt: new Date().toISOString(),
     };
+
+    // Advance cutoff if scheduling executed
+    if (channelIdx >= 0) {
+      const scheduledIso = new Date(Date.now() + 86400000).toISOString();
+      channels[channelIdx].lastScheduledPublishAt = scheduledIso;
+      channels[channelIdx].lastScheduledVideoId = `vid-${Date.now()}`;
+      setStorageItem(KEYS.CHANNELS, channels);
+    }
 
     batches.unshift(newBatch);
     setStorageItem(KEYS.BATCHES, batches);

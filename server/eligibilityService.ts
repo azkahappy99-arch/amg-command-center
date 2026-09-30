@@ -234,20 +234,51 @@ export function evaluateVideoEligibility(
     };
   }
 
-  // CHECK 5 — AMG MANAGED UPLOAD CUTOFF (latestManagedUploadAt)
-  // This is the critical safety mechanism to protect personal videos created before the latest batch.
-  if (channel.latestManagedUploadAt) {
-    const cutoffTime = new Date(channel.latestManagedUploadAt).getTime();
+  // CHECK 4B — BLOCK ISOLATION GUARANTEE
+  const blockId = channel.contentProfileId || (channel as any).blockId;
+  if (!blockId) {
+    return {
+      category: 'UNCLASSIFIED',
+      isEligible: false,
+      isProtected: true,
+      amgStatus: 'UNCLASSIFIED',
+      reason: 'Channel belum memiliki blok / unassigned. Otomasi dicegah.',
+      eligibilityWindowDays: config.windowDays,
+      latestManagedUploadAt: channel.lastScheduledPublishAt || channel.latestManagedUploadAt,
+      originalUploadAt: video.originalUploadAt,
+    };
+  }
+
+  // CHECK 4C — SCHEDULED PUBLISH CHECK (Video BELUM memiliki jadwal publish)
+  if (video.scheduledPublishAt) {
+    return {
+      category: 'ALREADY_MANAGED',
+      isEligible: false,
+      isProtected: true,
+      amgStatus: 'SCHEDULED',
+      reason: `Video already has a publish schedule (${video.scheduledPublishAt}).`,
+      eligibilityWindowDays: config.windowDays,
+      latestManagedUploadAt: channel.lastScheduledPublishAt || channel.latestManagedUploadAt,
+      originalUploadAt: video.originalUploadAt,
+    };
+  }
+
+  // CHECK 5 — AMG MANAGED SCHEDULING CUTOFF (LAST_SCHEDULED_DATETIME)
+  // This is the critical safety mechanism: VIDEO_DATE_TIME > LAST_SCHEDULED_DATETIME.
+  // Any video on or before the cutoff date is permanently protected.
+  const effectiveCutoff = channel.lastScheduledPublishAt || channel.latestManagedUploadAt;
+  if (effectiveCutoff) {
+    const cutoffTime = new Date(effectiveCutoff).getTime();
     if (!isNaN(cutoffTime) && uploadTime <= cutoffTime) {
       return {
         category: 'PROTECTED_BY_CUTOFF',
         isEligible: false,
         isProtected: true,
         amgStatus: 'PROTECTED_BY_CUTOFF',
-        reason: `Upload timestamp (${video.originalUploadAt}) is before/at the managed cutoff (${channel.latestManagedUploadAt}). Protected historical/personal video.`,
+        reason: `Upload timestamp (${video.originalUploadAt}) is before/at the scheduling cutoff (${effectiveCutoff}). Protected historical/personal video.`,
         matchedTitlePattern: patternResult.matchedPattern,
         eligibilityWindowDays: config.windowDays,
-        latestManagedUploadAt: channel.latestManagedUploadAt,
+        latestManagedUploadAt: effectiveCutoff,
         originalUploadAt: video.originalUploadAt,
       };
     }
@@ -414,6 +445,25 @@ export function validateBeforeMutation(
     return {
       isValid: false,
       reason: `SECURITY VIOLATION: Video ${video.id} belongs to channel "${video.channelId}", but mutation requested for "${targetChannelId}".`,
+      video,
+    };
+  }
+
+  // 1b. Block Isolation Check (Requirement 16)
+  const channel = dbStore.channels.get(targetChannelId);
+  const targetBlockId = channel?.contentProfileId || (channel as any)?.blockId;
+  if (!targetBlockId) {
+    return {
+      isValid: false,
+      reason: `SAFETY GATE BLOCKED: Channel "${targetChannelId}" has no valid block assigned.`,
+      video,
+    };
+  }
+  const videoBlockId = video.blockId || video.contentProfileId;
+  if (videoBlockId && videoBlockId !== targetBlockId) {
+    return {
+      isValid: false,
+      reason: `BLOCK ISOLATION VIOLATION: Video belongs to block "${videoBlockId}", but channel is assigned to block "${targetBlockId}". Cross-niche mutation rejected.`,
       video,
     };
   }

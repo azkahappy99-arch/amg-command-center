@@ -256,6 +256,12 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toastMessage]);
 
+  useEffect(() => {
+    if (selectedChannelId) {
+      loadAllData(selectedChannelId);
+    }
+  }, [selectedChannelId]);
+
   const handleSyncActiveChannel = async (channelIdToSync?: string) => {
     setIsRefreshing(true);
     const targetId = channelIdToSync || selectedChannelId || channels[0]?.id;
@@ -375,6 +381,12 @@ export default function App() {
               recentBatches={recentBatches}
               recentActivity={activityLogs}
               channels={channels}
+              profiles={profiles}
+              titles={titles}
+              thumbnails={thumbnails}
+              videos={videos}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={setSelectedChannelId}
               onNavigate={setCurrentSection}
               onSyncAll={loadAllData}
               onSyncChannel={handleSyncActiveChannel}

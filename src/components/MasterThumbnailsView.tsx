@@ -7,6 +7,7 @@ import {
   Upload,
   X,
   CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
 import { MasterThumbnail, MasterTitle, ContentProfile, Channel } from '../types/index.ts';
 import { api } from '../services/api.ts';
@@ -34,6 +35,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
   const activeChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
   const activeProfile = profiles.find(
     (p) =>
+      p.id === activeChannel?.blockId ||
       p.id === activeChannel?.contentProfileId ||
       p.id === `profile-${activeChannel?.id}` ||
       p.id === activeChannel?.id
@@ -56,41 +58,26 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     }
   }, [activeChannel?.id, activeProfile?.id]);
 
-  // Filter thumbnails strictly for the active channel - 100% Isolated
+  // Filter thumbnails strictly for the active block / profile - 100% Isolated
+  const currentBlockId = selectedProfileId || activeProfile?.id || activeChannel?.blockId || activeChannel?.contentProfileId || '';
   const profileThumbnails = thumbnails
     .filter((th) => {
-      if (activeChannel) {
-        if (th.channelId && (th.channelId === activeChannel.id || th.channelId === activeChannel.youtubeChannelId)) {
-          return true;
-        }
-        if (activeChannel.contentProfileId && th.profileId === activeChannel.contentProfileId) {
-          return true;
-        }
-        if (th.profileId === `profile-${activeChannel.id}` || th.profileId === activeChannel.id) {
-          return true;
-        }
-        return false;
+      const thumbBlock = th.blockId || th.profileId;
+      if (currentBlockId) {
+        return thumbBlock === currentBlockId;
       }
-      return th.profileId === selectedProfileId;
+      return false;
     })
     .sort((a, b) => a.orderIndex - b.orderIndex);
 
-  // Filter titles strictly for the active channel - 100% Isolated
+  // Filter titles strictly for the active block / profile - 100% Isolated
   const profileTitles = titles
     .filter((t) => {
-      if (activeChannel) {
-        if (t.channelId && (t.channelId === activeChannel.id || t.channelId === activeChannel.youtubeChannelId)) {
-          return true;
-        }
-        if (activeChannel.contentProfileId && t.profileId === activeChannel.contentProfileId) {
-          return true;
-        }
-        if (t.profileId === `profile-${activeChannel.id}` || t.profileId === activeChannel.id) {
-          return true;
-        }
-        return false;
+      const titleBlock = t.blockId || t.profileId;
+      if (currentBlockId) {
+        return titleBlock === currentBlockId;
       }
-      return t.profileId === selectedProfileId;
+      return false;
     })
     .filter((t) => t.isActive)
     .sort((a, b) => a.orderIndex - b.orderIndex);
@@ -162,14 +149,10 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
 
     setIsAdding(true);
     try {
-      const targetChannelId = activeChannel?.id;
-      const targetProfileId =
-        activeChannel?.contentProfileId ||
-        (activeChannel ? `profile-${activeChannel.id}` : selectedProfileId);
-
       await api.createMasterThumbnail({
-        channelId: targetChannelId,
-        profileId: targetProfileId,
+        blockId: currentBlockId,
+        profileId: currentBlockId,
+        channelId: activeChannel?.id,
         name: newName.trim(),
         url: selectedImageBase64,
         orderIndex: profileThumbnails.length,
@@ -408,8 +391,14 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
         </div>
 
         {profileThumbnails.length === 0 ? (
-          <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-500 text-xs">
-            Belum ada Master Thumbnail untuk channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong>. Upload atau tambahkan thumbnail master pertama khusus channel ini melalui formulir di atas.
+          <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-400 text-xs space-y-1">
+            <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5">
+              <AlertTriangle className="w-4 h-4" />
+              <span>Master Thumbnail belum tersedia pada blok ini</span>
+            </div>
+            <p className="text-neutral-500 text-[11px]">
+              Silakan tambahkan aset thumbnail pertama khusus blok <strong className="text-neutral-300">{activeProfile?.name || 'ini'}</strong> di atas. Anti-fallback aktif.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

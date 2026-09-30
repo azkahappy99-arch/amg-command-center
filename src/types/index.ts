@@ -107,6 +107,7 @@ export interface Channel {
   scheduleStockCount?: number; // jumlah total video berstatus terjadwal di masa depan
   scheduleAlertStatus?: ScheduleAlertStatus; // 'SAFE' | 'LOW_STOCK' | 'CRITICAL'
   bufferExhaustionDate?: string; // tanggal ISO saat slot jadwal terakhir tayang
+  blockId?: string; // Phase 3 Block Isolation Container ID
   contentProfileId?: string;
   nicheCategory?: NicheCategoryPreset;
   nicheBadge?: string; // e.g. 'amber', 'rose', 'cyan', 'emerald', 'purple'
@@ -124,7 +125,8 @@ export interface Channel {
   rotationTitleIndex?: number;
   rotationThumbnailIndex?: number;
   lastSyncAt?: string;
-  lastScheduledPublishAt?: string;
+  lastScheduledPublishAt?: string; // LAST_SCHEDULED_DATETIME cutoff
+  lastScheduledVideoId?: string; // Video ID of the latest scheduled slot
   uploadPlaylistId?: string;
   subscriberCount?: number;
   videoCount?: number;
@@ -140,8 +142,9 @@ export interface Channel {
 }
 
 export interface ContentProfile {
-  id: string;
-  name: string;
+  id: string; // Unique Block / Profile ID
+  blockId?: string; // Explicit alias for blockId
+  name: string; // Block Name
   description: string;
   nicheCategory?: NicheCategoryPreset;
   nicheBadge?: string;
@@ -151,6 +154,9 @@ export interface ContentProfile {
   scheduleConfig?: ScheduleConfig;
   masterTitleIds: string[];
   masterThumbnailIds: string[];
+  channelIds?: string[]; // Channels assigned exclusively to this block
+  lastScheduledDatetime?: string | null;
+  lastScheduledVideoId?: string | null;
   eligibilityWindowDays?: number; // Phase 2
   eligibleTitlePatterns?: string[]; // Phase 2
   autoEnroll?: boolean; // Phase 2
@@ -159,9 +165,12 @@ export interface ContentProfile {
   updatedAt: string;
 }
 
+export type Block = ContentProfile;
+
 export interface MasterTitle {
   id: string;
-  profileId: string;
+  blockId?: string; // Explicit Block ID
+  profileId: string; // Block / Profile ID
   channelId?: string;
   text: string;
   orderIndex: number;
@@ -171,7 +180,8 @@ export interface MasterTitle {
 
 export interface MasterThumbnail {
   id: string;
-  profileId: string;
+  blockId?: string; // Explicit Block ID
+  profileId: string; // Block / Profile ID
   channelId?: string;
   name: string;
   url: string;
@@ -184,11 +194,15 @@ export interface ManagedVideo {
   id: string;
   youtubeVideoId: string;
   channelId: string;
+  blockId?: string; // Explicit Block ID
+  contentProfileId?: string;
   channelTitle?: string;
   titleBefore: string;
   titleAssigned: string;
+  masterTitleId?: string;
   thumbnailBefore: string;
   thumbnailAssigned: string;
+  masterThumbnailId?: string;
   originalUploadAt: string;
   uploadedAt?: string; // Phase 2 synonym
   processingStatus: VideoProcessingStatus;
@@ -214,7 +228,6 @@ export interface ManagedVideo {
   scopeAssignedBy?: string; // 'USER' | 'SYSTEM' | 'SEEDED'
   exclusionReason?: string;
   isManaged: boolean;
-  contentProfileId?: string;
   automationBatchId?: string;
   batchId?: string; // Phase 2 synonym
   retryCount: number;

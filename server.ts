@@ -65,7 +65,20 @@ app.get('/api/stats', (req: Request, res: Response) => {
     c.status === 'RECONNECT REQUIRED' ||
     c.status === 'TOKEN EXPIRED'
   ).length;
-  const newVideos = videos.filter(v => !v.isManaged).length;
+  const newVideos = videos.filter(v => {
+    if (v.privacyStatus !== 'private' || v.isManaged || v.scheduledPublishAt) return false;
+    const ch = dbStore.channels.get(v.channelId) || dbStore.getChannelByYoutubeId(v.channelId);
+    if (!ch || (ch.status !== 'CONNECTED' && ch.status !== 'Connected' && ch.status !== 'Ready')) return false;
+    const blockId = ch.contentProfileId || (ch as any).blockId;
+    if (!blockId) return false;
+    const cutoff = ch.lastScheduledPublishAt || ch.latestManagedUploadAt;
+    if (cutoff) {
+      const vTime = new Date(v.originalUploadAt || (v as any).uploadedAt || v.createdAt).getTime();
+      const cTime = new Date(cutoff).getTime();
+      if (!isNaN(cTime) && !isNaN(vTime) && vTime <= cTime) return false;
+    }
+    return true;
+  }).length;
   const hdReady = videos.filter(v => !v.isManaged && v.processingStatus === 'processed').length;
   const processing = videos.filter(v => v.processingStatus === 'processing').length;
   const scheduled = videos.filter(v => v.scheduledPublishAt && v.managementStatus === 'SCHEDULED').length;
@@ -1207,10 +1220,10 @@ app.delete('/api/content-profiles/:id', (req: Request, res: Response) => {
 // 5. MASTER TITLES
 // ==========================================
 app.get('/api/master-titles', (req: Request, res: Response) => {
-  const profileId = req.query.profileId as string;
+  const profileId = (req.query.profileId || req.query.blockId) as string;
   let titles = Array.from(dbStore.masterTitles.values());
-  if (profileId) {
-    titles = titles.filter(t => t.profileId === profileId);
+  if (profileId && profileId !== 'ALL') {
+    titles = titles.filter(t => t.profileId === profileId || t.blockId === profileId);
   }
   titles.sort((a, b) => a.orderIndex - b.orderIndex);
   res.json(titles);
@@ -1263,10 +1276,10 @@ app.delete('/api/master-titles/:id', (req: Request, res: Response) => {
 // 6. MASTER THUMBNAILS
 // ==========================================
 app.get('/api/master-thumbnails', (req: Request, res: Response) => {
-  const profileId = req.query.profileId as string;
+  const profileId = (req.query.profileId || req.query.blockId) as string;
   let thumbs = Array.from(dbStore.masterThumbnails.values());
-  if (profileId) {
-    thumbs = thumbs.filter(t => t.profileId === profileId);
+  if (profileId && profileId !== 'ALL') {
+    thumbs = thumbs.filter(t => t.profileId === profileId || t.blockId === profileId);
   }
   thumbs.sort((a, b) => a.orderIndex - b.orderIndex);
   res.json(thumbs);

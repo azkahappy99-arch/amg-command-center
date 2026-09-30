@@ -98,6 +98,7 @@ class DatabaseStore {
           this.settings = { ...this.settings, ...data.settings };
         }
         console.log(`[DatabaseStore] Loaded persistent database: ${this.channels.size} channels, ${this.videos.size} videos from ${this.dbFilePath}`);
+        this.sanitizeBlockIntegrity();
         return;
       } catch (err) {
         console.error('[DatabaseStore] Failed to parse existing database file, seeding default:', err);
@@ -107,6 +108,203 @@ class DatabaseStore {
     // Seed initial fixtures if file does not exist
     this.seedInitialData();
     this.saveToDisk();
+  }
+
+  public sanitizeBlockIntegrity(): void {
+    let changed = false;
+
+    // 1. Ensure Profile AYAM WARNA-WARNI exists and is strictly isolated
+    const ayamProfile = this.profiles.get('profile-ayam-warna');
+    if (ayamProfile) {
+      if (ayamProfile.name !== 'AYAM WARNA-WARNI' || ayamProfile.nicheCategory !== 'Ayam Warna Warni') {
+        ayamProfile.name = 'AYAM WARNA-WARNI';
+        ayamProfile.nicheCategory = 'Ayam Warna Warni';
+        ayamProfile.blockId = 'profile-ayam-warna';
+        changed = true;
+      }
+      const hasRainTitle = ayamProfile.masterTitleIds.some(id => id.startsWith('title-'));
+      if (hasRainTitle || ayamProfile.masterTitleIds.length === 0) {
+        ayamProfile.masterTitleIds = ['ayam-t-1', 'ayam-t-2', 'ayam-t-3'];
+        ayamProfile.masterThumbnailIds = ['ayam-th-1', 'ayam-th-2', 'ayam-th-3'];
+        changed = true;
+      }
+    }
+
+    // 2. Ensure Profile SUARA ALAM & ASMR HUJAN exists as a separate block
+    if (!this.profiles.has('profile-relaksasi')) {
+      this.profiles.set('profile-relaksasi', {
+        id: 'profile-relaksasi',
+        blockId: 'profile-relaksasi',
+        name: 'SUARA ALAM & ASMR HUJAN',
+        description: 'Blok rotasi khusus konten relaksasi, suara hujan malam, dan musik alam.',
+        nicheCategory: 'Music',
+        nicheBadge: 'cyan',
+        publishFrequency: '1/day',
+        publishTime: '16:00',
+        timezone: 'Asia/Jakarta',
+        scheduleConfig: {
+          mode: 'DAILY',
+          videosPerDay: 1,
+          times: ['16:00'],
+          timezone: 'Asia/Jakarta',
+          startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+        },
+        masterTitleIds: ['title-1', 'title-2', 'title-3'],
+        masterThumbnailIds: ['thumb-1', 'thumb-2', 'thumb-3', 'thumb-4'],
+        assignedChannelCount: 0,
+        createdAt: '2026-09-15T08:00:00.000Z',
+        updatedAt: '2026-09-20T08:00:00.000Z',
+      });
+      changed = true;
+    }
+
+    // 3. Ensure all Master Titles have explicit blockId and correct profileId
+    const ayamTitles = [
+      { id: 'ayam-t-1', text: 'Ayam Warna-Warni Lucu Bermain di Taman Hijau', orderIndex: 0 },
+      { id: 'ayam-t-2', text: 'Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria', orderIndex: 1 },
+      { id: 'ayam-t-3', text: 'Ayam Warna-Warni Lucu Bikin Tertawa Seharian', orderIndex: 2 },
+    ];
+    for (const at of ayamTitles) {
+      if (!this.masterTitles.has(at.id)) {
+        this.masterTitles.set(at.id, {
+          id: at.id,
+          blockId: 'profile-ayam-warna',
+          profileId: 'profile-ayam-warna',
+          text: at.text,
+          orderIndex: at.orderIndex,
+          isActive: true,
+          createdAt: '2026-09-15T08:00:00.000Z',
+        });
+        changed = true;
+      } else {
+        const t = this.masterTitles.get(at.id)!;
+        if (t.profileId !== 'profile-ayam-warna' || t.blockId !== 'profile-ayam-warna') {
+          t.profileId = 'profile-ayam-warna';
+          t.blockId = 'profile-ayam-warna';
+          changed = true;
+        }
+      }
+    }
+
+    const rainTitles = [
+      { id: 'title-1', text: 'Tidur Nyenyak dengan Suara Hujan Deras di Hutan', orderIndex: 0 },
+      { id: 'title-2', text: 'Suara Hujan & Gemericik Air untuk Relaksasi Relaks', orderIndex: 1 },
+      { id: 'title-3', text: 'Hujan Malam di Kamar Cozy Pengantar Tidur Nyenyak', orderIndex: 2 },
+    ];
+    for (const rt of rainTitles) {
+      if (!this.masterTitles.has(rt.id)) {
+        this.masterTitles.set(rt.id, {
+          id: rt.id,
+          blockId: 'profile-relaksasi',
+          profileId: 'profile-relaksasi',
+          text: rt.text,
+          orderIndex: rt.orderIndex,
+          isActive: true,
+          createdAt: '2026-09-15T08:00:00.000Z',
+        });
+        changed = true;
+      } else {
+        const t = this.masterTitles.get(rt.id)!;
+        if (t.profileId !== 'profile-relaksasi' || t.blockId !== 'profile-relaksasi') {
+          t.profileId = 'profile-relaksasi';
+          t.blockId = 'profile-relaksasi';
+          changed = true;
+        }
+      }
+    }
+
+    // 4. Ensure all Master Thumbnails have explicit blockId and correct profileId
+    const ayamThumbs = [
+      { id: 'ayam-th-1', name: 'Ayam Warna Ceria TH1', url: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800&auto=format&fit=crop&q=80', orderIndex: 0 },
+      { id: 'ayam-th-2', name: 'Ayam Warna Bermain TH2', url: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800&auto=format&fit=crop&q=80', orderIndex: 1 },
+      { id: 'ayam-th-3', name: 'Ayam Warna Gemoy TH3', url: 'https://images.unsplash.com/photo-1563281577-a7be47e20db9?w=800&auto=format&fit=crop&q=80', orderIndex: 2 },
+    ];
+    for (const ath of ayamThumbs) {
+      if (!this.masterThumbnails.has(ath.id)) {
+        this.masterThumbnails.set(ath.id, {
+          id: ath.id,
+          blockId: 'profile-ayam-warna',
+          profileId: 'profile-ayam-warna',
+          name: ath.name,
+          url: ath.url,
+          orderIndex: ath.orderIndex,
+          isActive: true,
+          createdAt: '2026-09-15T08:00:00.000Z',
+        });
+        changed = true;
+      } else {
+        const th = this.masterThumbnails.get(ath.id)!;
+        if (th.profileId !== 'profile-ayam-warna' || th.blockId !== 'profile-ayam-warna') {
+          th.profileId = 'profile-ayam-warna';
+          th.blockId = 'profile-ayam-warna';
+          changed = true;
+        }
+      }
+    }
+
+    const rainThumbs = [
+      { id: 'thumb-1', name: 'Rain Window Aesthetic TH1', url: 'https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800&auto=format&fit=crop&q=80', orderIndex: 0 },
+      { id: 'thumb-2', name: 'Cozy Bedroom Rain TH2', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80', orderIndex: 1 },
+      { id: 'thumb-3', name: 'Night Forest Rain TH3', url: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=800&auto=format&fit=crop&q=80', orderIndex: 2 },
+      { id: 'thumb-4', name: 'Soft Lantern Cabin TH4', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80', orderIndex: 3 },
+    ];
+    for (const rth of rainThumbs) {
+      if (!this.masterThumbnails.has(rth.id)) {
+        this.masterThumbnails.set(rth.id, {
+          id: rth.id,
+          blockId: 'profile-relaksasi',
+          profileId: 'profile-relaksasi',
+          name: rth.name,
+          url: rth.url,
+          orderIndex: rth.orderIndex,
+          isActive: true,
+          createdAt: '2026-09-15T08:00:00.000Z',
+        });
+        changed = true;
+      } else {
+        const th = this.masterThumbnails.get(rth.id)!;
+        if (th.profileId !== 'profile-relaksasi' || th.blockId !== 'profile-relaksasi') {
+          th.profileId = 'profile-relaksasi';
+          th.blockId = 'profile-relaksasi';
+          changed = true;
+        }
+      }
+    }
+
+    // 5. Ensure all channels have blockId set
+    for (const ch of this.channels.values()) {
+      if (!ch.blockId && ch.contentProfileId) {
+        ch.blockId = ch.contentProfileId;
+        changed = true;
+      }
+    }
+
+    // 6. Ensure all videos have blockId set and purge cross-niche leakage
+    for (const v of this.videos.values()) {
+      const ch = this.channels.get(v.channelId);
+      const targetBlockId = ch?.blockId || ch?.contentProfileId || v.contentProfileId || v.blockId;
+      if (targetBlockId && v.blockId !== targetBlockId) {
+        v.blockId = targetBlockId;
+        changed = true;
+      }
+      if (targetBlockId === 'profile-ayam-warna') {
+        if (v.titleAssigned?.includes('Hujan') || v.titleAssigned?.includes('Tidur Nyenyak')) {
+          v.titleAssigned = 'Ayam Warna-Warni Lucu Bermain di Taman Hijau';
+          v.masterTitleId = 'ayam-t-1';
+          changed = true;
+        }
+        if (v.thumbnailAssigned?.includes('photo-1519692933481') || v.thumbnailAssigned?.includes('photo-1534447677768')) {
+          v.thumbnailAssigned = 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800';
+          v.masterThumbnailId = 'ayam-th-1';
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      console.log('[DatabaseStore] Cleaned and sanitized block isolation integrity across database.');
+      this.saveToDisk();
+    }
   }
 
   public saveToDisk(): void {
@@ -185,11 +383,12 @@ class DatabaseStore {
   private seedInitialData() {
     const profileId = 'profile-ayam-warna';
 
-    // 1. Content Profile: AYAM WARNA (Niche: Ayam Warna Warni)
+    // 1a. Content Profile: AYAM WARNA-WARNI (Niche: Ayam Warna Warni)
     this.profiles.set(profileId, {
       id: profileId,
-      name: 'AYAM WARNA',
-      description: 'Master profile for colorful chicks, relaxing ambient audio and rain series videos.',
+      blockId: profileId,
+      name: 'AYAM WARNA-WARNI',
+      description: 'Master profile for colorful chicks, playful animation, and creative kids series.',
       nicheCategory: 'Ayam Warna Warni',
       nicheBadge: 'amber',
       publishFrequency: '3/day',
@@ -202,9 +401,35 @@ class DatabaseStore {
         timezone: 'Asia/Jakarta',
         startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
       },
+      masterTitleIds: ['ayam-t-1', 'ayam-t-2', 'ayam-t-3'],
+      masterThumbnailIds: ['ayam-th-1', 'ayam-th-2', 'ayam-th-3'],
+      assignedChannelCount: 1,
+      createdAt: '2026-09-15T08:00:00.000Z',
+      updatedAt: '2026-09-20T08:00:00.000Z',
+    });
+
+    // 1b. Content Profile: SUARA ALAM & ASMR HUJAN (Niche: Music / Nature)
+    const relaksasiProfileId = 'profile-relaksasi';
+    this.profiles.set(relaksasiProfileId, {
+      id: relaksasiProfileId,
+      blockId: relaksasiProfileId,
+      name: 'SUARA ALAM & ASMR HUJAN',
+      description: 'Master profile for relaxing ambient audio and rain series videos.',
+      nicheCategory: 'Music',
+      nicheBadge: 'cyan',
+      publishFrequency: '1/day',
+      publishTime: '16:00',
+      timezone: 'Asia/Jakarta',
+      scheduleConfig: {
+        mode: 'DAILY',
+        videosPerDay: 1,
+        times: ['16:00'],
+        timezone: 'Asia/Jakarta',
+        startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+      },
       masterTitleIds: ['title-1', 'title-2', 'title-3'],
       masterThumbnailIds: ['thumb-1', 'thumb-2', 'thumb-3', 'thumb-4'],
-      assignedChannelCount: 1,
+      assignedChannelCount: 0,
       createdAt: '2026-09-15T08:00:00.000Z',
       updatedAt: '2026-09-20T08:00:00.000Z',
     });
@@ -327,36 +552,101 @@ class DatabaseStore {
       createdAt: '2026-09-17T08:00:00.000Z',
     });
 
-    // 2. Dynamic Master Titles
+    // 2a. Dynamic Master Titles: AYAM WARNA-WARNI
+    this.masterTitles.set('ayam-t-1', {
+      id: 'ayam-t-1',
+      blockId: profileId,
+      profileId,
+      text: 'Ayam Warna-Warni Lucu Bermain di Taman Hijau',
+      orderIndex: 0,
+      isActive: true,
+      createdAt: '2026-09-15T08:00:00.000Z',
+    });
+    this.masterTitles.set('ayam-t-2', {
+      id: 'ayam-t-2',
+      blockId: profileId,
+      profileId,
+      text: 'Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria',
+      orderIndex: 1,
+      isActive: true,
+      createdAt: '2026-09-15T08:00:00.000Z',
+    });
+    this.masterTitles.set('ayam-t-3', {
+      id: 'ayam-t-3',
+      blockId: profileId,
+      profileId,
+      text: 'Ayam Warna-Warni Lucu Bikin Tertawa Seharian',
+      orderIndex: 2,
+      isActive: true,
+      createdAt: '2026-09-15T08:00:00.000Z',
+    });
+
+    // 2b. Dynamic Master Titles: SUARA ALAM & ASMR HUJAN
     this.masterTitles.set('title-1', {
       id: 'title-1',
-      profileId,
-      text: 'Tidur Nyenyak dengan Suara Hujan',
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
+      text: 'Tidur Nyenyak dengan Suara Hujan Deras di Hutan',
       orderIndex: 0,
       isActive: true,
       createdAt: '2026-09-15T08:00:00.000Z',
     });
     this.masterTitles.set('title-2', {
       id: 'title-2',
-      profileId,
-      text: 'Suara Hujan untuk Relaksasi',
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
+      text: 'Suara Hujan & Gemericik Air untuk Relaksasi Relaks',
       orderIndex: 1,
       isActive: true,
       createdAt: '2026-09-15T08:00:00.000Z',
     });
     this.masterTitles.set('title-3', {
       id: 'title-3',
-      profileId,
-      text: 'Hujan Malam untuk Teman Tidur',
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
+      text: 'Hujan Malam di Kamar Cozy Pengantar Tidur Nyenyak',
       orderIndex: 2,
       isActive: true,
       createdAt: '2026-09-15T08:00:00.000Z',
     });
 
-    // 3. Dynamic Master Thumbnails
+    // 3a. Dynamic Master Thumbnails: AYAM WARNA-WARNI
+    this.masterThumbnails.set('ayam-th-1', {
+      id: 'ayam-th-1',
+      blockId: profileId,
+      profileId,
+      name: 'Ayam Warna Ceria TH1',
+      url: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800&auto=format&fit=crop&q=80',
+      orderIndex: 0,
+      isActive: true,
+      createdAt: '2026-09-15T08:00:00.000Z',
+    });
+    this.masterThumbnails.set('ayam-th-2', {
+      id: 'ayam-th-2',
+      blockId: profileId,
+      profileId,
+      name: 'Ayam Warna Bermain TH2',
+      url: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800&auto=format&fit=crop&q=80',
+      orderIndex: 1,
+      isActive: true,
+      createdAt: '2026-09-15T08:00:00.000Z',
+    });
+    this.masterThumbnails.set('ayam-th-3', {
+      id: 'ayam-th-3',
+      blockId: profileId,
+      profileId,
+      name: 'Ayam Warna Gemoy TH3',
+      url: 'https://images.unsplash.com/photo-1563281577-a7be47e20db9?w=800&auto=format&fit=crop&q=80',
+      orderIndex: 2,
+      isActive: true,
+      createdAt: '2026-09-15T08:00:00.000Z',
+    });
+
+    // 3b. Dynamic Master Thumbnails: SUARA ALAM & ASMR HUJAN
     this.masterThumbnails.set('thumb-1', {
       id: 'thumb-1',
-      profileId,
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
       name: 'Rain Window Aesthetic TH1',
       url: 'https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800&auto=format&fit=crop&q=80',
       orderIndex: 0,
@@ -365,7 +655,8 @@ class DatabaseStore {
     });
     this.masterThumbnails.set('thumb-2', {
       id: 'thumb-2',
-      profileId,
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
       name: 'Cozy Bedroom Rain TH2',
       url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
       orderIndex: 1,
@@ -374,7 +665,8 @@ class DatabaseStore {
     });
     this.masterThumbnails.set('thumb-3', {
       id: 'thumb-3',
-      profileId,
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
       name: 'Night Forest Rain TH3',
       url: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=800&auto=format&fit=crop&q=80',
       orderIndex: 2,
@@ -383,7 +675,8 @@ class DatabaseStore {
     });
     this.masterThumbnails.set('thumb-4', {
       id: 'thumb-4',
-      profileId,
+      blockId: relaksasiProfileId,
+      profileId: relaksasiProfileId,
       name: 'Soft Lantern Cabin TH4',
       url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80',
       orderIndex: 3,
@@ -856,9 +1149,9 @@ class DatabaseStore {
       channelId: channel1Id,
       channelTitle: '[DEMO FIXTURE] Ayam Warna',
       titleBefore: 'Copy of A',
-      titleAssigned: 'Tidur Nyenyak dengan Suara Hujan',
+      titleAssigned: 'Ayam Warna-Warni Lucu Bermain di Taman Hijau',
       thumbnailBefore: '',
-      thumbnailAssigned: 'https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800',
+      thumbnailAssigned: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800',
       originalUploadAt: '2026-09-18T10:00:00.000Z',
       processingStatus: 'processed',
       privacyStatus: 'private',
@@ -871,7 +1164,10 @@ class DatabaseStore {
       isEnrolled: true,
       isManaged: true, // ALREADY MANAGED
       isSeeded: true,
+      blockId: profileId,
       contentProfileId: profileId,
+      masterTitleId: 'ayam-t-1',
+      masterThumbnailId: 'ayam-th-1',
       automationBatchId: 'AMG-BATCH-0001',
       retryCount: 0,
       definition: 'hd',
@@ -886,9 +1182,9 @@ class DatabaseStore {
       channelId: channel1Id,
       channelTitle: '[DEMO FIXTURE] Ayam Warna',
       titleBefore: 'Copy of A',
-      titleAssigned: 'Suara Hujan untuk Relaksasi',
+      titleAssigned: 'Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria',
       thumbnailBefore: '',
-      thumbnailAssigned: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800',
+      thumbnailAssigned: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800',
       originalUploadAt: '2026-09-19T10:00:00.000Z',
       processingStatus: 'processed',
       privacyStatus: 'private',
@@ -901,7 +1197,10 @@ class DatabaseStore {
       isEnrolled: true,
       isManaged: true, // ALREADY MANAGED
       isSeeded: true,
+      blockId: profileId,
       contentProfileId: profileId,
+      masterTitleId: 'ayam-t-2',
+      masterThumbnailId: 'ayam-th-2',
       automationBatchId: 'AMG-BATCH-0001',
       retryCount: 0,
       definition: 'hd',
