@@ -27,6 +27,7 @@ import {
   validateBeforeMutation,
 } from './server/eligibilityService.js';
 import { phase3Engine } from './server/phase3Engine.js';
+import { authService } from './server/authService.js';
 
 dotenv.config();
 
@@ -38,6 +39,288 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Helper to extract authenticated user & session from Authorization header
+function extractAuthSession(req: Request) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+  const token = authHeader.substring(7).trim();
+  return authService.validateSession(token);
+}
+
+// ==========================================
+// 0. AUTHENTICATION & ACCESS CONTROL (PRIMARY OWNER & USER)
+// ==========================================
+app.get('/api/auth/status', (req: Request, res: Response) => {
+  const isProvisioned = authService.isOwnerProvisioned();
+  const sessionData = extractAuthSession(req);
+  const primaryOwner = authService.getPrimaryOwner();
+
+  res.json({
+    isOwnerProvisioned: isProvisioned,
+    bootstrapRequired: !isProvisioned,
+    currentUser: sessionData ? authService.sanitizeUser(sessionData.user) : null,
+    currentSession: sessionData ? {
+      id: sessionData.session.id,
+      deviceInfo: sessionData.session.deviceInfo,
+      createdAt: sessionData.session.createdAt,
+      lastActiveAt: sessionData.session.lastActiveAt,
+    } : null,
+    primaryOwnerEmail: primaryOwner ? primaryOwner.email : null,
+  });
+});
+
+app.get('/api/auth/bootstrap/token', (req: Request, res: Response) => {
+  if (authService.isOwnerProvisioned()) {
+    return res.status(403).json({ error: 'Initial Owner Setup is permanently locked. A PRIMARY OWNER already exists.' });
+  }
+  const token = authService.getOrGenerateBootstrapToken();
+  res.json({ bootstrapToken: token });
+});
+
+app.post('/api/auth/owner/setup', (req: Request, res: Response) => {
+  const { masterGmail, password, confirmPassword, masterKey, confirmMasterKey, bootstrapToken } = req.body;
+  const ipAddress = req.ip || req.socket.remoteAddress || 'local';
+  const deviceInfo = req.headers['user-agent'] || 'Owner Device';
+
+  const result = authService.provisionPrimaryOwner({
+    masterGmail,
+    password,
+    confirmPassword,
+    masterKey,
+    confirmMasterKey,
+    bootstrapToken,
+    deviceInfo,
+    ipAddress,
+  });
+
+  if (!result.success) {
+    return res.status(400).json({ error: result.error });
+  }
+
+  res.json({
+    success: true,
+    token: result.token,
+    user: result.user,
+    workspaceId: result.workspaceId,
+    message: 'Primary Owner provisioned successfully. Initial setup permanently locked.',
+  });
+});
+
+app.post('/api/auth/owner/login', (req: Request, res: Response) => {
+  const { masterGmail, password, masterKey } = req.body;
+  const ipAddress = req.ip || req.socket.remoteAddress || 'local';
+  const deviceInfo = req.headers['user-agent'] || 'Authorized Device';
+
+  const result = authService.loginOwner({
+    masterGmail,
+    password,
+    masterKey,
+    deviceInfo,
+    ipAddress,
+  });
+
+  if (!result.success) {
+    return res.status(401).json({
+      error: result.error,
+      retryAfterSeconds: result.retryAfterSeconds,
+    });
+  }
+
+  res.json({
+    success: true,
+    token: result.token,
+    user: result.user,
+    workspaceId: result.workspaceId,
+  });
+});
+
+app.post('/api/auth/owner/recover', (req: Request, res: Response) => {
+  const { masterGmail, masterKey, newPassword, confirmNewPassword } = req.body;
+  const ipAddress = req.ip || req.socket.remoteAddress || 'local';
+  const deviceInfo = req.headers['user-agent'] || 'Recovery Device';
+
+  const result = authService.recoverOwnerPassword({
+    masterGmail,
+    masterKey,
+    newPassword,
+    confirmNewPassword,
+    deviceInfo,
+    ipAddress,
+  });
+
+  if (!result.success) {
+    return res.status(400).json({ error: result.error });
+  }
+
+  res.json({
+    success: true,
+    token: result.token,
+    user: result.user,
+    workspaceId: result.workspaceId,
+    message: 'Password berhasil direset menggunakan Master Key.',
+  });
+});
+
+app.post('/api/auth/user/request-access', (req: Request, res: Response) => {
+  const { email } = req.body;
+  const ipAddress = req.ip || req.socket.remoteAddress || 'local';
+
+  const result = authService.requestUserAccess(email, ipAddress);
+  if (!result.success) {
+    return res.status(400).json({ error: result.error });
+  }
+
+  res.json({
+    success: true,
+    message: result.message,
+  });
+});
+
+app.post('/api/auth/user/verify-register', (req: Request, res: Response) => {
+  const { email, accessCode, password, confirmPassword } = req.body;
+  const ipAddress = req.ip || req.socket.remoteAddress || 'local';
+  const deviceInfo = req.headers['user-agent'] || 'User Device';
+
+  const result = authService.verifyAccessAndRegister({
+    email,
+    accessCode,
+    password,
+    confirmPassword,
+    deviceInfo,
+    ipAddress,
+  });
+
+  if (!result.success) {
+    return res.status(400).json({ error: result.error });
+  }
+
+  res.json({
+    success: true,
+    token: result.token,
+    user: result.user,
+    workspaceId: result.workspaceId,
+  });
+});
+
+app.post('/api/auth/user/login', (req: Request, res: Response) => {
+  const { email, password } = req.body;
+  const ipAddress = req.ip || req.socket.remoteAddress || 'local';
+  const deviceInfo = req.headers['user-agent'] || 'User Device';
+
+  const result = authService.loginUser({
+    email,
+    password,
+    deviceInfo,
+    ipAddress,
+  });
+
+  if (!result.success) {
+    return res.status(401).json({ error: result.error });
+  }
+
+  res.json({
+    success: true,
+    token: result.token,
+    user: result.user,
+    workspaceId: result.workspaceId,
+  });
+});
+
+app.get('/api/auth/sessions', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData) {
+    return res.status(401).json({ error: 'Unauthorized session.' });
+  }
+  const sessions = authService.listSessions(sessionData.user.id, sessionData.session.id);
+  res.json(sessions);
+});
+
+app.post('/api/auth/sessions/revoke', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData) {
+    return res.status(401).json({ error: 'Unauthorized session.' });
+  }
+  const { sessionId } = req.body;
+  const success = authService.revokeSession(sessionData.user.id, sessionId);
+  res.json({ success });
+});
+
+app.post('/api/auth/logout', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (sessionData) {
+    authService.revokeSession(sessionData.user.id, sessionData.session.id);
+  }
+  res.json({ success: true, message: 'Logged out successfully.' });
+});
+
+app.post('/api/auth/owner/verify-master-key', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Only Primary Owner can verify Master Key.' });
+  }
+  const { masterKey } = req.body;
+  const isValid = authService.verifyMasterKey(sessionData.user.id, masterKey);
+  if (!isValid) {
+    return res.status(401).json({ error: 'Invalid Master Key.' });
+  }
+  res.json({ success: true, verified: true });
+});
+
+app.get('/api/auth/owner/pending-requests', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Hanya Primary Owner yang berhak meninjau permintaan akses user.' });
+  }
+  const pending = authService.getPendingAccessRequestsForOwner();
+  res.json(pending);
+});
+
+app.post('/api/auth/owner/revoke-request', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Hanya Primary Owner yang berhak mengelola permintaan akses.' });
+  }
+  const { requestId } = req.body;
+  if (requestId && dbStore.accessRequests.has(requestId)) {
+    dbStore.accessRequests.delete(requestId);
+    dbStore.saveToDisk();
+    return res.json({ success: true, message: 'Permintaan akses berhasil dibatalkan.' });
+  }
+  res.status(404).json({ error: 'Permintaan akses tidak ditemukan.' });
+});
+
+/**
+ * Helper to determine request caller identity, role and isolated workspace.
+ */
+function getRequestContext(req: Request): {
+  isAuthenticated: boolean;
+  user: any;
+  role: 'PRIMARY_OWNER' | 'USER';
+  workspaceId: string;
+  isOwner: boolean;
+} {
+  const sessionData = extractAuthSession(req);
+  if (sessionData) {
+    return {
+      isAuthenticated: true,
+      user: sessionData.user,
+      role: sessionData.user.role,
+      workspaceId: sessionData.user.workspaceId,
+      isOwner: sessionData.user.role === 'PRIMARY_OWNER',
+    };
+  }
+  const owner = authService.getPrimaryOwner();
+  return {
+    isAuthenticated: false,
+    user: owner || null,
+    role: 'PRIMARY_OWNER' as const,
+    workspaceId: 'ws-owner-primary',
+    isOwner: true,
+  };
+}
 
 // ==========================================
 // 1. HEALTH & METRICS
@@ -52,10 +335,25 @@ app.get('/api/health', (req: Request, res: Response) => {
 });
 
 app.get('/api/stats', (req: Request, res: Response) => {
-  const channels = Array.from(dbStore.channels.values());
-  const videos = Array.from(dbStore.videos.values());
-  const batches = Array.from(dbStore.automationBatches.values());
-  const errorLogs = Array.from(dbStore.errorLogs.values());
+  const ctx = getRequestContext(req);
+  let channels = Array.from(dbStore.channels.values());
+  let videos = Array.from(dbStore.videos.values());
+  let batches = Array.from(dbStore.automationBatches.values());
+  let errorLogs = Array.from(dbStore.errorLogs.values());
+
+  if (ctx.role === 'USER') {
+    // Isolated User Workspace: Only data explicitly belonging to this user
+    channels = channels.filter(c => c.workspaceId === ctx.workspaceId || c.ownerId === ctx.user?.id);
+    const userChannelIds = new Set(channels.map(c => c.id).concat(channels.map(c => c.youtubeChannelId || '')));
+    videos = videos.filter(v => (v as any).workspaceId === ctx.workspaceId || userChannelIds.has(v.channelId));
+    batches = batches.filter(b => (b as any).workspaceId === ctx.workspaceId || userChannelIds.has(b.channelId));
+    errorLogs = errorLogs.filter(e => (e as any).workspaceId === ctx.workspaceId || userChannelIds.has(e.channelId || ''));
+  } else {
+    // Primary Owner: sees Owner Workspace data
+    channels = channels.filter(c => !c.workspaceId || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary');
+    const ownerChannelIds = new Set(channels.map(c => c.id).concat(channels.map(c => c.youtubeChannelId || '')));
+    videos = videos.filter(v => !(v as any).workspaceId || (v as any).workspaceId === 'ws-owner-primary' || ownerChannelIds.has(v.channelId));
+  }
 
   const totalChannels = channels.length;
   const connectedChannels = channels.filter(c => 
@@ -196,8 +494,16 @@ app.get('/api/stats', (req: Request, res: Response) => {
 // 2. CHANNELS
 // ==========================================
 app.get('/api/channels', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
+  let rawChannels = Array.from(dbStore.channels.values());
+  if (ctx.role === 'USER') {
+    rawChannels = rawChannels.filter(c => c.workspaceId === ctx.workspaceId || c.ownerId === ctx.user?.id);
+  } else {
+    rawChannels = rawChannels.filter(c => !c.workspaceId || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary');
+  }
+
   const allVideos = Array.from(dbStore.videos.values());
-  const channels = Array.from(dbStore.channels.values()).map(c => {
+  const channels = rawChannels.map(c => {
     const authStatus = youtubeAuthService.getConnectionStatus(c.id);
     let effectiveStatus: string = c.status;
     if (c.status === 'CONNECTED' || c.status === 'Connected' || authStatus.isConnected) {
@@ -239,9 +545,17 @@ app.get('/api/channels', (req: Request, res: Response) => {
 });
 
 app.get('/api/channels/:id', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const channel = dbStore.channels.get(req.params.id);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
+  }
+
+  // Workspace access verification
+  if (ctx.role === 'USER') {
+    if (channel.workspaceId !== ctx.workspaceId && channel.ownerId !== ctx.user?.id) {
+      return res.status(403).json({ error: 'Access forbidden: Channel does not belong to your user workspace.' });
+    }
   }
 
   const allVideos = Array.from(dbStore.videos.values());
@@ -292,12 +606,13 @@ app.get('/api/channels/:id', (req: Request, res: Response) => {
 });
 
 app.post('/api/channels', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const { title, youtubeChannelId, contentProfileId, publishFrequency, publishTime, timezone, scheduleConfig, useProfileSchedule, nicheCategory, nicheBadge } = req.body;
   if (!title || !youtubeChannelId) {
     return res.status(400).json({ error: 'Title and YouTube Channel ID are required.' });
   }
 
-  // Duplicate Channel Prevention (Requirement 8)
+  // Duplicate Channel Prevention
   const normYtId = youtubeChannelId.trim();
   const existing = dbStore.getChannelByYoutubeId(normYtId);
   if (existing) {
@@ -358,21 +673,23 @@ app.post('/api/channels', (req: Request, res: Response) => {
     hasOAuthConfigured: false,
     isSeeded: false, // User added channel is NEVER seeded fixture
     platform: 'YouTube',
-    ownerId: 'azkahappy99@gmail.com',
+    ownerId: ctx.user?.id || (ctx.isOwner ? 'usr-owner-primary' : 'usr-unknown'),
+    workspaceId: ctx.workspaceId,
     connectedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
   dbStore.upsertChannel(newChannel as any);
+  dbStore.saveToDisk();
 
   dbStore.logActivity({
-    user: 'Administrator',
+    user: ctx.user?.email || (ctx.isOwner ? 'Primary Owner' : 'User'),
     channelId: id,
     channelTitle: title,
     operation: 'Channel Added',
     previousValue: 'None',
-    newValue: `Created channel record for ${title} (${youtubeChannelId})`,
+    newValue: `Created channel record for ${title} (${youtubeChannelId}) in workspace ${ctx.workspaceId}`,
     result: 'SUCCESS',
   });
 
@@ -592,7 +909,7 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
       });
     }
 
-    const uploadsResult = await youtubeDataService.getChannelUploads(channel.id, uploadsPlaylistId, 50);
+    const uploadsResult = await youtubeDataService.getChannelUploads(channel.id, uploadsPlaylistId, 500);
     if (!uploadsResult.success || !uploadsResult.data) {
       return res.status(502).json({
         success: false,
@@ -1163,10 +1480,18 @@ app.post('/api/admin/clear-demo-data', (req: Request, res: Response) => {
 // 4. CONTENT PROFILES
 // ==========================================
 app.get('/api/content-profiles', (req: Request, res: Response) => {
-  res.json(Array.from(dbStore.profiles.values()));
+  const ctx = getRequestContext(req);
+  let profiles = Array.from(dbStore.profiles.values());
+  if (ctx.role === 'USER') {
+    profiles = profiles.filter(p => (p as any).workspaceId === ctx.workspaceId);
+  } else {
+    profiles = profiles.filter(p => !(p as any).workspaceId || (p as any).workspaceId === 'ws-owner-primary');
+  }
+  res.json(profiles);
 });
 
 app.post('/api/content-profiles', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const { name, description, publishFrequency, publishTime, timezone, scheduleConfig, masterTitleIds, masterThumbnailIds, nicheCategory, nicheBadge } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
 
@@ -1182,6 +1507,7 @@ app.post('/api/content-profiles', (req: Request, res: Response) => {
   const id = `profile-${Date.now()}`;
   const profile = {
     id,
+    workspaceId: ctx.workspaceId,
     name,
     description: description || '',
     nicheCategory: nicheCategory || 'General',
@@ -1197,7 +1523,8 @@ app.post('/api/content-profiles', (req: Request, res: Response) => {
     updatedAt: new Date().toISOString(),
   };
 
-  dbStore.profiles.set(id, profile);
+  dbStore.profiles.set(id, profile as any);
+  dbStore.saveToDisk();
   res.status(201).json(profile);
 });
 
@@ -1243,8 +1570,16 @@ app.delete('/api/content-profiles/:id', (req: Request, res: Response) => {
 // 5. MASTER TITLES
 // ==========================================
 app.get('/api/master-titles', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const profileId = (req.query.profileId || req.query.blockId) as string;
   let titles = Array.from(dbStore.masterTitles.values());
+
+  if (ctx.role === 'USER') {
+    titles = titles.filter(t => (t as any).workspaceId === ctx.workspaceId);
+  } else {
+    titles = titles.filter(t => !(t as any).workspaceId || (t as any).workspaceId === 'ws-owner-primary');
+  }
+
   if (profileId && profileId !== 'ALL') {
     titles = titles.filter(t => t.profileId === profileId || t.blockId === profileId);
   }
@@ -1253,6 +1588,7 @@ app.get('/api/master-titles', (req: Request, res: Response) => {
 });
 
 app.post('/api/master-titles', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const { profileId, text, orderIndex } = req.body;
   if (!text) return res.status(400).json({ error: 'Title text is required' });
 
@@ -1260,6 +1596,7 @@ app.post('/api/master-titles', (req: Request, res: Response) => {
   const id = `title-${Date.now()}`;
   const title = {
     id,
+    workspaceId: ctx.workspaceId,
     profileId: profileId || 'profile-ayam-warna',
     text,
     orderIndex: orderIndex !== undefined ? orderIndex : existing.length,
@@ -1267,12 +1604,14 @@ app.post('/api/master-titles', (req: Request, res: Response) => {
     createdAt: new Date().toISOString(),
   };
 
-  dbStore.masterTitles.set(id, title);
+  dbStore.masterTitles.set(id, title as any);
+  dbStore.saveToDisk();
 
   // Sync to profile if not present
   const profile = dbStore.profiles.get(title.profileId);
   if (profile && !profile.masterTitleIds.includes(id)) {
     profile.masterTitleIds.push(id);
+    dbStore.saveToDisk();
   }
 
   res.status(201).json(title);
@@ -1284,6 +1623,7 @@ app.put('/api/master-titles/:id', (req: Request, res: Response) => {
 
   const updated = { ...title, ...req.body };
   dbStore.masterTitles.set(title.id, updated);
+  dbStore.saveToDisk();
   res.json(updated);
 });
 
@@ -1292,6 +1632,7 @@ app.delete('/api/master-titles/:id', (req: Request, res: Response) => {
   if (!title) return res.status(404).json({ error: 'Title not found' });
 
   dbStore.masterTitles.delete(title.id);
+  dbStore.saveToDisk();
   res.json({ success: true });
 });
 
@@ -1299,8 +1640,16 @@ app.delete('/api/master-titles/:id', (req: Request, res: Response) => {
 // 6. MASTER THUMBNAILS
 // ==========================================
 app.get('/api/master-thumbnails', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const profileId = (req.query.profileId || req.query.blockId) as string;
   let thumbs = Array.from(dbStore.masterThumbnails.values());
+
+  if (ctx.role === 'USER') {
+    thumbs = thumbs.filter(t => (t as any).workspaceId === ctx.workspaceId);
+  } else {
+    thumbs = thumbs.filter(t => !(t as any).workspaceId || (t as any).workspaceId === 'ws-owner-primary');
+  }
+
   if (profileId && profileId !== 'ALL') {
     thumbs = thumbs.filter(t => t.profileId === profileId || t.blockId === profileId);
   }
@@ -1309,6 +1658,7 @@ app.get('/api/master-thumbnails', (req: Request, res: Response) => {
 });
 
 app.post('/api/master-thumbnails', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const { profileId, name, url, orderIndex } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'Name and URL are required' });
 
@@ -1316,6 +1666,7 @@ app.post('/api/master-thumbnails', (req: Request, res: Response) => {
   const id = `thumb-${Date.now()}`;
   const thumbnail = {
     id,
+    workspaceId: ctx.workspaceId,
     profileId: profileId || 'profile-ayam-warna',
     name,
     url,
@@ -1324,11 +1675,13 @@ app.post('/api/master-thumbnails', (req: Request, res: Response) => {
     createdAt: new Date().toISOString(),
   };
 
-  dbStore.masterThumbnails.set(id, thumbnail);
+  dbStore.masterThumbnails.set(id, thumbnail as any);
+  dbStore.saveToDisk();
 
   const profile = dbStore.profiles.get(thumbnail.profileId);
   if (profile && !profile.masterThumbnailIds.includes(id)) {
     profile.masterThumbnailIds.push(id);
+    dbStore.saveToDisk();
   }
 
   res.status(201).json(thumbnail);
@@ -1339,6 +1692,7 @@ app.delete('/api/master-thumbnails/:id', (req: Request, res: Response) => {
   if (!thumb) return res.status(404).json({ error: 'Thumbnail not found' });
 
   dbStore.masterThumbnails.delete(thumb.id);
+  dbStore.saveToDisk();
   res.json({ success: true });
 });
 
@@ -1365,8 +1719,19 @@ app.get('/api/rotation/matrix', (req: Request, res: Response) => {
 // 8. VIDEOS
 // ==========================================
 app.get('/api/videos', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
   const { channelId, status, isManaged, scope } = req.query;
   let videos = Array.from(dbStore.videos.values());
+
+  if (ctx.role === 'USER') {
+    const userChannels = Array.from(dbStore.channels.values()).filter(c => c.workspaceId === ctx.workspaceId || c.ownerId === ctx.user?.id);
+    const userChannelIds = new Set(userChannels.map(c => c.id).concat(userChannels.map(c => c.youtubeChannelId || '')));
+    videos = videos.filter(v => (v as any).workspaceId === ctx.workspaceId || userChannelIds.has(v.channelId));
+  } else {
+    const ownerChannels = Array.from(dbStore.channels.values()).filter(c => !c.workspaceId || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary');
+    const ownerChannelIds = new Set(ownerChannels.map(c => c.id).concat(ownerChannels.map(c => c.youtubeChannelId || '')));
+    videos = videos.filter(v => !(v as any).workspaceId || (v as any).workspaceId === 'ws-owner-primary' || ownerChannelIds.has(v.channelId));
+  }
 
   if (channelId) {
     videos = videos.filter(v => v.channelId === channelId);

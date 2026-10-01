@@ -67,8 +67,8 @@ interface DashboardViewProps {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   metrics,
-  actionRequired,
-  channels,
+  actionRequired = [],
+  channels = [],
   profiles = [],
   titles = [],
   thumbnails = [],
@@ -81,7 +81,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   isSyncing,
   onGisAuthorize,
 }) => {
-  // Active Channel & Active Block Resolution (Requirements 2, 11, 12)
+  // Active Channel & Active Block Resolution
   const activeChannel = useMemo(() => {
     return channels.find((c) => c.id === selectedChannelId) || channels[0];
   }, [channels, selectedChannelId]);
@@ -158,7 +158,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     );
   }, [actionRequired]);
 
-  // Reliable Connected Channel Calculation (Requirement 1)
+  // Reliable Connected Channel Calculation
   const connectedCount = useMemo(() => {
     const fromProps = channels.filter(
       (c) =>
@@ -223,7 +223,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 2. Kartu Total Akumulasi Pendapatan Global */}
+      {/* 2. Kartu Total Akumulasi Pendapatan Global (Warna Hijau tepat di bawah tombol Mulai Otomasi dan di atas 7 grid metrik KPI) */}
       <div
         onClick={() => onNavigate('revenue')}
         className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-neutral-950 via-neutral-900 to-neutral-950 border border-emerald-900/50 hover:border-emerald-700/60 shadow-xl cursor-pointer transition group relative overflow-hidden"
@@ -272,7 +272,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* 3. Grid Metrik Utama (Block-Aware Primary Cards) */}
+      {/* 3. Grid Metrik Utama (7 Kartu KPI) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         {/* Connected Channels */}
         <div
@@ -392,13 +392,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Indikator Status Channel YouTube Data API v3 (GIS) */}
+      {/* 4. Indikator Status Channel YouTube Data API v3 (GIS) */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 sm:px-4 py-2.5 rounded-2xl bg-neutral-900/60 border border-neutral-800/80 text-xs max-w-full overflow-hidden">
         <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-wrap sm:flex-nowrap">
           <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider shrink-0">
             Status YouTube API:
           </span>
-          {metrics.connectedChannels > 0 ? (
+          {connectedCount > 0 ? (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-950/90 text-emerald-300 border border-emerald-500/80 shadow-[0_0_14px_rgba(16,185,129,0.45)] shrink-0">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -415,13 +415,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           )}
           <span className="text-neutral-600 hidden sm:inline">•</span>
           <span className="text-neutral-400 text-[11px] truncate hidden sm:inline">
-            {metrics.connectedChannels > 0
-              ? `${metrics.connectedChannels} channel terhubung via Google Identity Services (YouTube Data API v3)`
+            {connectedCount > 0
+              ? `${connectedCount} channel terhubung via Google Identity Services (YouTube Data API v3)`
               : 'Belum ada akun YouTube terhubung. Klik tombol untuk mengotorisasi.'}
           </span>
         </div>
 
-        {metrics.connectedChannels === 0 && onGisAuthorize && (
+        {connectedCount === 0 && onGisAuthorize && (
           <button
             onClick={() => onGisAuthorize(channels[0]?.id)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-red-950/50 cursor-pointer shrink-0"
@@ -432,10 +432,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         )}
       </div>
 
-      {/* 4. Widget Ringkas Pemantau Antrean Worker Phase 3 */}
+      {/* 5. Widget Ringkas Pemantau Antrean Worker Phase 3 */}
       <QueueMonitor onNavigateToAutomation={() => onNavigate('automation')} />
 
-      {/* 5. Banner Ringkas Satu Baris: Peringatan Stok Menipis */}
+      {/* 6. Banner Ringkas Satu Baris: Peringatan Stok Menipis */}
       {lowStockCount > 0 && (
         <div
           onClick={() => onNavigate('channels')}
@@ -457,7 +457,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* Compact Secondary Notice for Other Critical Errors if any */}
+      {/* 7. Compact Secondary Notice for Other Critical Errors if any */}
       {otherCriticalActions.length > 0 && (
         <div
           onClick={() => onNavigate('errors')}
@@ -476,7 +476,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       )}
 
-      {/* 6. Footer Copyright */}
+      {/* 8. Footer Copyright */}
       <footer className="mt-8 pt-6 pb-6 lg:pb-2 border-t border-neutral-800/60 text-center">
         <p className="text-xs text-zinc-400 font-medium tracking-wide">
           Copyright © 2026 Azka Media Group. All Rights Reserved.

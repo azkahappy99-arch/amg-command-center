@@ -295,9 +295,34 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
   return channels;
 }
 
+// Authenticated fetch helper for multi-device cross-synchronization
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('amg_auth_token') : null;
+  const headers = new Headers(options.headers || {});
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return fetch(url, { ...options, headers });
+}
+
 export const api = {
   // Stats & Dashboard
   getStats: async (channelId?: string) => {
+    try {
+      const url = channelId && channelId !== 'ALL'
+        ? `/api/stats?channelId=${encodeURIComponent(channelId)}`
+        : '/api/stats';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const backendStats = await res.json();
+        if (backendStats && backendStats.metrics) {
+          return backendStats;
+        }
+      }
+    } catch {
+      // fallback to local calculation
+    }
+
     let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     channels = syncConnectedChannelState(channels);
 
@@ -381,13 +406,39 @@ export const api = {
     };
   },
 
-  // Channels
+  // Channels (Synchronized with Backend for Multi-Device)
   getChannels: async () => {
+    try {
+      const res = await authFetch('/api/channels');
+      if (res.ok) {
+        const backendChannels = await res.json();
+        if (Array.isArray(backendChannels)) {
+          const sanitized = backendChannels.map(sanitizeChannel);
+          setStorageItem(KEYS.CHANNELS, sanitized);
+          return sanitized;
+        }
+      }
+    } catch {
+      // fallback
+    }
+
     let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     return syncConnectedChannelState(channels);
   },
 
   getChannel: async (id: string) => {
+    try {
+      const res = await authFetch(`/api/channels/${encodeURIComponent(id)}`);
+      if (res.ok) {
+        const backendChan = await res.json();
+        if (backendChan && backendChan.id) {
+          return backendChan;
+        }
+      }
+    } catch {
+      // fallback
+    }
+
     let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     channels = syncConnectedChannelState(channels);
     const channel = channels.find((c) => c.id === id) || channels[0];
@@ -413,6 +464,23 @@ export const api = {
   },
 
   addChannel: async (data: Partial<Channel>) => {
+    try {
+      const res = await authFetch('/api/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+        channels.push(created);
+        setStorageItem(KEYS.CHANNELS, channels);
+        return created;
+      }
+    } catch (e) {
+      console.warn('[API] Backend addChannel failed, using client fallback:', e);
+    }
+
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     const id = data.id || `chan-${Date.now()}`;
     const newChan: Channel = {
@@ -460,6 +528,24 @@ export const api = {
   },
 
   updateChannel: async (id: string, data: Partial<Channel>) => {
+    try {
+      const res = await authFetch(`/api/channels/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+        const idx = channels.findIndex((c) => c.id === id);
+        if (idx >= 0) {
+          channels[idx] = updated;
+          setStorageItem(KEYS.CHANNELS, channels);
+        }
+        return updated;
+      }
+    } catch {}
+
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     const idx = channels.findIndex((c) => c.id === id);
     if (idx >= 0) {
@@ -801,8 +887,19 @@ export const api = {
     };
   },
 
-  // Content Profiles
+  // Content Profiles (Synchronized with Backend)
   getContentProfiles: async () => {
+    try {
+      const res = await authFetch('/api/content-profiles');
+      if (res.ok) {
+        const backendProfiles = await res.json();
+        if (Array.isArray(backendProfiles)) {
+          setStorageItem(KEYS.PROFILES, backendProfiles);
+          return backendProfiles;
+        }
+      }
+    } catch {}
+
     let profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
 
@@ -857,6 +954,21 @@ export const api = {
   },
 
   createContentProfile: async (data: Partial<ContentProfile>) => {
+    try {
+      const res = await authFetch('/api/content-profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        const list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+        list.push(created);
+        setStorageItem(KEYS.PROFILES, list);
+        return created;
+      }
+    } catch {}
+
     const list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     const newProfile: ContentProfile = {
       id: `profile-${Date.now()}`,
@@ -886,6 +998,22 @@ export const api = {
   },
 
   updateContentProfile: async (id: string, data: Partial<ContentProfile>) => {
+    try {
+      const res = await authFetch(`/api/content-profiles/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        const list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+        const idx = list.findIndex((p) => p.id === id);
+        if (idx >= 0) list[idx] = updated;
+        setStorageItem(KEYS.PROFILES, list);
+        return updated;
+      }
+    } catch {}
+
     const list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     const idx = list.findIndex((p) => p.id === id);
     if (idx >= 0) {
@@ -897,14 +1025,32 @@ export const api = {
   },
 
   deleteContentProfile: async (id: string) => {
+    try {
+      await authFetch(`/api/content-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {}
     let list = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     list = list.filter((p) => p.id !== id);
     setStorageItem(KEYS.PROFILES, list);
     return { success: true };
   },
 
-  // Master Titles (100% Isolated Per Channel / Profile)
+  // Master Titles (Synchronized with Backend)
   getMasterTitles: async (profileOrChannelId?: string) => {
+    try {
+      const url = profileOrChannelId && profileOrChannelId !== 'ALL'
+        ? `/api/master-titles?profileId=${encodeURIComponent(profileOrChannelId)}`
+        : '/api/master-titles';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const backendTitles = await res.json();
+        if (Array.isArray(backendTitles)) {
+          const clean = backendTitles.filter(isRealTitle);
+          setStorageItem(KEYS.TITLES, clean);
+          return clean;
+        }
+      }
+    } catch {}
+
     let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     setStorageItem(KEYS.TITLES, list);
     if (!profileOrChannelId || profileOrChannelId === 'ALL') {
@@ -940,6 +1086,21 @@ export const api = {
   },
 
   createMasterTitle: async (data: Partial<MasterTitle> & { channelId?: string }) => {
+    try {
+      const res = await authFetch('/api/master-titles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+        list.push(created);
+        setStorageItem(KEYS.TITLES, list);
+        return created;
+      }
+    } catch {}
+
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
     const targetChan = channels.find(
@@ -980,6 +1141,22 @@ export const api = {
   },
 
   updateMasterTitle: async (id: string, data: Partial<MasterTitle>) => {
+    try {
+      const res = await authFetch(`/api/master-titles/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+        const idx = list.findIndex((t) => t.id === id);
+        if (idx >= 0) list[idx] = updated;
+        setStorageItem(KEYS.TITLES, list);
+        return updated;
+      }
+    } catch {}
+
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     const idx = list.findIndex((t) => t.id === id);
     if (idx >= 0) {
@@ -991,14 +1168,32 @@ export const api = {
   },
 
   deleteMasterTitle: async (id: string) => {
+    try {
+      await authFetch(`/api/master-titles/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {}
     let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.TITLES, list);
     return { success: true };
   },
 
-  // Master Thumbnails (100% Isolated Per Channel / Profile)
+  // Master Thumbnails (Synchronized with Backend)
   getMasterThumbnails: async (profileOrChannelId?: string) => {
+    try {
+      const url = profileOrChannelId && profileOrChannelId !== 'ALL'
+        ? `/api/master-thumbnails?profileId=${encodeURIComponent(profileOrChannelId)}`
+        : '/api/master-thumbnails';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const backendThumbs = await res.json();
+        if (Array.isArray(backendThumbs)) {
+          const clean = backendThumbs.filter(isRealThumbnail);
+          setStorageItem(KEYS.THUMBNAILS, clean);
+          return clean;
+        }
+      }
+    } catch {}
+
     let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
     setStorageItem(KEYS.THUMBNAILS, list);
     if (!profileOrChannelId || profileOrChannelId === 'ALL') {
@@ -1034,6 +1229,21 @@ export const api = {
   },
 
   createMasterThumbnail: async (data: Partial<MasterThumbnail> & { channelId?: string }) => {
+    try {
+      const res = await authFetch('/api/master-thumbnails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
+        list.push(created);
+        setStorageItem(KEYS.THUMBNAILS, list);
+        return created;
+      }
+    } catch {}
+
     const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
     const targetChan = channels.find(
@@ -1075,6 +1285,9 @@ export const api = {
   },
 
   deleteMasterThumbnail: async (id: string) => {
+    try {
+      await authFetch(`/api/master-thumbnails/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {}
     let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.THUMBNAILS, list);
@@ -1159,8 +1372,27 @@ export const api = {
     };
   },
 
-  // Videos
+  // Videos (Synchronized with Backend)
   getVideos: async (params?: { channelId?: string; status?: string; isManaged?: boolean; scope?: string }) => {
+    try {
+      const url = params?.channelId && params.channelId !== 'ALL'
+        ? `/api/videos?channelId=${encodeURIComponent(params.channelId)}`
+        : '/api/videos';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const backendVideos = await res.json();
+        if (Array.isArray(backendVideos)) {
+          const clean = backendVideos.filter(isRealVideo);
+          setStorageItem(KEYS.VIDEOS, clean);
+          let list = clean;
+          if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);
+          if (params?.isManaged !== undefined) list = list.filter((v) => v.isManaged === params.isManaged);
+          if (params?.scope && params.scope !== 'ALL') list = list.filter((v) => v.managementScope === params.scope);
+          return list;
+        }
+      }
+    } catch {}
+
     const raw = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
     const clean = raw.filter(isRealVideo);
     if (clean.length !== raw.length) {

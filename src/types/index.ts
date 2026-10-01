@@ -136,6 +136,7 @@ export interface Channel {
   connectedAt?: string;
   platform?: string;
   ownerId?: string;
+  workspaceId?: string;
   channelUrl?: string;
   createdAt: string;
   updatedAt: string;
@@ -417,4 +418,59 @@ export interface MatrixAnalyticsRecord {
   views: number;
   ctr: number;
   averageViewDuration: number;
+}
+
+// ==========================================
+// AUTHENTICATION, ROLES & WORKSPACE TYPES
+// ==========================================
+
+export type UserRole = 'PRIMARY_OWNER' | 'USER';
+
+export interface UserAccount {
+  id: string;
+  email: string;
+  role: UserRole;
+  workspaceId: string;
+  status: 'ACTIVE' | 'PENDING_APPROVAL' | 'SUSPENDED';
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt?: string;
+}
+
+export interface AuthSession {
+  id: string;
+  userId: string;
+  email: string;
+  role: UserRole;
+  workspaceId: string;
+  deviceInfo?: string;
+  ipAddress?: string;
+  createdAt: string;
+  expiresAt: string;
+  lastActiveAt: string;
+  isCurrent?: boolean;
+}
+
+export interface AuthStatus {
+  isOwnerProvisioned: boolean;
+  isAuthenticated: boolean;
+  user?: UserAccount;
+  workspaceId?: string;
+}
+
+export interface UserAccessRequestItem {
+  id: string;
+  email: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+  requestedAt: string;
+  expiresAt: string;
+  usedAt?: string;
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  ownerId: string;
+  name: string;
+  type: 'OWNER_WORKSPACE' | 'USER_WORKSPACE';
+  createdAt: string;
 }

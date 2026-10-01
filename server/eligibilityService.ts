@@ -103,19 +103,43 @@ function normalizeTitle(str: string): string {
  * Supports exact match or contains match.
  */
 export function matchTitlePattern(title: string, patterns: string[]): { matched: boolean; matchedPattern?: string } {
-  if (!title || !patterns || patterns.length === 0) {
+  if (!title) {
     return { matched: false };
   }
 
   const cleanTitle = normalizeTitle(title);
 
-  for (const pattern of patterns) {
-    const cleanPattern = normalizeTitle(pattern);
-    if (!cleanPattern) continue;
+  // Common YouTube upload placeholders & draft indications (Requirement 7 & 14)
+  const defaultPlaceholders = [
+    'salinan dari',
+    'copy of',
+    'untitled',
+    'draft',
+    'video mentah',
+    'raw video',
+    'video tanpa judul',
+    'salinan',
+  ];
 
-    // Exact match or contains
-    if (cleanTitle === cleanPattern || cleanTitle.includes(cleanPattern)) {
-      return { matched: true, matchedPattern: pattern };
+  for (const placeholder of defaultPlaceholders) {
+    if (cleanTitle.includes(placeholder)) {
+      return { matched: true, matchedPattern: placeholder };
+    }
+  }
+
+  // Device filename placeholders (e.g. VID_20260920, MOV_001, VIDEO_1)
+  if (/^(vid_|video_|mov_|img_|\d{8}_\d{6})/i.test(cleanTitle)) {
+    return { matched: true, matchedPattern: 'device_filename_placeholder' };
+  }
+
+  if (patterns && patterns.length > 0) {
+    for (const pattern of patterns) {
+      const cleanPattern = normalizeTitle(pattern);
+      if (!cleanPattern) continue;
+
+      if (cleanTitle === cleanPattern || cleanTitle.includes(cleanPattern)) {
+        return { matched: true, matchedPattern: pattern };
+      }
     }
   }
 
@@ -153,19 +177,37 @@ export function evaluateVideoEligibility(
 
   // CHECK 1B — SCHEDULED PUBLISH CHECK
   // Video must NOT have an existing scheduled publish time (publishAt must be empty/null).
-  const hasExistingPublishAt = Boolean(
+  const existingPublishStr =
     video.scheduledPublishAt ||
     (video as any).publishAt ||
     (video as any).scheduledAt ||
-    (video as any).status?.publishAt
-  );
-  if (hasExistingPublishAt) {
+    (video as any).status?.publishAt;
+
+  if (existingPublishStr) {
+    const cursorDateStr = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+    if (cursorDateStr) {
+      const cursorTime = new Date(cursorDateStr).getTime();
+      const videoSchedTime = new Date(existingPublishStr).getTime();
+      if (!isNaN(cursorTime) && !isNaN(videoSchedTime) && videoSchedTime <= cursorTime) {
+        return {
+          category: 'PROTECTED_BY_CUTOFF',
+          isEligible: false,
+          isProtected: true,
+          amgStatus: 'SCHEDULED',
+          reason: `Jadwal publikasi video (${existingPublishStr}) berada pada atau sebelum scheduling cursor (${cursorDateStr}). Video lama dipertahankan dan tidak dijadwalkan ulang.`,
+          eligibilityWindowDays: config.windowDays,
+          latestManagedUploadAt: cursorDateStr,
+          originalUploadAt: video.originalUploadAt,
+        };
+      }
+    }
+
     return {
       category: 'ALREADY_MANAGED',
       isEligible: false,
       isProtected: true,
       amgStatus: 'SCHEDULED',
-      reason: `Video already has a scheduled publish time on YouTube (${video.scheduledPublishAt || (video as any).publishAt}). Already scheduled videos are excluded from candidate detection and pipeline.`,
+      reason: `Video sudah memiliki jadwal publikasi YouTube (${existingPublishStr}). Video terjadwal dikecualikan dari antrean deteksi baru.`,
       eligibilityWindowDays: config.windowDays,
       latestManagedUploadAt: channel.latestManagedUploadAt,
       originalUploadAt: video.originalUploadAt,
@@ -197,24 +239,29 @@ export function evaluateVideoEligibility(
     };
   }
 
-  // CHECK 3 — UPLOAD TIME / ELIGIBILITY WINDOW
-  // Videos older than eligibilityWindowDays are PROTECTED_OLD.
-  if (uploadTime < cutoffWindowTime) {
-    const daysOld = Math.round((referenceNowMs - uploadTime) / (24 * 60 * 60 * 1000));
-    return {
-      category: 'PROTECTED_OLD',
-      isEligible: false,
-      isProtected: true,
-      amgStatus: 'PROTECTED_OLD',
-      reason: `Uploaded ${daysOld} days ago (outside the ${config.windowDays}-day eligibility window). Protected historical video.`,
-      eligibilityWindowDays: config.windowDays,
-      latestManagedUploadAt: channel.latestManagedUploadAt,
-      originalUploadAt: video.originalUploadAt,
-    };
+  // CHECK 3 — UPLOAD TIME / ELIGIBILITY WINDOW (Requirements 1, 2, 14, 22)
+  // Historical private videos present before AMG connection MUST be considered.
+  // Connection time is NOT a boundary. Only apply window restriction if explicitly configured on the channel.
+  if (channel?.eligibilityWindowDays && channel.eligibilityWindowDays > 0) {
+    const customWindowMs = channel.eligibilityWindowDays * 24 * 60 * 60 * 1000;
+    const customCutoff = referenceNowMs - customWindowMs;
+    if (uploadTime < customCutoff) {
+      const daysOld = Math.round((referenceNowMs - uploadTime) / (24 * 60 * 60 * 1000));
+      return {
+        category: 'PROTECTED_OLD',
+        isEligible: false,
+        isProtected: true,
+        amgStatus: 'PROTECTED_OLD',
+        reason: `Diupload ${daysOld} hari lalu (di luar jendela filter kustom ${channel.eligibilityWindowDays} hari channel).`,
+        eligibilityWindowDays: channel.eligibilityWindowDays,
+        latestManagedUploadAt: channel.latestManagedUploadAt,
+        originalUploadAt: video.originalUploadAt,
+      };
+    }
   }
 
   // CHECK 4 — TITLE PATTERN MATCH
-  // Video title must conform to eligibleTitlePatterns (e.g. "Salinan dari A", "Copy of A").
+  // Video title must conform to eligibleTitlePatterns or common placeholder indications.
   const patternResult = matchTitlePattern(video.titleBefore, config.titlePatterns);
   if (!patternResult.matched) {
     if (video.exclusionReason || video.managementScope === 'EXCLUDED') {
@@ -234,14 +281,14 @@ export function evaluateVideoEligibility(
       isEligible: false,
       isProtected: true,
       amgStatus: 'UNCLASSIFIED',
-      reason: `Title does not match any eligible pattern [${config.titlePatterns.join(', ')}]. Personal/unrelated video.`,
+      reason: `Judul bukan placeholder dan tidak cocok dengan pola master channel [${config.titlePatterns.join(', ')}].`,
       eligibilityWindowDays: config.windowDays,
       latestManagedUploadAt: channel.latestManagedUploadAt,
       originalUploadAt: video.originalUploadAt,
     };
   }
 
-  // Explicit user manual exclusion (e.g. user manually clicked Exclude on a matching candidate)
+  // Explicit user manual exclusion
   if (video.scopeAssignedBy === 'USER' && video.managementScope === 'EXCLUDED') {
     return {
       category: 'EXCLUDED',
@@ -270,51 +317,55 @@ export function evaluateVideoEligibility(
     };
   }
 
-  // CHECK 4C — SCHEDULED PUBLISH CHECK (Video BELUM memiliki jadwal publish)
-  if (video.scheduledPublishAt) {
+  // CHECK 4C — EXISTING SCHEDULE CHECK (Requirements 5 & 6)
+  // If video already has a scheduled publish time on YouTube:
+  const videoScheduleStr = video.scheduledPublishAt || video.publishAt;
+  const cursorDateStr = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+
+  if (videoScheduleStr) {
+    if (cursorDateStr) {
+      const cursorTime = new Date(cursorDateStr).getTime();
+      const videoSchedTime = new Date(videoScheduleStr).getTime();
+      // Video yang sudah memiliki jadwal pada atau sebelum cursor (<= cursor) DILINDUNGI & TIDAK DIJADWALKAN ULANG
+      if (!isNaN(cursorTime) && !isNaN(videoSchedTime) && videoSchedTime <= cursorTime) {
+        return {
+          category: 'PROTECTED_BY_CUTOFF',
+          isEligible: false,
+          isProtected: true,
+          amgStatus: 'SCHEDULED',
+          reason: `Jadwal tayang video (${videoScheduleStr}) berada pada/sebelum scheduling cursor (${cursorDateStr}). Video lama di bawah cursor dipertahankan dan tidak dijadwalkan ulang.`,
+          matchedTitlePattern: patternResult.matchedPattern,
+          eligibilityWindowDays: config.windowDays,
+          latestManagedUploadAt: cursorDateStr,
+          originalUploadAt: video.originalUploadAt,
+        };
+      }
+    }
+
     return {
       category: 'ALREADY_MANAGED',
       isEligible: false,
       isProtected: true,
       amgStatus: 'SCHEDULED',
-      reason: `Video already has a publish schedule (${video.scheduledPublishAt}).`,
+      reason: `Video sudah memiliki jadwal publikasi YouTube (${videoScheduleStr}). Dipertahankan pada timeline yang telah diproses.`,
       eligibilityWindowDays: config.windowDays,
-      latestManagedUploadAt: channel.lastScheduledPublishAt || channel.latestManagedUploadAt,
+      latestManagedUploadAt: cursorDateStr || channel.latestManagedUploadAt,
       originalUploadAt: video.originalUploadAt,
     };
   }
 
-  // CHECK 5 — AMG MANAGED SCHEDULING CUTOFF (LAST_SCHEDULED_DATETIME)
-  // This is the critical safety mechanism: VIDEO_DATE_TIME > LAST_SCHEDULED_DATETIME.
-  // Any video on or before the cutoff date is permanently protected.
-  const effectiveCutoff = channel.lastScheduledPublishAt || channel.latestManagedUploadAt;
-  if (effectiveCutoff) {
-    const cutoffTime = new Date(effectiveCutoff).getTime();
-    if (!isNaN(cutoffTime) && uploadTime <= cutoffTime) {
-      return {
-        category: 'PROTECTED_BY_CUTOFF',
-        isEligible: false,
-        isProtected: true,
-        amgStatus: 'PROTECTED_BY_CUTOFF',
-        reason: `Upload timestamp (${video.originalUploadAt}) is before/at the scheduling cutoff (${effectiveCutoff}). Protected historical/personal video.`,
-        matchedTitlePattern: patternResult.matchedPattern,
-        eligibilityWindowDays: config.windowDays,
-        latestManagedUploadAt: effectiveCutoff,
-        originalUploadAt: video.originalUploadAt,
-      };
-    }
-  }
-
   // ALL CHECKS PASSED: Video is a qualified NEW CANDIDATE
+  // Private, unscheduled, unprocessed, matching placeholder/candidate pattern.
+  // Ready to be assigned Master Title, Master Thumbnail, and next schedule slot starting AFTER cursor.
   return {
     category: 'NEW_PRIVATE_CANDIDATE',
     isEligible: true,
     isProtected: false,
     amgStatus: 'NEW_PRIVATE_CANDIDATE',
     matchedTitlePattern: patternResult.matchedPattern,
-    reason: `Passed all 5 safety checks: Private, in ${config.windowDays}-day window, matched pattern "${patternResult.matchedPattern}", and uploaded after cutoff.`,
+    reason: `Memenuhi kriteria otomasi: Private, belum memiliki jadwal tayang, teridentifikasi sebagai video mentah/placeholder ("${patternResult.matchedPattern}").`,
     eligibilityWindowDays: config.windowDays,
-    latestManagedUploadAt: channel.latestManagedUploadAt,
+    latestManagedUploadAt: cursorDateStr || channel.latestManagedUploadAt,
     originalUploadAt: video.originalUploadAt,
   };
 }

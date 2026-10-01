@@ -33,6 +33,7 @@ import { NotificationsView } from './components/NotificationsView.tsx';
 import { ActivityLogsView } from './components/ActivityLogsView.tsx';
 import { SettingsView } from './components/SettingsView.tsx';
 import { RevenueAnalyticsView } from './components/RevenueAnalyticsView.tsx';
+import { AuthModal, UserSessionData } from './components/AuthModal.tsx';
 import {
   Channel,
   ContentProfile,
@@ -54,6 +55,11 @@ export default function App() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedChannelId, setSelectedChannelId] = useState<string>('');
+
+  // Authentication & Ownership State
+  const [currentUser, setCurrentUser] = useState<UserSessionData | null>(null);
+  const [isOwnerProvisioned, setIsOwnerProvisioned] = useState<boolean>(true);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
   // Core Data States
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -229,20 +235,40 @@ export default function App() {
             },
           }));
         }
-      } else if (storedToken) {
-        setStats((prev) => ({
-          ...prev,
-          metrics: {
-            ...prev.metrics,
-            connectedChannels: 0,
-          },
-        }));
       }
     } catch (e) {
       console.warn('Initial direct localStorage load:', e);
     }
 
     loadAllData();
+
+    // Check Auth Status & Ownership Provisioning
+    const checkAuthStatus = async () => {
+      try {
+        const token = localStorage.getItem('amg_auth_token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        const res = await fetch('/api/auth/status', { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setIsOwnerProvisioned(data.isOwnerProvisioned);
+          if (data.currentUser) {
+            setCurrentUser(data.currentUser);
+            if (data.currentUser.role === 'USER') {
+              // Clear cached channels for user to prevent owner data leaking
+              localStorage.removeItem('amg_channels');
+            }
+          }
+          if (!data.isOwnerProvisioned) {
+            setIsAuthModalOpen(true);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    checkAuthStatus();
   }, []);
 
   const [toastMessage, setToastMessage] = useState<{
@@ -370,6 +396,9 @@ export default function App() {
           isRefreshing={isRefreshing}
           unreadCount={unreadNotifsCount}
           onOpenNotifications={() => setCurrentSection('notifications')}
+          currentUser={currentUser}
+          isOwnerProvisioned={isOwnerProvisioned}
+          onOpenAuth={() => setIsAuthModalOpen(true)}
         />
 
         {/* Dynamic Route View */}
@@ -607,6 +636,37 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* AMG Security, Ownership & Session Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        currentUser={currentUser}
+        isOwnerProvisioned={isOwnerProvisioned}
+        onAuthSuccess={(_token, user) => {
+          setCurrentUser(user);
+          setIsOwnerProvisioned(true);
+          if (user.role === 'USER') {
+            localStorage.removeItem('amg_channels');
+            localStorage.removeItem('amg_videos');
+            localStorage.removeItem('amg_profiles');
+            localStorage.removeItem('amg_master_titles');
+            localStorage.removeItem('amg_master_thumbnails');
+            setChannels([]);
+            setSelectedChannelId('');
+          }
+          loadAllData();
+        }}
+        onLogout={() => {
+          localStorage.removeItem('amg_auth_token');
+          localStorage.removeItem('amg_channels');
+          localStorage.removeItem('amg_videos');
+          localStorage.removeItem('amg_profiles');
+          localStorage.removeItem('amg_master_titles');
+          localStorage.removeItem('amg_master_thumbnails');
+          setCurrentUser(null);
+          loadAllData();
+        }}
+      />
     </div>
   );
 }

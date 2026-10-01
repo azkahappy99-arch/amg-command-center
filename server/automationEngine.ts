@@ -190,16 +190,14 @@ export class AutomationEngine {
     let latestTimestamp = 0;
 
     for (const v of dbStore.videos.values()) {
-      if (
-        v.channelId === channelId &&
-        v.managementScope === 'REGULAR' &&
-        v.isAmgEligible &&
-        v.scheduledPublishAt
-      ) {
-        const time = new Date(v.scheduledPublishAt).getTime();
-        if (time > latestTimestamp) {
-          latestTimestamp = time;
-          latestAmgScheduledTime = v.scheduledPublishAt;
+      if (v.channelId === channelId) {
+        const schedTimeStr = v.scheduledPublishAt || v.publishAt;
+        if (schedTimeStr) {
+          const time = new Date(schedTimeStr).getTime();
+          if (!isNaN(time) && time > latestTimestamp) {
+            latestTimestamp = time;
+            latestAmgScheduledTime = schedTimeStr;
+          }
         }
       }
     }
@@ -211,8 +209,9 @@ export class AutomationEngine {
     // Collect occupied publishAt slots to avoid collisions
     const occupiedSlots: string[] = [];
     for (const v of dbStore.videos.values()) {
-      if (v.channelId === channelId && v.scheduledPublishAt) {
-        occupiedSlots.push(v.scheduledPublishAt);
+      if (v.channelId === channelId) {
+        const slot = v.scheduledPublishAt || v.publishAt;
+        if (slot) occupiedSlots.push(slot);
       }
     }
 

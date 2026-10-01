@@ -1,6 +1,6 @@
-import React from 'react';
-import { Menu, RefreshCw, Bell, Shield, Radio, CheckCircle, AlertCircle } from 'lucide-react';
+import { Menu, RefreshCw, Bell, Shield, Radio, CheckCircle, AlertCircle, Crown, User, LogIn } from 'lucide-react';
 import { Channel } from '../types/index.ts';
+import { UserSessionData } from './AuthModal.tsx';
 
 interface HeaderProps {
   onToggleMobile: () => void;
@@ -12,6 +12,9 @@ interface HeaderProps {
   isRefreshing: boolean;
   unreadCount: number;
   onOpenNotifications: () => void;
+  currentUser?: UserSessionData | null;
+  isOwnerProvisioned?: boolean;
+  onOpenAuth?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,6 +27,9 @@ export const Header: React.FC<HeaderProps> = ({
   isRefreshing,
   unreadCount,
   onOpenNotifications,
+  currentUser,
+  isOwnerProvisioned = true,
+  onOpenAuth,
 }) => {
   const activeChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
 
@@ -107,15 +113,56 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </button>
 
-        {/* User avatar / Organization pill */}
+        {/* User avatar / Role pill */}
         <div className="hidden sm:flex items-center space-x-2 pl-2 border-l border-neutral-800">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-red-600 to-amber-600 flex items-center justify-center text-white text-xs font-bold shadow">
-            A
-          </div>
-          <div className="hidden xl:block text-left">
-            <div className="text-xs font-medium text-neutral-200">Azka Maulana</div>
-            <div className="text-[10px] text-neutral-500">Super Admin</div>
-          </div>
+          {currentUser ? (
+            <button
+              onClick={onOpenAuth}
+              className="flex items-center space-x-2 text-left p-1 rounded-xl hover:bg-neutral-900 transition cursor-pointer"
+              title="Kelola Sesi & Keamanan"
+            >
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shadow ${
+                currentUser.role === 'PRIMARY_OWNER'
+                  ? 'bg-gradient-to-tr from-amber-500 to-yellow-600 shadow-amber-950/50'
+                  : 'bg-gradient-to-tr from-cyan-600 to-blue-600 shadow-cyan-950/50'
+              }`}>
+                {currentUser.role === 'PRIMARY_OWNER' ? (
+                  <Crown className="w-3.5 h-3.5 text-neutral-950" />
+                ) : (
+                  <User className="w-3.5 h-3.5 text-white" />
+                )}
+              </div>
+              <div className="hidden xl:block">
+                <div className="text-xs font-semibold text-neutral-200 truncate max-w-[140px]">
+                  {currentUser.email.split('@')[0]}
+                </div>
+                <div className="text-[10px] font-bold flex items-center gap-1">
+                  {currentUser.role === 'PRIMARY_OWNER' ? (
+                    <span className="text-amber-400">PRIMARY OWNER</span>
+                  ) : (
+                    <span className="text-cyan-400">USER</span>
+                  )}
+                </div>
+              </div>
+            </button>
+          ) : (
+            <button
+              onClick={onOpenAuth}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 border border-neutral-800 hover:border-neutral-700 text-xs font-semibold transition cursor-pointer active:scale-95"
+            >
+              {!isOwnerProvisioned ? (
+                <>
+                  <Shield className="w-3.5 h-3.5 text-red-400" />
+                  <span>Setup Owner</span>
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Login Owner</span>
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </header>

@@ -110,16 +110,17 @@ export function validateBlockIsolation(params: {
     };
   }
 
-  // 8. Cutoff Gate (VIDEO_DATETIME > LAST_SCHEDULED_DATETIME)
+  // 8. Cutoff Gate (Jadwal video lama <= cursor terlindungi dari perubahan)
   const effectiveCutoff = channel.lastScheduledPublishAt || block?.lastScheduledDatetime || null;
-  if (effectiveCutoff && enforceCutoff) {
-    const videoUploadTime = new Date(video.originalUploadAt || video.uploadedAt || video.createdAt).getTime();
+  const videoSchedStr = video.scheduledPublishAt || video.publishAt;
+  if (effectiveCutoff && enforceCutoff && videoSchedStr) {
+    const videoSchedTime = new Date(videoSchedStr).getTime();
     const cutoffTime = new Date(effectiveCutoff).getTime();
 
-    if (!isNaN(cutoffTime) && !isNaN(videoUploadTime) && videoUploadTime <= cutoffTime) {
+    if (!isNaN(cutoffTime) && !isNaN(videoSchedTime) && videoSchedTime <= cutoffTime) {
       return {
         isValid: false,
-        reason: `Video terlindungi cutoff: Waktu upload (${video.originalUploadAt}) berada pada atau sebelum cutoff jadwal terakhir (${effectiveCutoff}).`,
+        reason: `Video terlindungi cutoff: Jadwal publikasi video (${videoSchedStr}) berada pada atau sebelum cutoff jadwal terakhir (${effectiveCutoff}).`,
       };
     }
   }
@@ -284,19 +285,21 @@ export function evaluateVideoEligibilityWithBlock(
     };
   }
 
-  // G. Cutoff Check: VIDEO_DATETIME > LAST_SCHEDULED_DATETIME
-  const effectiveCutoff = channel.lastScheduledPublishAt || block?.lastScheduledDatetime || null;
-  const videoTime = new Date(video.originalUploadAt || video.uploadedAt || video.createdAt).getTime();
+  // G. Scheduling Cursor Protection (Requirements 5, 6, 15)
+  // Video yang sudah memiliki jadwal pada atau sebelum scheduling cursor terakhir dipertahankan dan tidak dijadwalkan ulang.
+  const effectiveCutoff = channel.lastScheduledPublishAt || (channel as any).latestManagedScheduledAt || block?.lastScheduledDatetime || null;
+  const videoScheduleStr = video.scheduledPublishAt || video.publishAt;
 
-  if (effectiveCutoff) {
+  if (effectiveCutoff && videoScheduleStr) {
     const cutoffTime = new Date(effectiveCutoff).getTime();
-    if (!isNaN(cutoffTime) && !isNaN(videoTime)) {
-      if (videoTime <= cutoffTime) {
+    const videoSchedTime = new Date(videoScheduleStr).getTime();
+    if (!isNaN(cutoffTime) && !isNaN(videoSchedTime)) {
+      if (videoSchedTime <= cutoffTime) {
         return {
           category: 'PROTECTED_BY_CUTOFF',
           isEligible: false,
           isProtected: true,
-          reason: `Upload (${video.originalUploadAt}) berada pada atau sebelum cutoff jadwal terakhir (${effectiveCutoff}). Protected historical video.`,
+          reason: `Jadwal video (${videoScheduleStr}) berada pada atau sebelum cutoff jadwal terakhir (${effectiveCutoff}). Video lama dipertahankan.`,
         };
       }
     }

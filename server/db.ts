@@ -20,6 +20,52 @@ import {
   SystemSettings,
 } from '../src/types/index.js';
 
+export interface UserRecord {
+  id: string;
+  email: string;
+  role: 'PRIMARY_OWNER' | 'USER';
+  passwordHash: string;
+  masterKeyHash?: string;
+  workspaceId: string;
+  status: 'ACTIVE' | 'SUSPENDED';
+  createdAt: string;
+  updatedAt: string;
+  lastLoginAt: string;
+}
+
+export interface SessionRecord {
+  id: string;
+  userId: string;
+  email: string;
+  role: 'PRIMARY_OWNER' | 'USER';
+  workspaceId: string;
+  deviceInfo: string;
+  ipAddress: string;
+  createdAt: string;
+  expiresAt: string;
+  lastActiveAt: string;
+  isRevoked: boolean;
+}
+
+export interface UserAccessRequest {
+  id: string;
+  email: string;
+  accessCodeHash: string;
+  status: 'PENDING' | 'APPROVED' | 'EXPIRED' | 'REJECTED';
+  requestedAt: string;
+  expiresAt: string;
+  attempts: number;
+  usedAt?: string;
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  ownerId: string;
+  name: string;
+  type: 'OWNER_WORKSPACE' | 'USER_WORKSPACE';
+  createdAt: string;
+}
+
 class DatabaseStore {
   public channels: Map<string, Channel> = new Map();
   public profiles: Map<string, ContentProfile> = new Map();
@@ -31,6 +77,10 @@ class DatabaseStore {
   public errorLogs: Map<string, ErrorLog> = new Map();
   public activityLogs: ActivityLog[] = [];
   public notifications: Map<string, NotificationItem> = new Map();
+  public users: Map<string, UserRecord> = new Map();
+  public workspaces: Map<string, WorkspaceRecord> = new Map();
+  public sessions: Map<string, SessionRecord> = new Map();
+  public accessRequests: Map<string, UserAccessRequest> = new Map();
   public settings: SystemSettings = {
     defaultTimezone: 'Asia/Jakarta',
     defaultPublishTime: '16:00',
@@ -43,6 +93,24 @@ class DatabaseStore {
     googleClientSecretConfigured: !!process.env.GOOGLE_CLIENT_SECRET,
     youtubeApiKeyConfigured: !!process.env.YOUTUBE_API_KEY,
   };
+
+  public isOwnerProvisioned(): boolean {
+    for (const u of this.users.values()) {
+      if (u.role === 'PRIMARY_OWNER') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public getPrimaryOwner(): UserRecord | null {
+    for (const u of this.users.values()) {
+      if (u.role === 'PRIMARY_OWNER') {
+        return u;
+      }
+    }
+    return null;
+  }
 
   private dbFilePath: string;
 
@@ -93,6 +161,18 @@ class DatabaseStore {
         }
         if (data.notifications && Array.isArray(data.notifications)) {
           this.notifications = new Map(data.notifications);
+        }
+        if (data.users && Array.isArray(data.users)) {
+          this.users = new Map(data.users);
+        }
+        if (data.workspaces && Array.isArray(data.workspaces)) {
+          this.workspaces = new Map(data.workspaces);
+        }
+        if (data.sessions && Array.isArray(data.sessions)) {
+          this.sessions = new Map(data.sessions);
+        }
+        if (data.accessRequests && Array.isArray(data.accessRequests)) {
+          this.accessRequests = new Map(data.accessRequests);
         }
         if (data.settings) {
           this.settings = { ...this.settings, ...data.settings };
@@ -229,6 +309,10 @@ class DatabaseStore {
         errorLogs: Array.from(this.errorLogs.entries()),
         activityLogs: this.activityLogs.slice(0, 500),
         notifications: Array.from(this.notifications.entries()),
+        users: Array.from(this.users.entries()),
+        workspaces: Array.from(this.workspaces.entries()),
+        sessions: Array.from(this.sessions.entries()),
+        accessRequests: Array.from(this.accessRequests.entries()),
         settings: this.settings,
       };
 
