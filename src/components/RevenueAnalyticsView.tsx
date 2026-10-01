@@ -33,24 +33,20 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
     let totalLiveStream = 0;
     let totalShopping = 0;
     let totalMemberships = 0;
+    let hasAnyRevenueData = false;
     let monetizedChannelsCount = 0;
     let almostMonetizedCount = 0;
     let notMonetizedCount = 0;
 
     channels.forEach((c) => {
-      const rev = c.revenue || {
-        adSenseReguler: 0,
-        liveStream: 0,
-        ytShopping: 0,
-        channelMemberships: 0,
-        totalChannelRevenue: 0,
-      };
-
-      totalRevenue += rev.totalChannelRevenue || 0;
-      totalAdSense += rev.adSenseReguler || 0;
-      totalLiveStream += rev.liveStream || 0;
-      totalShopping += rev.ytShopping || 0;
-      totalMemberships += rev.channelMemberships || 0;
+      if (c.revenue && typeof c.revenue.totalChannelRevenue === 'number') {
+        hasAnyRevenueData = true;
+        totalRevenue += c.revenue.totalChannelRevenue;
+        totalAdSense += c.revenue.adSenseReguler || 0;
+        totalLiveStream += c.revenue.liveStream || 0;
+        totalShopping += c.revenue.ytShopping || 0;
+        totalMemberships += c.revenue.channelMemberships || 0;
+      }
 
       if (c.monetizationStatus === 'MONETIZED') monetizedChannelsCount++;
       else if (c.monetizationStatus === 'ALMOST_MONETIZED') almostMonetizedCount++;
@@ -58,6 +54,7 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
     });
 
     return {
+      hasAnyRevenueData,
       totalRevenue,
       totalAdSense,
       totalLiveStream,
@@ -69,13 +66,14 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
     };
   }, [channels]);
 
-  // 2. Group revenue per Niche Category
+  // 2. Group revenue per Niche Category (Real Data Only)
   const nicheRevenueBlocks = useMemo(() => {
     const groups: Record<
       string,
       {
         niche: string;
         channels: Channel[];
+        hasAnyRevenueData: boolean;
         totalRevenue: number;
         adSense: number;
         liveStream: number;
@@ -91,6 +89,7 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
         groups[niche] = {
           niche,
           channels: [],
+          hasAnyRevenueData: false,
           totalRevenue: 0,
           adSense: 0,
           liveStream: 0,
@@ -100,20 +99,16 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
         };
       }
 
-      const rev = c.revenue || {
-        adSenseReguler: 0,
-        liveStream: 0,
-        ytShopping: 0,
-        channelMemberships: 0,
-        totalChannelRevenue: 0,
-      };
-
       groups[niche].channels.push(c);
-      groups[niche].totalRevenue += rev.totalChannelRevenue || 0;
-      groups[niche].adSense += rev.adSenseReguler || 0;
-      groups[niche].liveStream += rev.liveStream || 0;
-      groups[niche].shopping += rev.ytShopping || 0;
-      groups[niche].memberships += rev.channelMemberships || 0;
+
+      if (c.revenue && typeof c.revenue.totalChannelRevenue === 'number') {
+        groups[niche].hasAnyRevenueData = true;
+        groups[niche].totalRevenue += c.revenue.totalChannelRevenue;
+        groups[niche].adSense += c.revenue.adSenseReguler || 0;
+        groups[niche].liveStream += c.revenue.liveStream || 0;
+        groups[niche].shopping += c.revenue.ytShopping || 0;
+        groups[niche].memberships += c.revenue.channelMemberships || 0;
+      }
 
       if (c.monetizationStatus === 'MONETIZED') {
         groups[niche].monetizedCount++;
@@ -163,10 +158,22 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
                 <span>Total Akumulasi Pendapatan Seluruh Channel</span>
               </div>
               <div className="text-3xl sm:text-5xl font-black text-neutral-100 tracking-tight font-mono">
-                {formatIDR(globalStats.totalRevenue)}
+                {channels.length === 0 ? (
+                  <span className="text-xl sm:text-3xl font-sans font-bold text-neutral-500">Belum ada channel terhubung</span>
+                ) : !globalStats.hasAnyRevenueData ? (
+                  <span className="text-xl sm:text-3xl font-sans font-bold text-neutral-400">Data belum tersedia</span>
+                ) : (
+                  formatIDR(globalStats.totalRevenue)
+                )}
               </div>
               <div className="text-xs text-neutral-400 mt-1 flex items-center gap-2">
-                <span>Gabungan seluruh pendapatan aktif dari {channels.length} channel terkelola</span>
+                <span>
+                  {channels.length === 0
+                    ? 'Hubungkan channel YouTube Anda untuk melihat estimasi performa pendapatan.'
+                    : !globalStats.hasAnyRevenueData
+                    ? `Data analitik pendapatan YouTube belum dimuat dari ${channels.length} channel terkelola`
+                    : `Gabungan seluruh pendapatan aktif dari ${channels.length} channel terkelola`}
+                </span>
                 <span className="text-neutral-600">•</span>
                 <span className="text-emerald-400 font-semibold">
                   {globalStats.monetizedChannelsCount} Channel Monetized (YPP)
@@ -327,8 +334,19 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
           </span>
         </div>
 
-        <div className="grid grid-cols-1 gap-5">
-          {nicheRevenueBlocks.map((block) => {
+        {channels.length === 0 ? (
+          <div className="p-12 text-center bg-neutral-900/40 rounded-2xl border border-neutral-800 space-y-3">
+            <DollarSign className="w-8 h-8 text-neutral-600 mx-auto" />
+            <h3 className="text-sm font-bold text-neutral-200 uppercase tracking-wider">
+              Belum ada channel terhubung
+            </h3>
+            <p className="text-xs text-neutral-400 max-w-md mx-auto">
+              Hubungkan channel YouTube Anda melalui otorisasi OAuth Google untuk melihat data monetisasi aktual, estimasi pendapatan bruto IDR, dan statistik Program Partner YouTube (YPP).
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-5">
+            {nicheRevenueBlocks.map((block) => {
             const meta = getNicheMeta(block.niche);
             const isExpanded = expandedNiche === block.niche;
             const contributionPercent =
@@ -454,11 +472,17 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
                           <tr key={chan.id} className="hover:bg-neutral-800/30 transition">
                             <td className="py-3 px-3">
                               <div className="flex items-center gap-2.5">
-                                <img
-                                  src={chan.thumbnailUrl || 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=160'}
-                                  alt={chan.title}
-                                  className="w-8 h-8 rounded-lg object-cover border border-neutral-800 shrink-0"
-                                />
+                                {chan.thumbnailUrl ? (
+                                  <img
+                                    src={chan.thumbnailUrl}
+                                    alt={chan.title}
+                                    className="w-8 h-8 rounded-lg object-cover border border-neutral-800 shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-500 shrink-0">
+                                    <Users className="w-4 h-4" />
+                                  </div>
+                                )}
                                 <div>
                                   <div className="font-bold text-neutral-100 whitespace-nowrap">{chan.title}</div>
                                   <div className="text-[10px] text-neutral-500 font-mono whitespace-nowrap">
@@ -505,6 +529,7 @@ export const RevenueAnalyticsView: React.FC<RevenueAnalyticsViewProps> = ({ chan
             );
           })}
         </div>
+        )}
       </div>
     </div>
   );

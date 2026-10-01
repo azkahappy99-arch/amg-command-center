@@ -168,14 +168,14 @@ export const SettingsView: React.FC = () => {
             <div className="flex items-center justify-between text-xs">
               <span className="font-semibold text-neutral-200">Penggunaan Kuota YouTube Data API</span>
               <span className="font-mono text-neutral-400">
-                {settings?.apiQuotaUsed || 1420} / {settings?.apiQuotaDailyLimit || 10000} unit
+                {settings?.apiQuotaUsed ?? 0} / {settings?.apiQuotaDailyLimit || 10000} unit
               </span>
             </div>
             <div className="w-full h-2 rounded-full bg-neutral-800 overflow-hidden">
               <div
                 className="h-full bg-gradient-to-r from-emerald-500 to-amber-500 rounded-full"
                 style={{
-                  width: `${((settings?.apiQuotaUsed || 1420) / (settings?.apiQuotaDailyLimit || 10000)) * 100}%`,
+                  width: `${(((settings?.apiQuotaUsed ?? 0)) / (settings?.apiQuotaDailyLimit || 10000)) * 100}%`,
                 }}
               />
             </div>

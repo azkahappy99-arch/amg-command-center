@@ -147,24 +147,21 @@ export class YouTubeDataService {
   }
 
   /**
-   * Fetches latest uploaded videos from the channel's uploads playlist.
+   * Fetches uploaded videos from the channel's uploads playlist with full scan pagination.
+   * Scans both existing historical videos and newly uploaded videos.
    */
   public async getChannelUploads(
     channelId: string,
     uploadPlaylistId: string,
-    maxResults = 50
+    maxResults = 250
   ): Promise<{ success: boolean; data?: YouTubeVideoItem[]; error?: string }> {
     const accessToken = await youtubeAuthService.getValidAccessToken(channelId);
     const headers: Record<string, string> = {};
 
-    let url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,status,contentDetails&playlistId=${encodeURIComponent(
-      uploadPlaylistId
-    )}&maxResults=${maxResults}`;
-
     if (accessToken) {
       headers['Authorization'] = `Bearer ${accessToken}`;
     } else if (this.apiKey) {
-      url += `&key=${this.apiKey}`;
+      // API Key mode
     } else {
       return {
         success: false,
@@ -172,22 +169,48 @@ export class YouTubeDataService {
       };
     }
 
-    try {
-      const res = await fetch(url, { headers });
-      if (!res.ok) {
-        const err = await res.json();
-        return { success: false, error: err.error?.message || `YouTube API error (${res.status})` };
-      }
+    const videoIds: string[] = [];
+    let pageToken: string | undefined = undefined;
+    let pagesFetched = 0;
+    const MAX_PAGES = Math.ceil(maxResults / 50);
 
-      const json = await res.json();
-      const items = json.items || [];
-      const videoIds = items.map((it: any) => it.contentDetails?.videoId).filter(Boolean);
+    try {
+      do {
+        let url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,status,contentDetails&playlistId=${encodeURIComponent(
+          uploadPlaylistId
+        )}&maxResults=50`;
+
+        if (pageToken) {
+          url += `&pageToken=${encodeURIComponent(pageToken)}`;
+        }
+        if (!accessToken && this.apiKey) {
+          url += `&key=${this.apiKey}`;
+        }
+
+        const res = await fetch(url, { headers });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          return { success: false, error: err.error?.message || `YouTube API error (${res.status})` };
+        }
+
+        const json = await res.json();
+        const items = json.items || [];
+        for (const it of items) {
+          const vidId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
+          if (vidId && !videoIds.includes(vidId)) {
+            videoIds.push(vidId);
+          }
+        }
+
+        pageToken = json.nextPageToken;
+        pagesFetched++;
+      } while (pageToken && pagesFetched < MAX_PAGES && videoIds.length < maxResults);
 
       if (videoIds.length === 0) {
         return { success: true, data: [] };
       }
 
-      // Fetch full video details (status, processingDetails, contentDetails)
+      // Fetch full video details in chunks of 50
       return await this.getVideoDetailsBatch(channelId, videoIds);
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to fetch playlist items' };
@@ -195,7 +218,7 @@ export class YouTubeDataService {
   }
 
   /**
-   * Fetches detailed video status including upload status (processing vs processed) and scheduled publishAt.
+   * Fetches detailed video status in batches of up to 50 items.
    */
   public async getVideoDetailsBatch(
     channelId: string,
@@ -204,14 +227,10 @@ export class YouTubeDataService {
     const accessToken = await youtubeAuthService.getValidAccessToken(channelId);
     const headers: Record<string, string> = {};
 
-    let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status,processingDetails,contentDetails&id=${encodeURIComponent(
-      videoIds.join(',')
-    )}`;
-
     if (accessToken) {
       headers['Authorization'] = `Bearer ${accessToken}`;
     } else if (this.apiKey) {
-      url += `&key=${this.apiKey}`;
+      // API Key mode
     } else {
       return {
         success: false,
@@ -219,28 +238,43 @@ export class YouTubeDataService {
       };
     }
 
+    const allVideoItems: YouTubeVideoItem[] = [];
+
     try {
-      const res = await fetch(url, { headers });
-      if (!res.ok) {
-        const err = await res.json();
-        return { success: false, error: err.error?.message || `YouTube API error (${res.status})` };
+      // Chunk into batches of 50
+      for (let i = 0; i < videoIds.length; i += 50) {
+        const chunk = videoIds.slice(i, i + 50);
+        let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status,processingDetails,contentDetails&id=${encodeURIComponent(
+          chunk.join(',')
+        )}`;
+
+        if (!accessToken && this.apiKey) {
+          url += `&key=${this.apiKey}`;
+        }
+
+        const res = await fetch(url, { headers });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          return { success: false, error: err.error?.message || `YouTube API error (${res.status})` };
+        }
+
+        const json = await res.json();
+        const items: YouTubeVideoItem[] = (json.items || []).map((v: any) => ({
+          id: v.id,
+          title: v.snippet?.title || '',
+          description: v.snippet?.description || '',
+          publishedAt: v.snippet?.publishedAt || '',
+          thumbnailUrl: v.snippet?.thumbnails?.medium?.url || v.snippet?.thumbnails?.default?.url || '',
+          privacyStatus: v.status?.privacyStatus || 'public',
+          uploadStatus: v.status?.uploadStatus || 'processed',
+          publishAt: v.status?.publishAt || null,
+          duration: v.contentDetails?.duration,
+          definition: v.contentDetails?.definition,
+        }));
+        allVideoItems.push(...items);
       }
 
-      const json = await res.json();
-      const videoItems: YouTubeVideoItem[] = (json.items || []).map((v: any) => ({
-        id: v.id,
-        title: v.snippet?.title || '',
-        description: v.snippet?.description || '',
-        publishedAt: v.snippet?.publishedAt || '',
-        thumbnailUrl: v.snippet?.thumbnails?.medium?.url || v.snippet?.thumbnails?.default?.url || '',
-        privacyStatus: v.status?.privacyStatus || 'private',
-        uploadStatus: v.status?.uploadStatus || 'processed',
-        publishAt: v.status?.publishAt,
-        duration: v.contentDetails?.duration,
-        definition: v.contentDetails?.definition,
-      }));
-
-      return { success: true, data: videoItems };
+      return { success: true, data: allVideoItems };
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to fetch video details' };
     }

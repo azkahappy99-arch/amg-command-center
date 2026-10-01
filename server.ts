@@ -608,16 +608,38 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
         (ev) => ev.youtubeVideoId === v.id || ev.id === `yt-${v.id}`
       );
 
-      const isManaged = existing ? existing.isManaged : false;
-      const managementStatus = existing
-        ? existing.managementStatus
-        : v.publishAt
-        ? 'SCHEDULED'
-        : 'DISCOVERED';
+      const isPrivate = (v.privacyStatus || 'public') === 'private';
+      const publishAt = v.publishAt || null;
+      const isScheduled = Boolean(publishAt);
 
-      // Default to UNCLASSIFIED & isAmgEligible: false for new videos unless already classified
-      const managementScope = existing ? (existing.managementScope || 'UNCLASSIFIED') : 'UNCLASSIFIED';
-      const isAmgEligible = existing ? !!existing.isAmgEligible : false;
+      let isManaged = existing ? existing.isManaged : false;
+      let managementStatus = existing ? existing.managementStatus : 'DISCOVERED';
+      let managementScope = existing ? (existing.managementScope || 'UNCLASSIFIED') : 'UNCLASSIFIED';
+      let isAmgEligible = existing ? !!existing.isAmgEligible : false;
+      let exclusionReason: string | undefined = existing?.exclusionReason;
+
+      if (!isPrivate) {
+        // Video public atau unlisted otomatis dikecualikan/diabaikan dari deteksi pipeline otomasi
+        managementScope = 'EXCLUDED';
+        isAmgEligible = false;
+        isManaged = true;
+        managementStatus = 'EXCLUDED';
+        exclusionReason = `Status Privasi: ${(v.privacyStatus || 'public').toUpperCase()}. Video public dan unlisted otomatis dikecualikan; hanya video private mentah tanpa jadwal yang diproses otomatis AMG.`;
+      } else if (isScheduled) {
+        // Video yang sudah berstatus scheduled (sudah terjadwal) tidak boleh masuk ke video terdeteksi/antrean baru
+        managementScope = 'EXCLUDED';
+        isAmgEligible = false;
+        isManaged = true;
+        managementStatus = 'SCHEDULED';
+        exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari video terdeteksi/antrean baru.`;
+      } else if (!existing || !existing.isManaged) {
+        // Video private mentah TANPA jadwal publikasi
+        managementScope = 'REGULAR';
+        isAmgEligible = true;
+        isManaged = false;
+        managementStatus = 'DISCOVERED';
+        exclusionReason = undefined;
+      }
 
       const vidRecord = {
         id: existing ? existing.id : `yt-${v.id}`,
@@ -630,14 +652,15 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
         thumbnailAssigned: existing?.thumbnailAssigned || '',
         originalUploadAt: v.publishedAt || new Date().toISOString(),
         processingStatus: (v.uploadStatus === 'uploaded' ? 'processing' : 'processed') as 'processing' | 'processed' | 'failed',
-        privacyStatus: (v.privacyStatus || 'private') as 'private' | 'unlisted' | 'public',
-        scheduledPublishAt: v.publishAt || existing?.scheduledPublishAt,
+        privacyStatus: (v.privacyStatus || 'public') as 'private' | 'unlisted' | 'public',
+        publishAt: publishAt || undefined,
+        scheduledPublishAt: publishAt || existing?.scheduledPublishAt,
         managementStatus,
         managementScope,
         isAmgEligible,
         scopeAssignedAt: existing?.scopeAssignedAt,
         scopeAssignedBy: existing?.scopeAssignedBy || 'SYSTEM',
-        exclusionReason: existing?.exclusionReason,
+        exclusionReason,
         isManaged,
         isSeeded: false, // Confirmed REAL video fetched directly from YouTube Data API
         contentProfileId: existing?.contentProfileId || channel.contentProfileId || '',
@@ -654,11 +677,11 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
 
     channel.lastSyncAt = new Date().toISOString();
     const channelVideos = Array.from(dbStore.videos.values()).filter((v) => v.channelId === channel.id);
-    const unmanaged = channelVideos.filter((v) => !v.isManaged);
-    const managed = channelVideos.filter((v) => v.isManaged);
-    const eligibleRegular = channelVideos.filter((v) => !v.isManaged && v.managementScope === 'REGULAR' && v.isAmgEligible);
-    const unclassified = channelVideos.filter((v) => !v.isManaged && v.managementScope === 'UNCLASSIFIED');
-    const excluded = channelVideos.filter((v) => !v.isManaged && v.managementScope === 'EXCLUDED');
+    const unmanaged = channelVideos.filter((v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt);
+    const managed = channelVideos.filter((v) => v.isManaged || v.privacyStatus !== 'private' || v.publishAt || v.scheduledPublishAt);
+    const eligibleRegular = channelVideos.filter((v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt && v.managementScope === 'REGULAR' && v.isAmgEligible);
+    const unclassified = channelVideos.filter((v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt && v.managementScope === 'UNCLASSIFIED');
+    const excluded = channelVideos.filter((v) => v.managementScope === 'EXCLUDED' || v.privacyStatus !== 'private' || v.publishAt || v.scheduledPublishAt);
 
     channel.unmanagedVideoCount = eligibleRegular.length;
     channel.status = 'CONNECTED';
@@ -1392,6 +1415,75 @@ app.put('/api/videos/:id/scope', (req: Request, res: Response) => {
   });
 });
 
+app.post('/api/videos/batch-sync', (req: Request, res: Response) => {
+  const { channelId, youtubeChannelId, channelTitle, videos } = req.body;
+  if (!channelId || !Array.isArray(videos)) {
+    return res.status(400).json({ error: 'channelId and videos array are required.' });
+  }
+
+  const channel = dbStore.channels.get(channelId) ||
+    Array.from(dbStore.channels.values()).find(
+      c => c.youtubeChannelId === youtubeChannelId || c.id === channelId || c.id === `chan-${youtubeChannelId}`
+    );
+
+  let upsertedCount = 0;
+  for (const v of videos) {
+    if (!v.youtubeVideoId && !v.id) continue;
+    const yId = v.youtubeVideoId || (v.id.startsWith('yt-vid-') ? v.id.replace('yt-vid-', '') : v.id);
+
+    const existing = Array.from(dbStore.videos.values()).find(
+      ev => ev.youtubeVideoId === yId || ev.id === v.id || ev.id === `yt-${yId}`
+    );
+
+    const vidRecord: any = {
+      id: existing ? existing.id : (v.id || `yt-${yId}`),
+      youtubeVideoId: yId,
+      channelId: channel ? channel.id : channelId,
+      channelTitle: channel ? channel.title : (channelTitle || v.channelTitle || 'YouTube Channel'),
+      titleBefore: v.titleBefore || v.title || 'Video Tanpa Judul',
+      titleAssigned: existing?.titleAssigned || v.titleAssigned || '',
+      thumbnailBefore: v.thumbnailBefore || v.thumbnailUrl || '',
+      thumbnailAssigned: existing?.thumbnailAssigned || v.thumbnailAssigned || '',
+      originalUploadAt: v.originalUploadAt || v.uploadedAt || new Date().toISOString(),
+      uploadedAt: v.uploadedAt || v.originalUploadAt,
+      processingStatus: v.processingStatus || 'processed',
+      privacyStatus: v.privacyStatus || 'private',
+      publishAt: v.publishAt || existing?.publishAt,
+      scheduledPublishAt: v.scheduledPublishAt || existing?.scheduledPublishAt || v.publishAt,
+      managementStatus: existing?.managementStatus || v.managementStatus || 'DISCOVERED',
+      managementScope: existing?.managementScope || v.managementScope || 'REGULAR',
+      isAmgEligible: existing?.isAmgEligible !== undefined ? existing.isAmgEligible : (v.isAmgEligible ?? true),
+      isManaged: existing?.isManaged !== undefined ? existing.isManaged : (v.isManaged ?? false),
+      retryCount: existing?.retryCount || v.retryCount || 0,
+      exclusionReason: existing?.exclusionReason || v.exclusionReason,
+      definition: v.definition || 'hd',
+      duration: v.duration,
+      isSeeded: false,
+      createdAt: existing?.createdAt || v.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    dbStore.videos.set(vidRecord.id, vidRecord);
+    upsertedCount++;
+  }
+
+  if (channel) {
+    channel.videoCount = videos.length;
+    channel.unmanagedVideoCount = Array.from(dbStore.videos.values()).filter(
+      v => v.channelId === channel.id && !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
+    ).length;
+    channel.lastSyncAt = new Date().toISOString();
+  }
+
+  dbStore.saveToDisk();
+
+  res.json({
+    success: true,
+    upsertedCount,
+    totalVideos: dbStore.videos.size,
+  });
+});
+
 app.post('/api/videos/bulk-scope', (req: Request, res: Response) => {
   const { videoIds, managementScope, exclusionReason } = req.body;
   if (!Array.isArray(videoIds) || videoIds.length === 0) {
@@ -1716,10 +1808,10 @@ app.post('/api/videos/:id/validate-mutation', (req: Request, res: Response) => {
 // 8C. PHASE 2 ACCEPTANCE TEST RUNNER (Requirement 32 & 33)
 // ==========================================
 app.post('/api/test/phase2-acceptance', (req: Request, res: Response) => {
-  const channelId = req.body.channelId || 'chan-ayam-warna';
-  const channel = dbStore.channels.get(channelId);
+  const channelId = req.body.channelId || Array.from(dbStore.channels.values())[0]?.id;
+  const channel = channelId ? dbStore.channels.get(channelId) : null;
   if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
+    return res.status(400).json({ error: 'Belum ada channel terhubung untuk menjalankan uji validasi.' });
   }
 
   const profile = channel.contentProfileId ? dbStore.profiles.get(channel.contentProfileId) : null;
@@ -1849,6 +1941,7 @@ app.post('/api/test/phase2-acceptance', (req: Request, res: Response) => {
     });
   }
   const gateEnrolled = validateBeforeMutation(tempEnrolledId, channel.id);
+  dbStore.videos.delete(tempEnrolledId);
 
   const gateSecurityPassed =
     !gateOld.isValid &&

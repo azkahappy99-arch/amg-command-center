@@ -106,29 +106,38 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     );
   }, [videos, activeChannel, activeBlockId]);
 
+  const targetChannelFilter =
+    selectedChannelId && selectedChannelId !== 'ALL'
+      ? selectedChannelId
+      : selectedChannelId === 'ALL'
+      ? 'ALL'
+      : activeChannel?.id;
+
   const blockDetectedCount = useMemo(() => {
-    return calculateDetectedVideosCount(videos, channels, profiles, activeChannel?.id);
-  }, [videos, channels, profiles, activeChannel?.id]);
+    return calculateDetectedVideosCount(videos, channels, profiles, targetChannelFilter);
+  }, [videos, channels, profiles, targetChannelFilter]);
 
   const blockCompletedCount = useMemo(() => {
     return activeBlockVideos.filter((v) => v.managementStatus === 'COMPLETED' || v.isManaged).length;
   }, [activeBlockVideos]);
 
-  // Master Revenue and Monetization Aggregation
+  // Master Revenue and Monetization Aggregation (Real Data Only)
   const revenueSummary = useMemo(() => {
+    let hasAnyRevenueData = false;
     let totalRevenue = 0;
     let monetizedCount = 0;
     let almostMonetizedCount = 0;
 
     channels.forEach((c) => {
-      if (c.revenue?.totalChannelRevenue) {
+      if (c.revenue && typeof c.revenue.totalChannelRevenue === 'number') {
+        hasAnyRevenueData = true;
         totalRevenue += c.revenue.totalChannelRevenue;
       }
       if (c.monetizationStatus === 'MONETIZED') monetizedCount++;
       else if (c.monetizationStatus === 'ALMOST_MONETIZED') almostMonetizedCount++;
     });
 
-    return { totalRevenue, monetizedCount, almostMonetizedCount };
+    return { hasAnyRevenueData, totalRevenue, monetizedCount, almostMonetizedCount };
   }, [channels]);
 
   // Compute count of channels that need replenishment
@@ -234,10 +243,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </span>
               </div>
               <div className="text-2xl sm:text-3xl font-black text-neutral-100 font-mono tracking-tight mt-0.5">
-                {formatIDR(revenueSummary.totalRevenue)}
+                {channels.length === 0 ? (
+                  <span className="text-base sm:text-lg font-sans font-bold text-neutral-500">Belum ada channel terhubung</span>
+                ) : !revenueSummary.hasAnyRevenueData ? (
+                  <span className="text-base sm:text-lg font-sans font-bold text-neutral-400">Data belum tersedia</span>
+                ) : (
+                  formatIDR(revenueSummary.totalRevenue)
+                )}
               </div>
               <div className="text-[11px] text-neutral-400 mt-0.5">
-                Total bruto seluruh stream (AdSense, Live Super Chat, YT Shopping, Membership) • {revenueSummary.monetizedCount} channel monetized
+                {channels.length === 0 ? (
+                  'Tautkan akun YouTube Anda untuk melihat estimasi performa dan pendapatan aktual.'
+                ) : !revenueSummary.hasAnyRevenueData ? (
+                  'Data pendapatan aktual YouTube Analytics belum dimuat untuk channel terhubung.'
+                ) : (
+                  `Total bruto seluruh stream (AdSense, Live Super Chat, YT Shopping, Membership) • ${revenueSummary.monetizedCount} channel monetized`
+                )}
               </div>
             </div>
           </div>
@@ -294,7 +315,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Film className="w-3.5 h-3.5 text-amber-400" />
           </div>
           <div className="text-2xl font-bold text-amber-400">{blockDetectedCount}</div>
-          <div className="text-[10px] text-amber-300 mt-1 font-medium">Kandidat AMG ({activeProfile?.name || 'Blok'})</div>
+          <div className="text-[10px] text-amber-300 mt-1 font-medium">
+            Private Mentah ({targetChannelFilter === 'ALL' ? 'Semua Channel' : activeProfile?.name || activeChannel?.title || 'Blok'})
+          </div>
         </div>
 
         {/* Video Sudah Dikelola */}

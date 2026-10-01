@@ -270,7 +270,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
               required
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="Contoh: Thumbnail Ruang Tidur Hujan TH2"
+              placeholder="Masukkan label / nama thumbnail..."
               className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-100 text-xs sm:text-sm focus:ring-1 focus:ring-red-500 focus:border-red-500/50 focus:outline-none placeholder-neutral-500 transition"
             />
           </div>
@@ -394,10 +394,10 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
           <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-400 text-xs space-y-1">
             <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5">
               <AlertTriangle className="w-4 h-4" />
-              <span>Master Thumbnail belum tersedia pada blok ini</span>
+              <span>Belum ada master thumbnail ditambahkan</span>
             </div>
             <p className="text-neutral-500 text-[11px]">
-              Silakan tambahkan aset thumbnail pertama khusus blok <strong className="text-neutral-300">{activeProfile?.name || 'ini'}</strong> di atas. Anti-fallback aktif.
+              Silakan unggah gambar thumbnail pertama dari galeri perangkat Anda di atas. AMG Command Center hanya memproses aset nyata yang Anda simpan.
             </p>
           </div>
         ) : (

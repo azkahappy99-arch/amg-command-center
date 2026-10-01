@@ -207,6 +207,7 @@ export interface ManagedVideo {
   uploadedAt?: string; // Phase 2 synonym
   processingStatus: VideoProcessingStatus;
   privacyStatus: VideoPrivacyStatus;
+  publishAt?: string;
   scheduledPublishAt?: string;
   scheduledAt?: string; // Phase 2 synonym
   verifiedAt?: string; // Phase 2

@@ -690,16 +690,23 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-800/60">
-              {batches.map((batch) => {
-                const isRollingBack = rollingBackBatchId === batch.id;
-                const isRolledBack = (batch as any).isRolledBack;
+              {batches.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-8 text-center text-neutral-500 text-xs">
+                    Belum ada pekerjaan automation.
+                  </td>
+                </tr>
+              ) : (
+                batches.map((batch) => {
+                  const isRollingBack = rollingBackBatchId === batch.id;
+                  const isRolledBack = (batch as any).isRolledBack;
 
-                return (
-                  <tr key={batch.id} className="hover:bg-neutral-800/30 transition">
-                    <td className="py-3 px-3 font-mono font-bold text-neutral-100">
-                      {batch.batchNumber}
-                    </td>
-                    <td className="py-3 px-3">{batch.channelTitle || 'Ayam Warna'}</td>
+                  return (
+                    <tr key={batch.id} className="hover:bg-neutral-800/30 transition">
+                      <td className="py-3 px-3 font-mono font-bold text-neutral-100">
+                        {batch.batchNumber}
+                      </td>
+                      <td className="py-3 px-3">{batch.channelTitle || '—'}</td>
                     <td className="py-3 px-3">
                       {batch.isDryRun ? (
                         <span className="px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800/40 text-[10px] font-bold">
@@ -775,7 +782,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     </td>
                   </tr>
                 );
-              })}
+              }))}
             </tbody>
           </table>
         </div>

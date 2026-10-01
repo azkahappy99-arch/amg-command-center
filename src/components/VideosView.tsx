@@ -55,6 +55,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
 
   const selectedChannelId = channelFilter;
   const [nicheCategoryFilter, setNicheCategoryFilter] = useState<string>('ALL');
+  const [privacyFilter, setPrivacyFilter] = useState<string>('ALL');
   const [managedFilter, setManagedFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [scopeFilter, setScopeFilter] = useState<string>('ALL');
@@ -74,6 +75,23 @@ export const VideosView: React.FC<VideosViewProps> = ({
     );
   }, [channels, selectedChannelId]);
 
+  // Strict Privacy & Schedule Check helpers (Requirements: private && !publishAt)
+  const isVideoPrivate = (v: ManagedVideo) => v.privacyStatus === 'private';
+  const isVideoScheduled = (v: ManagedVideo) =>
+    Boolean(
+      v.publishAt ||
+      v.scheduledPublishAt ||
+      (v as any).status?.publishAt ||
+      (v as any).scheduledAt ||
+      v.managementStatus === 'SCHEDULED'
+    );
+  const isVideoCandidate = (v: ManagedVideo) =>
+    isVideoPrivate(v) &&
+    !isVideoScheduled(v) &&
+    !v.isManaged &&
+    v.managementStatus !== 'COMPLETED' &&
+    v.managementScope !== 'EXCLUDED';
+
   // Scope statistics across current channel or all channels
   const channelVideos =
     selectedChannelId === 'ALL'
@@ -86,9 +104,18 @@ export const VideosView: React.FC<VideosViewProps> = ({
               (v.channelId === currentChannelObj.youtubeChannelId ||
                 v.channelId === `chan-${currentChannelObj.youtubeChannelId}`))
         );
-  const includedCount = channelVideos.filter(v => v.managementScope === 'REGULAR' && v.isAmgEligible).length;
-  const needsScopeCount = channelVideos.filter(v => v.managementScope === 'UNCLASSIFIED' || !v.managementScope).length;
-  const excludedCount = channelVideos.filter(v => v.managementScope === 'EXCLUDED').length;
+
+  const candidateCount = channelVideos.filter(isVideoCandidate).length;
+  const scheduledCount = channelVideos.filter(isVideoScheduled).length;
+  const includedCount = channelVideos.filter(
+    (v) => v.managementScope === 'REGULAR' && v.isAmgEligible && isVideoPrivate(v) && !isVideoScheduled(v)
+  ).length;
+  const needsScopeCount = channelVideos.filter(
+    (v) => (v.managementScope === 'UNCLASSIFIED' || !v.managementScope) && isVideoPrivate(v) && !isVideoScheduled(v)
+  ).length;
+  const excludedCount = channelVideos.filter(
+    (v) => v.managementScope === 'EXCLUDED' || !isVideoPrivate(v) || isVideoScheduled(v)
+  ).length;
 
   const filteredVideos = videos.filter((v) => {
     const matchesSearch =
@@ -114,16 +141,34 @@ export const VideosView: React.FC<VideosViewProps> = ({
         ? !v.isManaged
         : v.isManaged;
     const matchesStatus = statusFilter === 'ALL' || v.managementStatus === statusFilter;
+
+    const isPrivate = isVideoPrivate(v);
+    const isScheduled = isVideoScheduled(v);
+    const isCandidate = isVideoCandidate(v);
+
+    const matchesPrivacy =
+      privacyFilter === 'ALL'
+        ? true
+        : privacyFilter === 'PRIVATE'
+        ? isPrivate
+        : privacyFilter === 'PUBLIC'
+        ? v.privacyStatus === 'public'
+        : v.privacyStatus === 'unlisted';
+
     const matchesScope =
       scopeFilter === 'ALL'
         ? true
+        : scopeFilter === 'CANDIDATE'
+        ? isCandidate
+        : scopeFilter === 'SCHEDULED'
+        ? isScheduled
         : scopeFilter === 'REGULAR'
-        ? v.managementScope === 'REGULAR' && v.isAmgEligible
+        ? v.managementScope === 'REGULAR' && v.isAmgEligible && isPrivate && !isScheduled
         : scopeFilter === 'UNCLASSIFIED'
-        ? v.managementScope === 'UNCLASSIFIED' || !v.managementScope
-        : v.managementScope === 'EXCLUDED';
+        ? (v.managementScope === 'UNCLASSIFIED' || !v.managementScope) && isPrivate && !isScheduled
+        : v.managementScope === 'EXCLUDED' || !isPrivate || isScheduled;
 
-    return matchesSearch && matchesChannel && matchesNiche && matchesManaged && matchesStatus && matchesScope;
+    return matchesSearch && matchesChannel && matchesNiche && matchesManaged && matchesStatus && matchesScope && matchesPrivacy;
   });
 
   const handleSelectAll = () => {
@@ -316,7 +361,28 @@ export const VideosView: React.FC<VideosViewProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
+          {/* VIDEO TERDETEKSI (Kandidat Mentah: Private && !publishAt) */}
+          <div
+            onClick={() => setScopeFilter(scopeFilter === 'CANDIDATE' ? 'ALL' : 'CANDIDATE')}
+            className={`p-3 rounded-xl border cursor-pointer transition ${
+              scopeFilter === 'CANDIDATE'
+                ? 'bg-amber-950/40 border-amber-500 ring-1 ring-amber-400'
+                : 'bg-neutral-950/60 border-neutral-800/80 hover:border-amber-700/60'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase font-bold text-amber-400 flex items-center gap-1.5">
+                <Film className="w-3.5 h-3.5" />
+                Video Terdeteksi (Kandidat)
+              </span>
+              <span className="text-lg font-black text-amber-400">{candidateCount}</span>
+            </div>
+            <p className="text-[11px] text-neutral-400 mt-1">
+              Hanya video private mentah tanpa jadwal YouTube yang siap masuk antrean otomasi.
+            </p>
+          </div>
+
           {/* AMG REGULAR / ELIGIBLE */}
           <div
             onClick={() => setScopeFilter(scopeFilter === 'REGULAR' ? 'ALL' : 'REGULAR')}
@@ -373,12 +439,12 @@ export const VideosView: React.FC<VideosViewProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-[10px] uppercase font-bold text-neutral-300 flex items-center gap-1.5">
                 <ShieldX className="w-3.5 h-3.5 text-neutral-400" />
-                Dikecualikan (Terlindungi)
+                Dikecualikan / Terjadwal
               </span>
               <span className="text-lg font-black text-neutral-300">{excludedCount}</span>
             </div>
             <p className="text-[11px] text-neutral-400 mt-1">
-              Video pribadi/lama yang dijamin tidak akan diubah, dipublikasikan, atau dipakai sebagai kursor.
+              Video public, unlisted, atau sudah terjadwal yang otomatis dikecualikan dari otomasi.
             </p>
           </div>
         </div>
@@ -476,10 +542,23 @@ export const VideosView: React.FC<VideosViewProps> = ({
             onChange={(e) => setScopeFilter(e.target.value)}
             className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer font-medium"
           >
-            <option value="ALL">Semua Lingkup ({videos.length})</option>
+            <option value="ALL">Semua Lingkup ({channelVideos.length})</option>
+            <option value="CANDIDATE">Video Terdeteksi / Private Mentah ({candidateCount})</option>
             <option value="REGULAR">AMG Reguler ({includedCount})</option>
             <option value="UNCLASSIFIED">Perlu Lingkup ({needsScopeCount})</option>
-            <option value="EXCLUDED">Dikecualikan / Terlindungi ({excludedCount})</option>
+            <option value="EXCLUDED">Dikecualikan / Terjadwal ({excludedCount})</option>
+          </select>
+
+          {/* Privacy Status Filter */}
+          <select
+            value={privacyFilter}
+            onChange={(e) => setPrivacyFilter(e.target.value)}
+            className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none cursor-pointer"
+          >
+            <option value="ALL">Semua Privasi</option>
+            <option value="PRIVATE">Hanya Private (Kandidat Valid)</option>
+            <option value="PUBLIC">Public (Dikecualikan)</option>
+            <option value="UNLISTED">Unlisted (Dikecualikan)</option>
           </select>
 
           {/* Managed vs Unmanaged */}
@@ -599,15 +678,17 @@ export const VideosView: React.FC<VideosViewProps> = ({
                       <td className="py-3.5 px-4">
                         <div className="flex items-center space-x-3">
                           <div className="relative shrink-0">
-                            <img
-                              src={
-                                video.thumbnailAssigned ||
-                                video.thumbnailBefore ||
-                                'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=120'
-                              }
-                              alt=""
-                              className="w-16 h-10 rounded-lg object-cover border border-neutral-700/60"
-                            />
+                            {video.thumbnailAssigned || video.thumbnailBefore ? (
+                              <img
+                                src={video.thumbnailAssigned || video.thumbnailBefore}
+                                alt=""
+                                className="w-16 h-10 rounded-lg object-cover border border-neutral-700/60"
+                              />
+                            ) : (
+                              <div className="w-16 h-10 rounded-lg bg-neutral-900 border border-neutral-700/60 flex items-center justify-center text-neutral-500">
+                                <Film className="w-4 h-4" />
+                              </div>
+                            )}
                             <span className="absolute bottom-1 right-1 text-[9px] px-1 py-0.2 rounded bg-black/80 font-mono text-neutral-300">
                               {video.definition ? video.definition.toUpperCase() : 'HD'}
                             </span>
@@ -615,18 +696,27 @@ export const VideosView: React.FC<VideosViewProps> = ({
                           <div>
                             <div className="font-semibold text-neutral-100 max-w-[240px] truncate flex items-center gap-1.5">
                               <span>{video.titleBefore}</span>
-                              {video.isSeeded ? (
-                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-400 font-mono shrink-0">
-                                  FIXTURE
-                                </span>
-                              ) : (
-                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 font-mono shrink-0 border border-emerald-800/40">
-                                  REAL YT
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 font-mono shrink-0 border border-emerald-800/40">
+                                REAL YT
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-neutral-500 font-mono mt-0.5 flex items-center gap-1.5 flex-wrap">
+                              <span>ID: {video.youtubeVideoId}</span>
+                              <span>•</span>
+                              <span
+                                className={`px-1.5 py-0.2 rounded font-semibold uppercase text-[9px] ${
+                                  video.privacyStatus === 'private'
+                                    ? 'bg-amber-950/80 text-amber-300 border border-amber-800/40'
+                                    : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
+                                }`}
+                              >
+                                {video.privacyStatus}
+                              </span>
+                              {(video.publishAt || video.scheduledPublishAt) && (
+                                <span className="px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-300 border border-purple-800/40 font-semibold text-[9px]">
+                                  Terjadwal
                                 </span>
                               )}
-                            </div>
-                            <div className="text-[10px] text-neutral-500 font-mono mt-0.5">
-                              ID: {video.youtubeVideoId} • {video.privacyStatus}
                             </div>
                             {video.exclusionReason && (
                               <div className="text-[10px] text-neutral-400 italic mt-0.5 max-w-[240px] truncate">
@@ -646,7 +736,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
                       <td className="py-3.5 px-4 whitespace-nowrap">
                         <div className="flex flex-col gap-1 items-start">
                           <span className="px-2 py-0.5 rounded-lg bg-neutral-800 text-neutral-200 font-semibold text-[11px]">
-                            {video.channelTitle || 'Ayam Warna'}
+                            {video.channelTitle || '-'}
                           </span>
                           {channelMap.get(video.channelId)?.nicheCategory && (
                             <NicheBadge
@@ -689,18 +779,16 @@ export const VideosView: React.FC<VideosViewProps> = ({
 
                       {/* Target Publish */}
                       <td className="py-3.5 px-4 whitespace-nowrap">
-                        {video.scheduledPublishAt ? (
+                        {video.publishAt || video.scheduledPublishAt ? (
                           <div className="text-neutral-200 font-medium">
-                            {new Date(video.scheduledPublishAt).toLocaleDateString([], {
+                            {new Date(video.publishAt || video.scheduledPublishAt!).toLocaleDateString([], {
                               day: 'numeric',
                               month: 'short',
                               year: 'numeric',
                             })}{' '}
-                            {isExcluded && (
-                              <span className="text-[10px] text-neutral-500 block font-mono">
-                                (Dikecualikan Manual)
-                              </span>
-                            )}
+                            <span className="text-[10px] text-purple-400 block font-mono">
+                              {video.publishAt ? '(Terjadwal YouTube)' : '(Terjadwal AMG)'}
+                            </span>
                           </div>
                         ) : (
                           <span className="text-neutral-500 italic">Belum Dijadwalkan</span>

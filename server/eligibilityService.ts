@@ -151,6 +151,27 @@ export function evaluateVideoEligibility(
     };
   }
 
+  // CHECK 1B — SCHEDULED PUBLISH CHECK
+  // Video must NOT have an existing scheduled publish time (publishAt must be empty/null).
+  const hasExistingPublishAt = Boolean(
+    video.scheduledPublishAt ||
+    (video as any).publishAt ||
+    (video as any).scheduledAt ||
+    (video as any).status?.publishAt
+  );
+  if (hasExistingPublishAt) {
+    return {
+      category: 'ALREADY_MANAGED',
+      isEligible: false,
+      isProtected: true,
+      amgStatus: 'SCHEDULED',
+      reason: `Video already has a scheduled publish time on YouTube (${video.scheduledPublishAt || (video as any).publishAt}). Already scheduled videos are excluded from candidate detection and pipeline.`,
+      eligibilityWindowDays: config.windowDays,
+      latestManagedUploadAt: channel.latestManagedUploadAt,
+      originalUploadAt: video.originalUploadAt,
+    };
+  }
+
   // CHECK 2 — ALREADY MANAGED / ENROLLED
   // If video is already managed, scheduled, verified, or completed, DO NOT re-process.
   const alreadyManagedStatuses: VideoManagementStatus[] = [

@@ -38,7 +38,7 @@ class DatabaseStore {
     autoSyncIntervalMinutes: 30,
     maxRetries: 3,
     apiQuotaDailyLimit: 10000,
-    apiQuotaUsed: 1420,
+    apiQuotaUsed: 0,
     googleClientId: process.env.GOOGLE_CLIENT_ID || '',
     googleClientSecretConfigured: !!process.env.GOOGLE_CLIENT_SECRET,
     youtubeApiKeyConfigured: !!process.env.YOUTUBE_API_KEY,
@@ -98,6 +98,7 @@ class DatabaseStore {
           this.settings = { ...this.settings, ...data.settings };
         }
         console.log(`[DatabaseStore] Loaded persistent database: ${this.channels.size} channels, ${this.videos.size} videos from ${this.dbFilePath}`);
+        this.clearSeededData();
         this.sanitizeBlockIntegrity();
         return;
       } catch (err) {
@@ -105,8 +106,9 @@ class DatabaseStore {
       }
     }
 
-    // Seed initial fixtures if file does not exist
+    // Seed master configurations only if file does not exist
     this.seedInitialData();
+    this.clearSeededData();
     this.saveToDisk();
   }
 
@@ -124,8 +126,8 @@ class DatabaseStore {
       }
       const hasRainTitle = ayamProfile.masterTitleIds.some(id => id.startsWith('title-'));
       if (hasRainTitle || ayamProfile.masterTitleIds.length === 0) {
-        ayamProfile.masterTitleIds = ['ayam-t-1', 'ayam-t-2', 'ayam-t-3'];
-        ayamProfile.masterThumbnailIds = ['ayam-th-1', 'ayam-th-2', 'ayam-th-3'];
+        ayamProfile.masterTitleIds = [];
+        ayamProfile.masterThumbnailIds = [];
         changed = true;
       }
     }
@@ -149,8 +151,8 @@ class DatabaseStore {
           timezone: 'Asia/Jakarta',
           startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
         },
-        masterTitleIds: ['title-1', 'title-2', 'title-3'],
-        masterThumbnailIds: ['thumb-1', 'thumb-2', 'thumb-3', 'thumb-4'],
+        masterTitleIds: [],
+        masterThumbnailIds: [],
         assignedChannelCount: 0,
         createdAt: '2026-09-15T08:00:00.000Z',
         updatedAt: '2026-09-20T08:00:00.000Z',
@@ -158,120 +160,33 @@ class DatabaseStore {
       changed = true;
     }
 
-    // 3. Ensure all Master Titles have explicit blockId and correct profileId
-    const ayamTitles = [
-      { id: 'ayam-t-1', text: 'Ayam Warna-Warni Lucu Bermain di Taman Hijau', orderIndex: 0 },
-      { id: 'ayam-t-2', text: 'Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria', orderIndex: 1 },
-      { id: 'ayam-t-3', text: 'Ayam Warna-Warni Lucu Bikin Tertawa Seharian', orderIndex: 2 },
-    ];
-    for (const at of ayamTitles) {
-      if (!this.masterTitles.has(at.id)) {
-        this.masterTitles.set(at.id, {
-          id: at.id,
-          blockId: 'profile-ayam-warna',
-          profileId: 'profile-ayam-warna',
-          text: at.text,
-          orderIndex: at.orderIndex,
-          isActive: true,
-          createdAt: '2026-09-15T08:00:00.000Z',
-        });
+    // 3. Ensure any user-created Master Titles and Thumbnails retain correct blockId
+    for (const t of this.masterTitles.values()) {
+      if (!t.blockId && t.profileId) {
+        t.blockId = t.profileId;
         changed = true;
-      } else {
-        const t = this.masterTitles.get(at.id)!;
-        if (t.profileId !== 'profile-ayam-warna' || t.blockId !== 'profile-ayam-warna') {
-          t.profileId = 'profile-ayam-warna';
-          t.blockId = 'profile-ayam-warna';
-          changed = true;
-        }
+      }
+    }
+    for (const th of this.masterThumbnails.values()) {
+      if (!th.blockId && th.profileId) {
+        th.blockId = th.profileId;
+        changed = true;
       }
     }
 
-    const rainTitles = [
-      { id: 'title-1', text: 'Tidur Nyenyak dengan Suara Hujan Deras di Hutan', orderIndex: 0 },
-      { id: 'title-2', text: 'Suara Hujan & Gemericik Air untuk Relaksasi Relaks', orderIndex: 1 },
-      { id: 'title-3', text: 'Hujan Malam di Kamar Cozy Pengantar Tidur Nyenyak', orderIndex: 2 },
-    ];
-    for (const rt of rainTitles) {
-      if (!this.masterTitles.has(rt.id)) {
-        this.masterTitles.set(rt.id, {
-          id: rt.id,
-          blockId: 'profile-relaksasi',
-          profileId: 'profile-relaksasi',
-          text: rt.text,
-          orderIndex: rt.orderIndex,
-          isActive: true,
-          createdAt: '2026-09-15T08:00:00.000Z',
-        });
-        changed = true;
-      } else {
-        const t = this.masterTitles.get(rt.id)!;
-        if (t.profileId !== 'profile-relaksasi' || t.blockId !== 'profile-relaksasi') {
-          t.profileId = 'profile-relaksasi';
-          t.blockId = 'profile-relaksasi';
-          changed = true;
-        }
-      }
+    // Sync profiles masterTitleIds and masterThumbnailIds strictly with existing user items
+    for (const p of this.profiles.values()) {
+      const validTitleIds = Array.from(this.masterTitles.values())
+        .filter(t => t.profileId === p.id || t.blockId === p.id)
+        .map(t => t.id);
+      const validThumbIds = Array.from(this.masterThumbnails.values())
+        .filter(th => th.profileId === p.id || th.blockId === p.id)
+        .map(th => th.id);
+      p.masterTitleIds = validTitleIds;
+      p.masterThumbnailIds = validThumbIds;
     }
 
-    // 4. Ensure all Master Thumbnails have explicit blockId and correct profileId
-    const ayamThumbs = [
-      { id: 'ayam-th-1', name: 'Ayam Warna Ceria TH1', url: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800&auto=format&fit=crop&q=80', orderIndex: 0 },
-      { id: 'ayam-th-2', name: 'Ayam Warna Bermain TH2', url: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800&auto=format&fit=crop&q=80', orderIndex: 1 },
-      { id: 'ayam-th-3', name: 'Ayam Warna Gemoy TH3', url: 'https://images.unsplash.com/photo-1563281577-a7be47e20db9?w=800&auto=format&fit=crop&q=80', orderIndex: 2 },
-    ];
-    for (const ath of ayamThumbs) {
-      if (!this.masterThumbnails.has(ath.id)) {
-        this.masterThumbnails.set(ath.id, {
-          id: ath.id,
-          blockId: 'profile-ayam-warna',
-          profileId: 'profile-ayam-warna',
-          name: ath.name,
-          url: ath.url,
-          orderIndex: ath.orderIndex,
-          isActive: true,
-          createdAt: '2026-09-15T08:00:00.000Z',
-        });
-        changed = true;
-      } else {
-        const th = this.masterThumbnails.get(ath.id)!;
-        if (th.profileId !== 'profile-ayam-warna' || th.blockId !== 'profile-ayam-warna') {
-          th.profileId = 'profile-ayam-warna';
-          th.blockId = 'profile-ayam-warna';
-          changed = true;
-        }
-      }
-    }
-
-    const rainThumbs = [
-      { id: 'thumb-1', name: 'Rain Window Aesthetic TH1', url: 'https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800&auto=format&fit=crop&q=80', orderIndex: 0 },
-      { id: 'thumb-2', name: 'Cozy Bedroom Rain TH2', url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80', orderIndex: 1 },
-      { id: 'thumb-3', name: 'Night Forest Rain TH3', url: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=800&auto=format&fit=crop&q=80', orderIndex: 2 },
-      { id: 'thumb-4', name: 'Soft Lantern Cabin TH4', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80', orderIndex: 3 },
-    ];
-    for (const rth of rainThumbs) {
-      if (!this.masterThumbnails.has(rth.id)) {
-        this.masterThumbnails.set(rth.id, {
-          id: rth.id,
-          blockId: 'profile-relaksasi',
-          profileId: 'profile-relaksasi',
-          name: rth.name,
-          url: rth.url,
-          orderIndex: rth.orderIndex,
-          isActive: true,
-          createdAt: '2026-09-15T08:00:00.000Z',
-        });
-        changed = true;
-      } else {
-        const th = this.masterThumbnails.get(rth.id)!;
-        if (th.profileId !== 'profile-relaksasi' || th.blockId !== 'profile-relaksasi') {
-          th.profileId = 'profile-relaksasi';
-          th.blockId = 'profile-relaksasi';
-          changed = true;
-        }
-      }
-    }
-
-    // 5. Ensure all channels have blockId set
+    // 4. Ensure all channels have blockId set
     for (const ch of this.channels.values()) {
       if (!ch.blockId && ch.contentProfileId) {
         ch.blockId = ch.contentProfileId;
@@ -279,25 +194,13 @@ class DatabaseStore {
       }
     }
 
-    // 6. Ensure all videos have blockId set and purge cross-niche leakage
+    // 5. Ensure all videos have blockId set
     for (const v of this.videos.values()) {
       const ch = this.channels.get(v.channelId);
       const targetBlockId = ch?.blockId || ch?.contentProfileId || v.contentProfileId || v.blockId;
       if (targetBlockId && v.blockId !== targetBlockId) {
         v.blockId = targetBlockId;
         changed = true;
-      }
-      if (targetBlockId === 'profile-ayam-warna') {
-        if (v.titleAssigned?.includes('Hujan') || v.titleAssigned?.includes('Tidur Nyenyak')) {
-          v.titleAssigned = 'Ayam Warna-Warni Lucu Bermain di Taman Hijau';
-          v.masterTitleId = 'ayam-t-1';
-          changed = true;
-        }
-        if (v.thumbnailAssigned?.includes('photo-1519692933481') || v.thumbnailAssigned?.includes('photo-1534447677768')) {
-          v.thumbnailAssigned = 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800';
-          v.masterThumbnailId = 'ayam-th-1';
-          changed = true;
-        }
       }
     }
 
@@ -401,9 +304,9 @@ class DatabaseStore {
         timezone: 'Asia/Jakarta',
         startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
       },
-      masterTitleIds: ['ayam-t-1', 'ayam-t-2', 'ayam-t-3'],
-      masterThumbnailIds: ['ayam-th-1', 'ayam-th-2', 'ayam-th-3'],
-      assignedChannelCount: 1,
+      masterTitleIds: [],
+      masterThumbnailIds: [],
+      assignedChannelCount: 0,
       createdAt: '2026-09-15T08:00:00.000Z',
       updatedAt: '2026-09-20T08:00:00.000Z',
     });
@@ -427,14 +330,14 @@ class DatabaseStore {
         timezone: 'Asia/Jakarta',
         startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
       },
-      masterTitleIds: ['title-1', 'title-2', 'title-3'],
-      masterThumbnailIds: ['thumb-1', 'thumb-2', 'thumb-3', 'thumb-4'],
+      masterTitleIds: [],
+      masterThumbnailIds: [],
       assignedChannelCount: 0,
       createdAt: '2026-09-15T08:00:00.000Z',
       updatedAt: '2026-09-20T08:00:00.000Z',
     });
 
-    // 1b. Content Profile: ASMR & SOUNDSCAPES (Niche: ASMR)
+    // 1c. Content Profile: ASMR & SOUNDSCAPES (Niche: ASMR)
     const asmrProfileId = 'profile-asmr';
     this.profiles.set(asmrProfileId, {
       id: asmrProfileId,
@@ -452,48 +355,14 @@ class DatabaseStore {
         timezone: 'Asia/Jakarta',
         startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
       },
-      masterTitleIds: ['asmr-t-1', 'asmr-t-2'],
-      masterThumbnailIds: ['asmr-th-1', 'asmr-th-2'],
-      assignedChannelCount: 1,
+      masterTitleIds: [],
+      masterThumbnailIds: [],
+      assignedChannelCount: 0,
       createdAt: '2026-09-16T08:00:00.000Z',
       updatedAt: '2026-09-20T08:00:00.000Z',
     });
-    this.masterTitles.set('asmr-t-1', {
-      id: 'asmr-t-1',
-      profileId: asmrProfileId,
-      text: 'Deep ASMR Rain Whispers for Insomnia Relief',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-16T08:00:00.000Z',
-    });
-    this.masterTitles.set('asmr-t-2', {
-      id: 'asmr-t-2',
-      profileId: asmrProfileId,
-      text: '100% Tingles Binaural Tapping & Gentle Brushing',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-16T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('asmr-th-1', {
-      id: 'asmr-th-1',
-      profileId: asmrProfileId,
-      name: 'ASMR Microphone Soft Light',
-      url: 'https://images.unsplash.com/photo-1590602847861-f357a9332bbc?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-16T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('asmr-th-2', {
-      id: 'asmr-th-2',
-      profileId: asmrProfileId,
-      name: 'Cozy Binaural Headphones Night',
-      url: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-16T08:00:00.000Z',
-    });
 
-    // 1c. Content Profile: MUROTTAL AL-QURAN (Niche: Murottal)
+    // 1d. Content Profile: MUROTTAL AL-QURAN (Niche: Murottal)
     const murottalProfileId = 'profile-murottal';
     this.profiles.set(murottalProfileId, {
       id: murottalProfileId,
@@ -511,763 +380,11 @@ class DatabaseStore {
         timezone: 'Asia/Jakarta',
         startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
       },
-      masterTitleIds: ['murottal-t-1', 'murottal-t-2'],
-      masterThumbnailIds: ['murottal-th-1', 'murottal-th-2'],
-      assignedChannelCount: 1,
+      masterTitleIds: [],
+      masterThumbnailIds: [],
+      assignedChannelCount: 0,
       createdAt: '2026-09-17T08:00:00.000Z',
       updatedAt: '2026-09-20T08:00:00.000Z',
-    });
-    this.masterTitles.set('murottal-t-1', {
-      id: 'murottal-t-1',
-      profileId: murottalProfileId,
-      text: 'Murottal Surat Ar-Rahman Penenang Jiwa & Hati',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-17T08:00:00.000Z',
-    });
-    this.masterTitles.set('murottal-t-2', {
-      id: 'murottal-t-2',
-      profileId: murottalProfileId,
-      text: 'Lantunan Surat Al-Mulk Pengantar Tidur Nyenyak',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-17T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('murottal-th-1', {
-      id: 'murottal-th-1',
-      profileId: murottalProfileId,
-      name: 'Quran Mosque Silhouette',
-      url: 'https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-17T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('murottal-th-2', {
-      id: 'murottal-th-2',
-      profileId: murottalProfileId,
-      name: 'Holy Quran Wooden Rehal',
-      url: 'https://images.unsplash.com/photo-1609599006353-e629aaabfeae?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-17T08:00:00.000Z',
-    });
-
-    // 2a. Dynamic Master Titles: AYAM WARNA-WARNI
-    this.masterTitles.set('ayam-t-1', {
-      id: 'ayam-t-1',
-      blockId: profileId,
-      profileId,
-      text: 'Ayam Warna-Warni Lucu Bermain di Taman Hijau',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterTitles.set('ayam-t-2', {
-      id: 'ayam-t-2',
-      blockId: profileId,
-      profileId,
-      text: 'Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterTitles.set('ayam-t-3', {
-      id: 'ayam-t-3',
-      blockId: profileId,
-      profileId,
-      text: 'Ayam Warna-Warni Lucu Bikin Tertawa Seharian',
-      orderIndex: 2,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-
-    // 2b. Dynamic Master Titles: SUARA ALAM & ASMR HUJAN
-    this.masterTitles.set('title-1', {
-      id: 'title-1',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      text: 'Tidur Nyenyak dengan Suara Hujan Deras di Hutan',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterTitles.set('title-2', {
-      id: 'title-2',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      text: 'Suara Hujan & Gemericik Air untuk Relaksasi Relaks',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterTitles.set('title-3', {
-      id: 'title-3',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      text: 'Hujan Malam di Kamar Cozy Pengantar Tidur Nyenyak',
-      orderIndex: 2,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-
-    // 3a. Dynamic Master Thumbnails: AYAM WARNA-WARNI
-    this.masterThumbnails.set('ayam-th-1', {
-      id: 'ayam-th-1',
-      blockId: profileId,
-      profileId,
-      name: 'Ayam Warna Ceria TH1',
-      url: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('ayam-th-2', {
-      id: 'ayam-th-2',
-      blockId: profileId,
-      profileId,
-      name: 'Ayam Warna Bermain TH2',
-      url: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('ayam-th-3', {
-      id: 'ayam-th-3',
-      blockId: profileId,
-      profileId,
-      name: 'Ayam Warna Gemoy TH3',
-      url: 'https://images.unsplash.com/photo-1563281577-a7be47e20db9?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 2,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-
-    // 3b. Dynamic Master Thumbnails: SUARA ALAM & ASMR HUJAN
-    this.masterThumbnails.set('thumb-1', {
-      id: 'thumb-1',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      name: 'Rain Window Aesthetic TH1',
-      url: 'https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 0,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('thumb-2', {
-      id: 'thumb-2',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      name: 'Cozy Bedroom Rain TH2',
-      url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 1,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('thumb-3', {
-      id: 'thumb-3',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      name: 'Night Forest Rain TH3',
-      url: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 2,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-    this.masterThumbnails.set('thumb-4', {
-      id: 'thumb-4',
-      blockId: relaksasiProfileId,
-      profileId: relaksasiProfileId,
-      name: 'Soft Lantern Cabin TH4',
-      url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800&auto=format&fit=crop&q=80',
-      orderIndex: 3,
-      isActive: true,
-      createdAt: '2026-09-15T08:00:00.000Z',
-    });
-
-    // 4. Primary Channel: Ayam Warna (Fixture / Initial Template)
-    // Note: 28 September 2026 16:00 WIB = 2026-09-28T09:00:00.000Z
-    const channel1Id = 'chan-ayam-warna';
-    this.channels.set(channel1Id, {
-      id: channel1Id,
-      youtubeChannelId: 'UC_ayam_warna_official',
-      title: '[DEMO FIXTURE] Ayam Warna',
-      customUrl: '@ayamwarna_id',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=160&auto=format&fit=crop&q=80',
-      status: 'DISCONNECTED', // Explicitly Disconnected until OAuth is authorized
-      monetizationStatus: 'MONETIZED',
-      watchHours: 12450,
-      revenue: {
-        adSenseReguler: 18500000,
-        liveStream: 3200000,
-        ytShopping: 2800000,
-        channelMemberships: 1500000,
-        totalChannelRevenue: 26000000,
-      },
-      contentProfileId: profileId,
-      nicheCategory: 'Ayam Warna Warni',
-      nicheBadge: 'amber',
-      publishFrequency: '1/day',
-      publishTime: '16:00',
-      timezone: 'Asia/Jakarta',
-      useProfileSchedule: false,
-      scheduleConfig: {
-        mode: 'DAILY',
-        videosPerDay: 1,
-        times: ['16:00'],
-        timezone: 'Asia/Jakarta',
-        startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-      },
-      eligibilityWindowDays: 7,
-      eligibleTitlePatterns: ['Salinan dari A', 'Copy of A'],
-      autoEnroll: false, // Default ASK_BEFORE_ADDING
-      latestManagedUploadAt: '2026-09-23T10:15:00.000Z', // Critical Cutoff: 23 Sep 10:15
-      latestManagedScheduledAt: '2026-09-28T09:00:00.000Z', // 28 September 2026 16:00 WIB
-      lastScheduledPublishAt: '2026-09-28T09:00:00.000Z',
-      rotationTitleIndex: 0,
-      rotationThumbnailIndex: 0,
-      lastSyncAt: '2026-09-24T08:00:00.000Z',
-      uploadPlaylistId: 'UU_ayam_warna_official',
-      subscriberCount: 24500,
-      videoCount: 184,
-      unmanagedVideoCount: 10,
-      hasOAuthConfigured: false,
-      isSeeded: true,
-      createdAt: '2026-08-01T00:00:00.000Z',
-      updatedAt: '2026-09-24T08:00:00.000Z',
-    });
-
-    // Secondary Channel: Suara Alam Indonesia (Niche: Music / Ambience)
-    const channel2Id = 'chan-suara-alam';
-    this.channels.set(channel2Id, {
-      id: channel2Id,
-      youtubeChannelId: 'UC_suara_alam_nusantara',
-      title: '[DEMO FIXTURE] Suara Alam Nusantara',
-      customUrl: '@suaraalam_id',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1448375240586-882707db888b?w=160&auto=format&fit=crop&q=80',
-      status: 'DISCONNECTED',
-      monetizationStatus: 'ALMOST_MONETIZED',
-      watchHours: 3250, // Progres 3.250 / 4.000 jam
-      revenue: {
-        adSenseReguler: 0,
-        liveStream: 0,
-        ytShopping: 450000,
-        channelMemberships: 0,
-        totalChannelRevenue: 450000,
-      },
-      contentProfileId: profileId,
-      nicheCategory: 'Music',
-      nicheBadge: 'cyan',
-      publishFrequency: '1/day',
-      publishTime: '16:00',
-      timezone: 'Asia/Jakarta',
-      useProfileSchedule: false,
-      scheduleConfig: {
-        mode: 'DAILY',
-        videosPerDay: 1,
-        times: ['16:00'],
-        timezone: 'Asia/Jakarta',
-        startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-      },
-      eligibilityWindowDays: 7,
-      eligibleTitlePatterns: ['Salinan dari A', 'Copy of A'],
-      autoEnroll: false,
-      latestManagedUploadAt: '2026-09-20T10:00:00.000Z',
-      latestManagedScheduledAt: '2026-09-28T09:00:00.000Z',
-      lastScheduledPublishAt: '2026-09-28T09:00:00.000Z',
-      lastSyncAt: '',
-      uploadPlaylistId: 'UU_suara_alam_nusantara',
-      subscriberCount: 890, // 890 / 1.000 subscriber
-      videoCount: 42,
-      unmanagedVideoCount: 0,
-      hasOAuthConfigured: false,
-      isSeeded: true,
-      createdAt: '2026-08-10T00:00:00.000Z',
-      updatedAt: '2026-09-22T14:10:00.000Z',
-    });
-
-    // Tertiary Channel: Whisper ASMR ID (Niche: ASMR)
-    const channel3Id = 'chan-whisper-asmr';
-    this.channels.set(channel3Id, {
-      id: channel3Id,
-      youtubeChannelId: 'UC_whisper_asmr_id',
-      title: 'Whisper Binaural ASMR Indonesia',
-      customUrl: '@whisperasmr_id',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1590602847861-f357a9332bbc?w=160&auto=format&fit=crop&q=80',
-      status: 'DISCONNECTED',
-      monetizationStatus: 'MONETIZED',
-      watchHours: 8900,
-      revenue: {
-        adSenseReguler: 12200000,
-        liveStream: 4500000,
-        ytShopping: 1800000,
-        channelMemberships: 2100000,
-        totalChannelRevenue: 20600000,
-      },
-      contentProfileId: asmrProfileId,
-      nicheCategory: 'ASMR',
-      nicheBadge: 'purple',
-      publishFrequency: '1/day',
-      publishTime: '21:00',
-      timezone: 'Asia/Jakarta',
-      useProfileSchedule: true,
-      scheduleConfig: {
-        mode: 'DAILY',
-        videosPerDay: 1,
-        times: ['21:00'],
-        timezone: 'Asia/Jakarta',
-        startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-      },
-      eligibilityWindowDays: 7,
-      eligibleTitlePatterns: ['Salinan dari A', 'Copy of A', 'ASMR Raw'],
-      autoEnroll: false,
-      latestManagedUploadAt: '2026-09-22T10:00:00.000Z',
-      latestManagedScheduledAt: '2026-09-29T14:00:00.000Z',
-      lastScheduledPublishAt: '2026-09-29T14:00:00.000Z',
-      lastSyncAt: '2026-09-24T06:00:00.000Z',
-      uploadPlaylistId: 'UU_whisper_asmr_id',
-      subscriberCount: 15200,
-      videoCount: 64,
-      unmanagedVideoCount: 2,
-      hasOAuthConfigured: false,
-      isSeeded: true,
-      createdAt: '2026-08-20T00:00:00.000Z',
-      updatedAt: '2026-09-24T06:00:00.000Z',
-    });
-
-    // Quaternary Channel: Cahaya Murottal Quran (Niche: Murottal)
-    const channel4Id = 'chan-murottal-quran';
-    this.channels.set(channel4Id, {
-      id: channel4Id,
-      youtubeChannelId: 'UC_cahaya_murottal_id',
-      title: 'Cahaya Murottal Al-Quran',
-      customUrl: '@cahayamurottal',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?w=160&auto=format&fit=crop&q=80',
-      status: 'DISCONNECTED',
-      monetizationStatus: 'MONETIZED',
-      watchHours: 24800,
-      revenue: {
-        adSenseReguler: 28400000,
-        liveStream: 5600000,
-        ytShopping: 3100000,
-        channelMemberships: 3900000,
-        totalChannelRevenue: 41000000,
-      },
-      contentProfileId: murottalProfileId,
-      nicheCategory: 'Murottal',
-      nicheBadge: 'emerald',
-      publishFrequency: '2/day',
-      publishTime: '05:00, 18:00',
-      timezone: 'Asia/Jakarta',
-      useProfileSchedule: true,
-      scheduleConfig: {
-        mode: 'CUSTOM_DAILY_TIMES',
-        videosPerDay: 2,
-        times: ['05:00', '18:00'],
-        timezone: 'Asia/Jakarta',
-        startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-      },
-      eligibilityWindowDays: 7,
-      eligibleTitlePatterns: ['Salinan dari A', 'Copy of A', 'Juz'],
-      autoEnroll: false,
-      latestManagedUploadAt: '2026-09-21T10:00:00.000Z',
-      latestManagedScheduledAt: '2026-10-14T11:00:00.000Z',
-      lastScheduledPublishAt: '2026-10-14T11:00:00.000Z',
-      lastSyncAt: '2026-09-24T07:00:00.000Z',
-      uploadPlaylistId: 'UU_cahaya_murottal_id',
-      subscriberCount: 38400,
-      videoCount: 112,
-      unmanagedVideoCount: 4,
-      hasOAuthConfigured: false,
-      isSeeded: true,
-      createdAt: '2026-08-05T00:00:00.000Z',
-      updatedAt: '2026-09-24T07:00:00.000Z',
-    });
-
-    // =========================================================================
-    // 5. PHASE 2 ACCEPTANCE TEST DATASET (Requirement 32 & 33)
-    // - 10 Old Private Videos (> 7 days, uploaded 10 Sep) -> PROTECTED_OLD
-    // - 5 Personal Private Videos (uploaded before cutoff or personal title) -> PROTECTED_BY_CUTOFF / UNCLASSIFIED
-    // - 10 New Candidate Videos (uploaded 24 Sep, title "Copy of A") -> NEW_PRIVATE_CANDIDATE
-    // - 3 Videos with Wrong Title (uploaded 24 Sep) -> UNCLASSIFIED
-    // - 2 Already Managed Videos (uploaded 18-19 Sep, scheduled 27-28 Sep) -> ALREADY_MANAGED
-    // =========================================================================
-
-    // A. 10 OLD PRIVATE VIDEOS (Uploaded 10 September, outside 7-day window -> PROTECTED_OLD)
-    for (let i = 1; i <= 10; i++) {
-      const vidId = `vid-old-${String(i).padStart(3, '0')}`;
-      this.videos.set(vidId, {
-        id: vidId,
-        youtubeVideoId: `yt_old_${1000 + i}`,
-        channelId: channel1Id,
-        channelTitle: '[DEMO FIXTURE] Ayam Warna',
-        titleBefore: 'Copy of A',
-        titleAssigned: '',
-        thumbnailBefore: 'https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=400',
-        thumbnailAssigned: '',
-        originalUploadAt: `2026-09-10T10:${String(i).padStart(2, '0')}:00.000Z`,
-        processingStatus: 'processed',
-        privacyStatus: 'private',
-        managementStatus: 'PROTECTED_OLD',
-        amgStatus: 'PROTECTED_OLD',
-        safetyCategory: 'PROTECTED_OLD',
-        managementScope: 'EXCLUDED',
-        isAmgEligible: false,
-        isProtected: true,
-        protectionReason: 'Uploaded 14 days ago (outside 7-day eligibility window). Historical video.',
-        isManaged: false,
-        isSeeded: true,
-        retryCount: 0,
-        definition: 'hd',
-        duration: 'PT3H15M00S',
-        createdAt: '2026-09-10T10:00:00.000Z',
-        updatedAt: '2026-09-24T08:00:00.000Z',
-      });
-    }
-
-    // B. 5 PERSONAL PRIVATE VIDEOS
-    // CRITICAL TEST PAIR (Requirement 33):
-    // Video 1: Uploaded 23 Sep 09:00 (BEFORE cutoff 23 Sep 10:15) with title "Copy of A" -> MUST BE PROTECTED_BY_CUTOFF!
-    this.videos.set('vid-personal-cutoff-01', {
-      id: 'vid-personal-cutoff-01',
-      youtubeVideoId: 'yt_personal_cutoff_01',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'Copy of A',
-      titleAssigned: '',
-      thumbnailBefore: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=400',
-      thumbnailAssigned: '',
-      originalUploadAt: '2026-09-23T09:00:00.000Z', // 23 Sep 09:00 < 23 Sep 10:15
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      managementStatus: 'PROTECTED_BY_CUTOFF',
-      amgStatus: 'PROTECTED_BY_CUTOFF',
-      safetyCategory: 'PROTECTED_BY_CUTOFF',
-      managementScope: 'EXCLUDED',
-      isAmgEligible: false,
-      isProtected: true,
-      protectionReason: 'Uploaded before/at managed cutoff (23 Sep 2026 10:15). Protected historical/personal video.',
-      isManaged: false,
-      isSeeded: true,
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT1H20M00S',
-      createdAt: '2026-09-23T09:00:00.000Z',
-      updatedAt: '2026-09-24T08:00:00.000Z',
-    });
-
-    // Video 2: Uploaded 22 Sep 20:00 (BEFORE cutoff) with title "Copy of A" -> PROTECTED_BY_CUTOFF
-    this.videos.set('vid-personal-cutoff-02', {
-      id: 'vid-personal-cutoff-02',
-      youtubeVideoId: 'yt_personal_cutoff_02',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'Copy of A',
-      titleAssigned: '',
-      thumbnailBefore: 'https://images.unsplash.com/photo-1515694346937-94d85e41e6f0?w=400',
-      thumbnailAssigned: '',
-      originalUploadAt: '2026-09-22T20:00:00.000Z',
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      managementStatus: 'PROTECTED_BY_CUTOFF',
-      amgStatus: 'PROTECTED_BY_CUTOFF',
-      safetyCategory: 'PROTECTED_BY_CUTOFF',
-      managementScope: 'EXCLUDED',
-      isAmgEligible: false,
-      isProtected: true,
-      protectionReason: 'Uploaded before/at managed cutoff (23 Sep 2026 10:15). Protected historical/personal video.',
-      isManaged: false,
-      isSeeded: true,
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT2H40M00S',
-      createdAt: '2026-09-22T20:00:00.000Z',
-      updatedAt: '2026-09-24T08:00:00.000Z',
-    });
-
-    // Video 3: Personal Archive (Vacation) -> EXCLUDED / UNCLASSIFIED
-    this.videos.set('vid-personal-001', {
-      id: 'vid-personal-001',
-      youtubeVideoId: 'yt_personal_bali_trip',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'Personal Bali Vacation Raw Footage.mp4',
-      titleAssigned: '',
-      thumbnailBefore: 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=400',
-      thumbnailAssigned: '',
-      originalUploadAt: '2026-09-21T08:00:00.000Z',
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      managementStatus: 'EXCLUDED',
-      amgStatus: 'EXCLUDED',
-      safetyCategory: 'EXCLUDED',
-      managementScope: 'EXCLUDED',
-      isAmgEligible: false,
-      isProtected: true,
-      exclusionReason: 'Personal family archive - strictly excluded from AMG automation',
-      isManaged: false,
-      isSeeded: true,
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT45M12S',
-      createdAt: '2026-09-21T08:00:00.000Z',
-      updatedAt: '2026-09-24T08:00:00.000Z',
-    });
-
-    // Video 4: Acoustic Guitar Practice Draft -> EXCLUDED
-    this.videos.set('vid-personal-002', {
-      id: 'vid-personal-002',
-      youtubeVideoId: 'yt_personal_guitar_backup',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'My Acoustic Guitar Practice Draft.mp4',
-      titleAssigned: '',
-      thumbnailBefore: 'https://images.unsplash.com/photo-1510915361894-db8b60106cb1?w=400',
-      thumbnailAssigned: '',
-      originalUploadAt: '2026-09-22T14:00:00.000Z',
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      managementStatus: 'EXCLUDED',
-      amgStatus: 'EXCLUDED',
-      safetyCategory: 'EXCLUDED',
-      managementScope: 'EXCLUDED',
-      isAmgEligible: false,
-      isProtected: true,
-      exclusionReason: 'Personal practice draft - excluded from automation',
-      isManaged: false,
-      isSeeded: true,
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT15M30S',
-      createdAt: '2026-09-22T14:00:00.000Z',
-      updatedAt: '2026-09-24T08:00:00.000Z',
-    });
-
-    // Video 5: Family Birthday Recording -> UNCLASSIFIED
-    this.videos.set('vid-personal-003', {
-      id: 'vid-personal-003',
-      youtubeVideoId: 'yt_personal_birthday',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'Family Birthday Party Video.mp4',
-      titleAssigned: '',
-      thumbnailBefore: 'https://images.unsplash.com/photo-1464349095431-e9a21285b5f3?w=400',
-      thumbnailAssigned: '',
-      originalUploadAt: '2026-09-23T06:00:00.000Z',
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      managementStatus: 'UNCLASSIFIED',
-      amgStatus: 'UNCLASSIFIED',
-      safetyCategory: 'UNCLASSIFIED',
-      managementScope: 'UNCLASSIFIED',
-      isAmgEligible: false,
-      isProtected: true,
-      protectionReason: 'Title does not match eligible patterns [Salinan dari A, Copy of A].',
-      isManaged: false,
-      isSeeded: true,
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT25M00S',
-      createdAt: '2026-09-23T06:00:00.000Z',
-      updatedAt: '2026-09-24T08:00:00.000Z',
-    });
-
-    // C. 10 NEW CANDIDATE VIDEOS (Uploaded 24 Sep 2026, title "Copy of A", privacy "private" -> NEW_PRIVATE_CANDIDATE)
-    for (let i = 1; i <= 10; i++) {
-      const vidId = `vid-cand-${String(i).padStart(3, '0')}`;
-      this.videos.set(vidId, {
-        id: vidId,
-        youtubeVideoId: `yt_cand_${2000 + i}`,
-        channelId: channel1Id,
-        channelTitle: '[DEMO FIXTURE] Ayam Warna',
-        titleBefore: i % 2 === 0 ? 'Salinan dari A' : 'Copy of A',
-        titleAssigned: '',
-        thumbnailBefore: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=400',
-        thumbnailAssigned: '',
-        originalUploadAt: `2026-09-24T09:${String(i * 2).padStart(2, '0')}:00.000Z`,
-        processingStatus: 'processed',
-        privacyStatus: 'private',
-        managementStatus: 'NEW_PRIVATE_CANDIDATE',
-        amgStatus: 'NEW_PRIVATE_CANDIDATE',
-        safetyCategory: 'NEW_PRIVATE_CANDIDATE',
-        managementScope: 'UNCLASSIFIED',
-        isAmgEligible: false, // Pending explicit enrollment (Default ASK_BEFORE_ADDING)
-        isEnrolled: false,
-        isProtected: false,
-        matchedTitlePattern: i % 2 === 0 ? 'Salinan dari A' : 'Copy of A',
-        isManaged: false,
-        isSeeded: true,
-        contentProfileId: profileId,
-        retryCount: 0,
-        definition: 'hd',
-        duration: 'PT3H30M00S',
-        createdAt: `2026-09-24T09:${String(i * 2).padStart(2, '0')}:00.000Z`,
-        updatedAt: '2026-09-24T09:30:00.000Z',
-      });
-    }
-
-    // D. 3 VIDEOS WITH WRONG TITLE (Uploaded 24 Sep, private, but title doesn't match -> UNCLASSIFIED)
-    const wrongTitles = [
-      'My Unrelated Stream Recording.mp4',
-      'Experiment Audio Draft.mp4',
-      'Random Test Capture.mp4',
-    ];
-    for (let i = 1; i <= 3; i++) {
-      const vidId = `vid-wrong-${String(i).padStart(3, '0')}`;
-      this.videos.set(vidId, {
-        id: vidId,
-        youtubeVideoId: `yt_wrong_${3000 + i}`,
-        channelId: channel1Id,
-        channelTitle: '[DEMO FIXTURE] Ayam Warna',
-        titleBefore: wrongTitles[i - 1],
-        titleAssigned: '',
-        thumbnailBefore: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=400',
-        thumbnailAssigned: '',
-        originalUploadAt: `2026-09-24T11:0${i}:00.000Z`,
-        processingStatus: 'processed',
-        privacyStatus: 'private',
-        managementStatus: 'UNCLASSIFIED',
-        amgStatus: 'UNCLASSIFIED',
-        safetyCategory: 'UNCLASSIFIED',
-        managementScope: 'UNCLASSIFIED',
-        isAmgEligible: false,
-        isProtected: true,
-        protectionReason: 'Title pattern does not match [Salinan dari A, Copy of A].',
-        isManaged: false,
-        isSeeded: true,
-        retryCount: 0,
-        definition: 'hd',
-        duration: 'PT1H10M00S',
-        createdAt: `2026-09-24T11:0${i}:00.000Z`,
-        updatedAt: '2026-09-24T11:00:00.000Z',
-      });
-    }
-
-    // E. 2 ALREADY MANAGED VIDEOS (Historical batch -> ALREADY_MANAGED)
-    this.videos.set('vid-managed-001', {
-      id: 'vid-managed-001',
-      youtubeVideoId: 'yt_hist_0927',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'Copy of A',
-      titleAssigned: 'Ayam Warna-Warni Lucu Bermain di Taman Hijau',
-      thumbnailBefore: '',
-      thumbnailAssigned: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=800',
-      originalUploadAt: '2026-09-18T10:00:00.000Z',
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      scheduledPublishAt: '2026-09-27T09:00:00.000Z', // 27 Sept 2026 16:00 WIB
-      managementStatus: 'COMPLETED',
-      amgStatus: 'COMPLETED',
-      safetyCategory: 'ALREADY_MANAGED',
-      managementScope: 'REGULAR',
-      isAmgEligible: true,
-      isEnrolled: true,
-      isManaged: true, // ALREADY MANAGED
-      isSeeded: true,
-      blockId: profileId,
-      contentProfileId: profileId,
-      masterTitleId: 'ayam-t-1',
-      masterThumbnailId: 'ayam-th-1',
-      automationBatchId: 'AMG-BATCH-0001',
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT4H00M00S',
-      createdAt: '2026-09-18T10:00:00.000Z',
-      updatedAt: '2026-09-27T09:00:00.000Z',
-    });
-
-    this.videos.set('vid-managed-002', {
-      id: 'vid-managed-002',
-      youtubeVideoId: 'yt_hist_0928',
-      channelId: channel1Id,
-      channelTitle: '[DEMO FIXTURE] Ayam Warna',
-      titleBefore: 'Copy of A',
-      titleAssigned: 'Ayam Warna-Warni Gemoy Berenang & Bernyanyi Ceria',
-      thumbnailBefore: '',
-      thumbnailAssigned: 'https://images.unsplash.com/photo-1516467508483-a7212febe31a?w=800',
-      originalUploadAt: '2026-09-19T10:00:00.000Z',
-      processingStatus: 'processed',
-      privacyStatus: 'private',
-      scheduledPublishAt: '2026-09-28T09:00:00.000Z', // 28 Sept 2026 16:00 WIB (LATEST MANAGED SCHEDULE)
-      managementStatus: 'COMPLETED',
-      amgStatus: 'COMPLETED',
-      safetyCategory: 'ALREADY_MANAGED',
-      managementScope: 'REGULAR',
-      isAmgEligible: true,
-      isEnrolled: true,
-      isManaged: true, // ALREADY MANAGED
-      isSeeded: true,
-      blockId: profileId,
-      contentProfileId: profileId,
-      masterTitleId: 'ayam-t-2',
-      masterThumbnailId: 'ayam-th-2',
-      automationBatchId: 'AMG-BATCH-0001',
-      retryCount: 0,
-      definition: 'hd',
-      duration: 'PT3H45M12S',
-      createdAt: '2026-09-19T10:00:00.000Z',
-      updatedAt: '2026-09-28T09:00:00.000Z',
-    });
-
-    // 7. Seed Automation Batch #0001
-    this.automationBatches.set('AMG-BATCH-0001', {
-      id: 'AMG-BATCH-0001',
-      batchNumber: 'AMG-BATCH-0001',
-      channelId: channel1Id,
-      channelTitle: 'Ayam Warna',
-      profileId,
-      profileName: 'AYAM WARNA',
-      isDryRun: false,
-      status: 'completed',
-      startedAt: '2026-09-19T11:00:00.000Z',
-      completedAt: '2026-09-19T11:04:12.000Z',
-      detectedCount: 2,
-      processedCount: 2,
-      scheduledCount: 2,
-      completedCount: 2,
-      failedCount: 0,
-      isSeeded: true,
-    });
-
-    // 8. Seed Activity Logs
-    this.logActivity({
-      user: 'Administrator',
-      channelId: channel1Id,
-      channelTitle: 'Ayam Warna',
-      operation: 'Channel Synchronized',
-      previousValue: '0 videos detected',
-      newValue: '15 unmanaged videos detected (HD Ready)',
-      result: 'SUCCESS',
-    });
-
-    this.logActivity({
-      user: 'Scheduler Engine',
-      channelId: channel1Id,
-      channelTitle: 'Ayam Warna',
-      operation: 'Schedule Cursor Reconciled',
-      previousValue: 'None',
-      newValue: 'Latest scheduled: 30 September 2026 16:00 WIB',
-      result: 'SUCCESS',
-    });
-
-    // 9. Notifications
-    this.notifications.set('notif-1', {
-      id: 'notif-1',
-      type: 'info',
-      title: '15 Unmanaged Videos Detected',
-      message: 'Channel "Ayam Warna" has 15 HD-ready private videos awaiting Master Title, Thumbnail, and Scheduling automation.',
-      channelId: channel1Id,
-      read: false,
-      createdAt: '2026-09-23T08:35:00.000Z',
-    });
-
-    this.notifications.set('notif-2', {
-      id: 'notif-2',
-      type: 'warning',
-      title: 'Google OAuth Setup Reminder',
-      message: 'To execute real YouTube Data API mutations, provide Google OAuth Client ID & Secret in Settings.',
-      read: false,
-      createdAt: '2026-09-23T08:30:00.000Z',
     });
   }
 
@@ -1307,22 +424,122 @@ class DatabaseStore {
     let removedBatches = 0;
 
     for (const [id, c] of this.channels.entries()) {
-      if (c.isSeeded) {
+      const isFixture =
+        c.isSeeded ||
+        id === 'chan-ayam-warna' ||
+        id === 'chan-suara-alam' ||
+        id === 'chan-whisper-asmr' ||
+        id === 'chan-murottal-quran' ||
+        id === 'chan-1790528541320' ||
+        id === 'chan-1790528541332' ||
+        c.title?.includes('[DEMO FIXTURE]') ||
+        c.title?.includes('Demo Fixture') ||
+        c.title?.toLowerCase().includes('fixture');
+
+      if (isFixture) {
         this.channels.delete(id);
         removedChannels++;
       }
     }
+
     for (const [id, v] of this.videos.entries()) {
-      if (v.isSeeded) {
+      const isFixture =
+        v.isSeeded ||
+        id.startsWith('vid-m-') ||
+        id.startsWith('vid-old-') ||
+        id.startsWith('vid-cand-') ||
+        id.startsWith('vid-wrong-') ||
+        id.startsWith('vid-personal-') ||
+        id.startsWith('vid-test-') ||
+        v.titleBefore?.toLowerCase().includes('copy of a') ||
+        v.titleBefore?.toLowerCase().includes('salinan dari a') ||
+        v.titleBefore?.includes('[DEMO FIXTURE]') ||
+        v.channelTitle?.includes('[DEMO FIXTURE]') ||
+        v.channelTitle?.toLowerCase().includes('fixture');
+
+      if (isFixture) {
         this.videos.delete(id);
         removedVideos++;
       }
     }
+
     for (const [id, b] of this.automationBatches.entries()) {
-      if (b.isSeeded) {
+      const isFixture =
+        b.isSeeded ||
+        id.startsWith('batch-001') ||
+        id.startsWith('batch-002') ||
+        b.channelId === 'chan-ayam-warna' ||
+        b.channelId === 'chan-suara-alam';
+
+      if (isFixture) {
         this.automationBatches.delete(id);
         removedBatches++;
       }
+    }
+
+    // Purge fake notifications referencing fixtures
+    for (const [id, n] of this.notifications.entries()) {
+      if (
+        id === 'notif-1' ||
+        id.startsWith('notif-buffer-chan-ayam-warna') ||
+        id.startsWith('notif-buffer-chan-suara-alam') ||
+        id.startsWith('notif-buffer-chan-whisper-asmr') ||
+        id.startsWith('notif-buffer-chan-murottal-quran') ||
+        id.startsWith('notif-buffer-chan-1790528541320') ||
+        id.startsWith('notif-buffer-chan-1790528541332') ||
+        n.channelId === 'chan-ayam-warna' ||
+        n.channelId === 'chan-suara-alam'
+      ) {
+        this.notifications.delete(id);
+      }
+    }
+
+    // Purge fake activity logs referencing fixtures
+    this.activityLogs = this.activityLogs.filter(
+      (l) =>
+        l.channelId !== 'chan-ayam-warna' &&
+        l.channelId !== 'chan-suara-alam' &&
+        l.channelId !== 'chan-1790528541320' &&
+        l.channelId !== 'chan-1790528541332' &&
+        !l.channelTitle?.includes('[DEMO FIXTURE]') &&
+        !l.channelTitle?.toLowerCase().includes('fixture')
+    );
+
+    // Purge fake preset titles
+    const presetTitleIds = new Set([
+      'ayam-t-1', 'ayam-t-2', 'ayam-t-3',
+      'title-1', 'title-2', 'title-3',
+      'asmr-t-1', 'asmr-t-2',
+      'murottal-t-1', 'murottal-t-2',
+    ]);
+    for (const [id, t] of this.masterTitles.entries()) {
+      if (presetTitleIds.has(id) || t.text?.includes('Tidur Nyenyak dengan Suara Hujan') || t.text?.includes('Ayam Warna-Warni Lucu')) {
+        this.masterTitles.delete(id);
+      }
+    }
+
+    // Purge fake preset thumbnails
+    const presetThumbIds = new Set([
+      'ayam-th-1', 'ayam-th-2', 'ayam-th-3',
+      'thumb-1', 'thumb-2', 'thumb-3', 'thumb-4',
+      'asmr-th-1', 'asmr-th-2',
+      'murottal-th-1', 'murottal-th-2',
+    ]);
+    for (const [id, th] of this.masterThumbnails.entries()) {
+      if (presetThumbIds.has(id) || th.url?.includes('images.unsplash.com')) {
+        this.masterThumbnails.delete(id);
+      }
+    }
+
+    // Sync profile assignedChannelCount with actual existing channels
+    for (const profile of this.profiles.values()) {
+      let count = 0;
+      for (const ch of this.channels.values()) {
+        if (ch.contentProfileId === profile.id || ch.blockId === profile.id) {
+          count++;
+        }
+      }
+      profile.assignedChannelCount = count;
     }
 
     this.saveToDisk();

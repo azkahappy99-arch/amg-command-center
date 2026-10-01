@@ -808,7 +808,24 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 
       {/* Grouped Channel Blocks by Niche */}
       <div className="space-y-6">
-        {displayedNiches.length === 0 ? (
+        {channels.length === 0 ? (
+          <div className="p-12 text-center bg-neutral-900/40 rounded-2xl border border-neutral-800 space-y-3">
+            <Tv className="w-8 h-8 text-neutral-600 mx-auto" />
+            <h3 className="text-sm font-bold text-neutral-200 uppercase tracking-wider">
+              Belum ada channel terhubung.
+            </h3>
+            <p className="text-xs text-neutral-400 max-w-md mx-auto">
+              Hubungkan akun YouTube Anda melalui otorisasi OAuth Google untuk memulai manajemen video, rotasi judul, dan penjadwalan otomatis.
+            </p>
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-red-950/50 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Tambah Channel YouTube</span>
+            </button>
+          </div>
+        ) : displayedNiches.length === 0 ? (
           <div className="p-8 text-center bg-neutral-900/40 rounded-2xl border border-neutral-800 text-neutral-400 text-xs">
             Tidak ada channel ditemukan pada pencarian atau kategori niche ini.
           </div>
@@ -870,22 +887,23 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                         {/* Header */}
                         <div className="flex items-start justify-between gap-2 relative">
                           <div className="flex items-center space-x-3 min-w-0 flex-1">
-                            <img
-                              src={channel.thumbnailUrl || 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=160'}
-                              alt={channel.title}
-                              className="w-12 h-12 rounded-xl object-cover border border-neutral-700/80 shadow shrink-0"
-                            />
+                            {channel.thumbnailUrl ? (
+                              <img
+                                src={channel.thumbnailUrl}
+                                alt={channel.title}
+                                className="w-12 h-12 rounded-xl object-cover border border-neutral-700/80 shadow shrink-0"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700/80 flex items-center justify-center text-neutral-400 shrink-0">
+                                <Tv className="w-6 h-6 text-neutral-500" />
+                              </div>
+                            )}
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <h3 className="font-bold text-sm text-neutral-100 group-hover:text-red-400 transition truncate max-w-[140px] sm:max-w-[170px]">
                                   {channel.title}
                                 </h3>
                                 <NicheBadge category={channel.nicheCategory} badgeKey={channel.nicheBadge} />
-                                {channel.isSeeded && (
-                                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-purple-950/80 text-purple-400 border border-purple-800/50 uppercase tracking-wider">
-                                    Demo
-                                  </span>
-                                )}
                               </div>
                               <div className="text-[11px] text-neutral-400 font-mono mt-0.5 truncate">
                                 {channel.customUrl || channel.youtubeChannelId}

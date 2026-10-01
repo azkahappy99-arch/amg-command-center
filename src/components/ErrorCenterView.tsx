@@ -146,7 +146,7 @@ export const ErrorCenterView: React.FC = () => {
                       })}
                     </td>
                     <td className="py-3 px-3 whitespace-nowrap font-medium text-neutral-200">
-                      {err.channelTitle || 'Ayam Warna'}
+                      {err.channelTitle || '-'}
                     </td>
                     <td className="py-3 px-3 max-w-[150px] truncate text-neutral-300">
                       {err.videoTitle || err.videoId || '—'}

@@ -77,10 +77,16 @@ export function validateBlockIsolation(params: {
     };
   }
 
-  if (video.isManaged || video.managementStatus === 'COMPLETED' || video.managementStatus === 'SCHEDULED') {
+  const hasPublishAt = Boolean(
+    video.scheduledPublishAt ||
+    (video as any).publishAt ||
+    (video as any).scheduledAt ||
+    (video as any).status?.publishAt
+  );
+  if (hasPublishAt || video.isManaged || video.managementStatus === 'COMPLETED' || video.managementStatus === 'SCHEDULED') {
     return {
       isValid: false,
-      reason: `Video Sudah Dikelola (${video.managementStatus}). Mencegah proses ulang.`,
+      reason: `Video Sudah Terjadwal / Dikelola (${video.scheduledPublishAt || (video as any).publishAt || video.managementStatus}). Mencegah proses ulang.`,
     };
   }
 

@@ -147,7 +147,7 @@ export const ContentProfilesView: React.FC<ContentProfilesViewProps> = ({
         <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
         <div>
           <span className="font-semibold text-neutral-200">Lingkup Konten Independen: </span>
-          Beberapa channel dapat menggunakan Profil Konten yang sama (contoh: 'AYAM WARNA'). Pembaruan profil hanya berlaku untuk batch video berikutnya yang belum dikelola.
+          Beberapa channel dapat menggunakan Profil Konten yang sama (misalnya: Profil Edukasi atau Dokumenter). Pembaruan profil hanya berlaku untuk batch video berikutnya yang belum dikelola.
         </div>
       </div>
 
@@ -290,7 +290,7 @@ export const ContentProfilesView: React.FC<ContentProfilesViewProps> = ({
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="contoh: AYAM WARNA"
+                  placeholder="Masukkan nama profil konten..."
                   className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-100 focus:ring-1 focus:ring-red-500 focus:outline-none"
                 />
               </div>

@@ -76,7 +76,14 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-800/60 font-sans">
-              {filteredLogs.map((log) => (
+              {filteredLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-8 text-center text-neutral-500 text-xs">
+                    Belum ada log aktivitas riil yang tercatat.
+                  </td>
+                </tr>
+              ) : (
+                filteredLogs.map((log) => (
                 <tr key={log.id} className="hover:bg-neutral-800/30 transition">
                   <td className="py-3 px-3 text-neutral-400 whitespace-nowrap font-mono text-[11px]">
                     {new Date(log.timestamp).toLocaleString('id-ID', {
@@ -121,7 +128,7 @@ export const ActivityLogsView: React.FC<ActivityLogsViewProps> = ({ logs, onRefr
                     </span>
                   </td>
                 </tr>
-              ))}
+              )))}
             </tbody>
           </table>
         </div>

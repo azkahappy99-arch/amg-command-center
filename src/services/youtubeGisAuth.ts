@@ -4,7 +4,7 @@
  * Scope: https://www.googleapis.com/auth/youtube.readonly
  */
 
-import { ManagedVideo } from '../types/index.ts';
+import { ManagedVideo, ManagementScope, VideoManagementStatus } from '../types/index.ts';
 
 export const GIS_CONFIG = {
   CLIENT_ID: '140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com',
@@ -434,26 +434,41 @@ export async function fetchChannelVideosFromYouTube(
 
     let videoIds: string[] = [];
 
-    // 2. Fetch playlist items from the Uploads playlist
+    // 2. Full Channel Scan: Fetch playlist items with pagination from the Uploads playlist
     if (uploadsPlaylistId) {
+      let pageToken: string | undefined = undefined;
+      let pagesCount = 0;
+      const MAX_PAGES = 10; // Supports up to 500 videos per full scan
+
       try {
-        const plRes = await fetch(
-          `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&playlistId=${uploadsPlaylistId}&maxResults=50`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: 'application/json',
-            },
-          }
-        );
-        if (plRes.ok) {
-          const plData = await plRes.json();
+        do {
+          const pageParam: string = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+          const plRes: Response = await fetch(
+            `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&playlistId=${encodeURIComponent(
+              uploadsPlaylistId
+            )}&maxResults=50${pageParam}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+              },
+            }
+          );
+          if (!plRes.ok) break;
+
+          const plData: any = await plRes.json();
           if (Array.isArray(plData.items)) {
-            videoIds = plData.items
-              .map((it: any) => it.contentDetails?.videoId || it.snippet?.resourceId?.videoId)
-              .filter(Boolean);
+            for (const it of plData.items) {
+              const vidId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
+              if (vidId && !videoIds.includes(vidId)) {
+                videoIds.push(vidId);
+              }
+            }
           }
-        }
+
+          pageToken = plData.nextPageToken;
+          pagesCount++;
+        } while (pageToken && pagesCount < MAX_PAGES);
       } catch (plErr) {
         console.warn('PlaylistItems fetch error, trying search fallback:', plErr);
       }
@@ -490,59 +505,140 @@ export async function fetchChannelVideosFromYouTube(
       return [];
     }
 
-    // 3. Fetch detailed video metrics (definition for HD, status, durations)
-    const videosRes = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status,statistics&id=${videoIds.slice(0, 50).join(',')}`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: 'application/json',
-        },
+    // 3. Fetch detailed video metrics in chunks of 50
+    const detailedItems: any[] = [];
+    for (let i = 0; i < videoIds.length; i += 50) {
+      const chunk = videoIds.slice(i, i + 50);
+      try {
+        const videosRes = await fetch(
+          `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,status,statistics&id=${chunk.join(',')}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json',
+            },
+          }
+        );
+        if (videosRes.ok) {
+          const vData = await videosRes.json();
+          if (Array.isArray(vData.items)) {
+            detailedItems.push(...vData.items);
+          }
+        }
+      } catch (chunkErr) {
+        console.warn('Video chunk fetch error:', chunkErr);
       }
-    );
+    }
 
-    let detailedItems: any[] = [];
-    if (videosRes.ok) {
-      const vData = await videosRes.json();
-      detailedItems = vData.items || [];
+    // Existing videos lookup map for IDEMPOTENCY (preserve existing assigned title, thumbnail, schedule, scope)
+    const rawExisting = localStorage.getItem('amg_videos');
+    const existingMap = new Map<string, ManagedVideo>();
+    if (rawExisting) {
+      try {
+        const parsed = JSON.parse(rawExisting);
+        if (Array.isArray(parsed)) {
+          for (const ev of parsed) {
+            if (ev.youtubeVideoId) existingMap.set(ev.youtubeVideoId, ev);
+            if (ev.id) existingMap.set(ev.id, ev);
+          }
+        }
+      } catch {
+        // ignore
+      }
     }
 
     const managedVideos: ManagedVideo[] = detailedItems.map((v: any) => {
+      const existing = existingMap.get(v.id) || existingMap.get(`yt-vid-${v.id}`);
       const isHd = v.contentDetails?.definition === 'hd';
       const privacy = (v.status?.privacyStatus || 'public') as any;
+      const publishAt = v.status?.publishAt || null;
       const thumb =
         v.snippet?.thumbnails?.high?.url ||
         v.snippet?.thumbnails?.medium?.url ||
         v.snippet?.thumbnails?.default?.url ||
         '';
 
+      const isPrivate = privacy === 'private';
+      const isScheduled = Boolean(publishAt);
+
+      let managementScope: ManagementScope = existing?.managementScope || 'REGULAR';
+      let isAmgEligible = existing?.isAmgEligible ?? false;
+      let isManaged = existing?.isManaged ?? false;
+      let managementStatus: VideoManagementStatus = existing?.managementStatus || 'DISCOVERED';
+      let exclusionReason: string | undefined = existing?.exclusionReason;
+
+      // STRICT PRIVACY FILTER:
+      // Hanya video berstatus private DAN belum memiliki jadwal publikasi (publishAt kosong/null)
+      if (!isPrivate) {
+        // Video yang statusnya public atau unlisted otomatis dikecualikan/diabaikan dari pipeline otomasi
+        managementScope = 'EXCLUDED';
+        isAmgEligible = false;
+        isManaged = true; // Dikecualikan dari kandidat mentah
+        managementStatus = 'EXCLUDED';
+        exclusionReason = `Status Privasi: ${(privacy || 'PUBLIC').toUpperCase()}. Video public dan unlisted otomatis dikecualikan; hanya video private mentah tanpa jadwal yang diproses otomatis AMG.`;
+      } else if (isScheduled) {
+        // Video yang sudah berstatus scheduled (sudah terjadwal) tidak boleh masuk ke video terdeteksi/antrean baru
+        managementScope = 'EXCLUDED';
+        isAmgEligible = false;
+        isManaged = true; // Dikecualikan karena sudah terjadwal di YouTube
+        managementStatus = 'SCHEDULED';
+        exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari video terdeteksi/antrean baru.`;
+      } else if (!existing || !existing.isManaged) {
+        // Raw private video mentah TANPA jadwal publikasi (privacyStatus === 'private' && !publishAt)
+        managementScope = existing?.managementScope || 'REGULAR';
+        isAmgEligible = true;
+        isManaged = false;
+        managementStatus = existing?.managementStatus || 'DISCOVERED';
+        exclusionReason = undefined;
+      }
+
       return {
-        id: `yt-vid-${v.id}`,
+        id: existing?.id || `yt-vid-${v.id}`,
         youtubeVideoId: v.id,
         channelId: assignedChanId,
         channelTitle: chanTitle,
         titleBefore: v.snippet?.title || 'Video Tanpa Judul',
-        titleAssigned: '',
+        titleAssigned: existing?.titleAssigned || '',
         thumbnailBefore: thumb,
-        thumbnailAssigned: '',
+        thumbnailAssigned: existing?.thumbnailAssigned || '',
         originalUploadAt: v.snippet?.publishedAt || new Date().toISOString(),
         uploadedAt: v.snippet?.publishedAt,
         processingStatus: 'processed',
         privacyStatus: privacy,
-        managementStatus: 'DISCOVERED',
-        managementScope: 'REGULAR',
-        isAmgEligible: true,
-        isManaged: false, // Counts towards "VIDEO BARU"
-        retryCount: 0,
-        definition: isHd ? 'hd' : 'sd', // Counts towards "SIAP HD" if 'hd'
+        publishAt: publishAt || undefined,
+        scheduledPublishAt: publishAt || existing?.scheduledPublishAt || undefined,
+        managementStatus,
+        managementScope,
+        isAmgEligible,
+        isManaged,
+        retryCount: existing?.retryCount || 0,
+        exclusionReason,
+        definition: isHd ? 'hd' : 'sd',
         duration: v.contentDetails?.duration,
         isSeeded: false,
-        createdAt: v.snippet?.publishedAt || new Date().toISOString(),
+        createdAt: existing?.createdAt || v.snippet?.publishedAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
     });
 
     updateChannelVideosInStorage(assignedChanId, chanId, chanTitle, managedVideos);
+
+    // Sync to backend store asynchronously
+    try {
+      fetch('/api/videos/batch-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channelId: assignedChanId,
+          youtubeChannelId: chanId,
+          channelTitle: chanTitle,
+          videos: managedVideos,
+        }),
+      }).catch((e) => console.warn('Backend video batch-sync notice:', e));
+    } catch {
+      // ignore
+    }
+
     return managedVideos;
   } catch (err) {
     console.warn('fetchChannelVideosFromYouTube error:', err);
@@ -608,7 +704,9 @@ function updateChannelVideosInStorage(
         );
         if (cIdx >= 0) {
           parsedChannels[cIdx].videoCount = newVideos.length;
-          parsedChannels[cIdx].unmanagedVideoCount = newVideos.filter((v) => !v.isManaged).length;
+          parsedChannels[cIdx].unmanagedVideoCount = newVideos.filter(
+            (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
+          ).length;
           parsedChannels[cIdx].lastSyncAt = new Date().toISOString();
           localStorage.setItem('amg_channels', JSON.stringify(parsedChannels));
         }

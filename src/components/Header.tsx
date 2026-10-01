@@ -49,11 +49,17 @@ export const Header: React.FC<HeaderProps> = ({
             onChange={(e) => onSelectChannel(e.target.value)}
             className="w-full min-w-0 bg-neutral-900 border border-neutral-800 text-neutral-100 text-xs font-semibold rounded-lg px-2 sm:px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-red-500 hover:border-neutral-700 cursor-pointer truncate"
           >
-            {channels.map((chan) => (
-              <option key={chan.id} value={chan.id} className="bg-neutral-900 text-white">
-                {chan.title} ({chan.status})
+            {channels.length === 0 ? (
+              <option value="" className="bg-neutral-900 text-neutral-400">
+                Belum ada channel terhubung
               </option>
-            ))}
+            ) : (
+              channels.map((chan) => (
+                <option key={chan.id} value={chan.id} className="bg-neutral-900 text-white">
+                  {chan.title} ({chan.status})
+                </option>
+              ))
+            )}
           </select>
         </div>
 

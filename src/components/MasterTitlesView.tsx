@@ -228,10 +228,10 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
             <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-400 text-xs space-y-1">
               <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5">
                 <AlertTriangle className="w-4 h-4" />
-                <span>Master Judul belum tersedia pada blok ini</span>
+                <span>Belum ada master judul ditambahkan</span>
               </div>
               <p className="text-neutral-500 text-[11px]">
-                Silakan tambahkan judul pertama khusus blok <strong className="text-neutral-300">{activeProfile?.name || 'ini'}</strong> di atas. Anti-fallback aktif.
+                Silakan tambahkan judul pertama di atas. AMG Command Center hanya memproses data judul nyata yang Anda masukkan.
               </p>
             </div>
           ) : (

@@ -228,23 +228,30 @@ export function evaluateVideoEligibilityWithBlock(
     };
   }
 
-  // C. Privacy Status
+  // C. Privacy Status Ketat (Hanya PRIVATE)
   if (video.privacyStatus !== 'private') {
     return {
       category: 'EXCLUDED',
       isEligible: false,
       isProtected: true,
-      reason: `Video berstatus "${video.privacyStatus}". Hanya video PRIVATE yang dapat dikelola AMG.`,
+      reason: `Video berstatus "${video.privacyStatus}". Video ${(video.privacyStatus || 'NON-PRIVATE').toUpperCase()} otomatis dikecualikan; hanya video PRIVATE mentah yang dapat dideteksi dan dikelola AMG.`,
     };
   }
 
-  // D. Belum memiliki jadwal publish
-  if (video.scheduledPublishAt) {
+    // D. Belum memiliki jadwal publish (publishAt / scheduledPublishAt harus kosong/null)
+  const hasPublishAt = Boolean(
+    video.publishAt ||
+    video.scheduledPublishAt ||
+    (video as any).scheduledAt ||
+    (video as any).status?.publishAt
+  );
+
+  if (hasPublishAt || video.managementStatus === 'SCHEDULED') {
     return {
       category: 'ALREADY_MANAGED',
       isEligible: false,
       isProtected: true,
-      reason: `Video sudah memiliki jadwal tayang YouTube (${video.scheduledPublishAt}).`,
+      reason: `Video sudah memiliki jadwal tayang YouTube (${video.publishAt || video.scheduledPublishAt || 'SCHEDULED'}). Video yang sudah terjadwal tidak dimasukkan ke video terdeteksi/antrean baru.`,
     };
   }
 
@@ -268,7 +275,7 @@ export function evaluateVideoEligibilityWithBlock(
   }
 
   // F. Belum memiliki konfigurasi final
-  if (video.titleAssigned && video.thumbnailAssigned && video.scheduledPublishAt) {
+  if (video.titleAssigned && video.thumbnailAssigned && (video.publishAt || video.scheduledPublishAt)) {
     return {
       category: 'ALREADY_MANAGED',
       isEligible: false,
@@ -310,13 +317,14 @@ export function evaluateVideoEligibilityWithBlock(
     category: 'NEW_PRIVATE_CANDIDATE',
     isEligible: true,
     isProtected: false,
-    reason: `Memenuhi seluruh 8 kriteria: Channel terhubung, Blok valid (${targetBlockId}), Private, Belum dijadwalkan, Upload setelah cutoff (${effectiveCutoff || 'Awal'}).`,
+    reason: `Memenuhi seluruh kriteria: Channel terhubung, Blok valid (${targetBlockId}), Private mentah, Tanpa jadwal YouTube, Upload setelah cutoff (${effectiveCutoff || 'Awal'}).`,
   };
 }
 
 /**
- * Calculates the exact count of "Video Terdeteksi" for Dashboard & Metrics (Requirement 18).
- * Strictly requires: private + unscheduled + unmanaged + connected channel + valid block + upload after cutoff.
+ * Calculates the exact count of "Video Terdeteksi" for Dashboard & Metrics (Strict Privacy Filter).
+ * Strictly requires: privacyStatus === 'private' && !publishAt (publishAt kosong/null).
+ * Videos with public or unlisted status, or already scheduled, are strictly excluded.
  */
 export function calculateDetectedVideosCount(
   videos: ManagedVideo[],
@@ -326,36 +334,62 @@ export function calculateDetectedVideosCount(
 ): number {
   const channelMap = new Map<string, Channel>();
   for (const c of channels) {
-    channelMap.set(c.id, c);
-    channelMap.set(c.youtubeChannelId, c);
-    if (!c.id.startsWith('chan-')) channelMap.set(`chan-${c.id}`, c);
-  }
-
-  const blockMap = new Map<string, ContentProfile>();
-  for (const b of blocks) {
-    blockMap.set(b.id, b);
+    if (c.id) {
+      channelMap.set(c.id, c);
+      if (!c.id.startsWith('chan-')) channelMap.set(`chan-${c.id}`, c);
+    }
+    if (c.youtubeChannelId) {
+      channelMap.set(c.youtubeChannelId, c);
+      channelMap.set(`chan-${c.youtubeChannelId}`, c);
+    }
   }
 
   let count = 0;
   for (const v of videos) {
+    // 1. Filter Status Privasi Ketat: Hanya video yang berstatus private (pribadi)
+    // Video yang statusnya public atau unlisted otomatis dikecualikan/diabaikan
+    if (v.privacyStatus !== 'private') {
+      continue;
+    }
+
+    // 2. Belum memiliki jadwal publikasi (publishAt kosong/null)
+    // Video yang sudah berstatus scheduled (sudah terjadwal) tidak boleh masuk ke video terdeteksi/antrean baru
+    const hasPublishAt = Boolean(
+      v.publishAt ||
+      v.scheduledPublishAt ||
+      (v as any).scheduledAt ||
+      (v as any).status?.publishAt
+    );
+    if (hasPublishAt) {
+      continue;
+    }
+
+    // 3. Status manajemen: bukan yang sudah terjadwal atau selesai
+    if (v.managementStatus === 'SCHEDULED' || v.managementStatus === 'COMPLETED') {
+      continue;
+    }
+
+    // 4. Bukan video yang sudah ditandai kelola atau dikecualikan secara eksplisit
+    if (v.isManaged || v.managementScope === 'EXCLUDED') {
+      continue;
+    }
+
+    // 5. Filter channel spesifik jika filterChannelId diberikan (dan bukan 'ALL')
     if (filterChannelId && filterChannelId !== 'ALL') {
+      const targetChan = channelMap.get(filterChannelId);
+      const targetYtId = targetChan?.youtubeChannelId;
       const match =
         v.channelId === filterChannelId ||
         v.channelId === `chan-${filterChannelId}` ||
-        (filterChannelId.startsWith('chan-') && v.channelId === filterChannelId.replace('chan-', ''));
+        (filterChannelId.startsWith('chan-') && v.channelId === filterChannelId.replace('chan-', '')) ||
+        (targetYtId &&
+          (v.channelId === targetYtId ||
+            v.channelId === `chan-${targetYtId}`));
       if (!match) continue;
     }
 
-    const chan = channelMap.get(v.channelId);
-    if (!chan) continue;
-
-    const blockId = resolveBlockId(chan);
-    const block = blockId ? blockMap.get(blockId) : null;
-
-    const evalResult = evaluateVideoEligibilityWithBlock(v, chan, block);
-    if (evalResult.isEligible && evalResult.category === 'NEW_PRIVATE_CANDIDATE') {
-      count++;
-    }
+    // Memenuhi kriteria: Video private mentah yang siap diproses
+    count++;
   }
 
   return count;

@@ -172,21 +172,13 @@ export function sanitizeChannel(c: Channel): Channel {
     c.revenue.adSenseReguler === 12200000 ||
     c.revenue.adSenseReguler === 28400000;
 
-  const cleanRevenue = (isMockRevenue || !c.revenue)
-    ? {
-        adSenseReguler: 0,
-        liveStream: 0,
-        ytShopping: 0,
-        channelMemberships: 0,
-        totalChannelRevenue: 0,
-      }
-    : c.revenue;
+  const cleanRevenue = isMockRevenue ? undefined : c.revenue;
 
   // Real YPP status must follow actual YouTube verification:
   // Reset fake mock 'MONETIZED' status to 'NOT_MONETIZED'
   const isMockYpp =
     c.monetizationStatus === 'MONETIZED' &&
-    (isMockRevenue || cleanRevenue.totalChannelRevenue === 0 || c.watchHours === 14500 || c.watchHours === 12450 || c.isSeeded);
+    (isMockRevenue || !c.revenue || c.watchHours === 14500 || c.watchHours === 12450 || c.isSeeded);
 
   const cleanMonetizationStatus = isMockYpp ? 'NOT_MONETIZED' : (c.monetizationStatus || 'NOT_MONETIZED');
   const cleanWatchHours = (c.watchHours === 14500 || c.watchHours === 12450) ? 0 : (c.watchHours || 0);
@@ -197,6 +189,63 @@ export function sanitizeChannel(c: Channel): Channel {
     watchHours: cleanWatchHours,
     revenue: cleanRevenue,
   };
+}
+
+// Helper to filter out legacy preset/mock titles
+export function isRealTitle(t: MasterTitle): boolean {
+  if (!t) return false;
+  const id = t.id || '';
+  if (
+    id === 'ayam-t-1' ||
+    id === 'ayam-t-2' ||
+    id === 'ayam-t-3' ||
+    id === 'title-1' ||
+    id === 'title-2' ||
+    id === 'title-3' ||
+    id === 'asmr-t-1' ||
+    id === 'asmr-t-2' ||
+    id === 'murottal-t-1' ||
+    id === 'murottal-t-2'
+  ) {
+    return false;
+  }
+  const text = (t.text || '').toLowerCase();
+  if (
+    text.includes('tidur nyenyak dengan suara hujan') ||
+    text.includes('ayam warna-warni lucu') ||
+    text.includes('deep asmr whispers') ||
+    text.includes('murottal surat ar-rahman') ||
+    text.includes('hujan malam di kamar cozy')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+// Helper to filter out legacy preset/mock thumbnails
+export function isRealThumbnail(th: MasterThumbnail): boolean {
+  if (!th) return false;
+  const id = th.id || '';
+  if (
+    id === 'ayam-th-1' ||
+    id === 'ayam-th-2' ||
+    id === 'ayam-th-3' ||
+    id === 'thumb-1' ||
+    id === 'thumb-2' ||
+    id === 'thumb-3' ||
+    id === 'thumb-4' ||
+    id === 'asmr-th-1' ||
+    id === 'asmr-th-2' ||
+    id === 'murottal-th-1' ||
+    id === 'murottal-th-2'
+  ) {
+    return false;
+  }
+  const url = th.url || '';
+  if (url.includes('images.unsplash.com')) {
+    return false;
+  }
+  return true;
 }
 
 // Ensure connected GIS channels in localStorage are synced into amg_channels
@@ -354,7 +403,9 @@ export const api = {
 
     return {
       ...channel,
-      unmanagedVideoCount: videos.filter((v) => !v.isManaged).length,
+      unmanagedVideoCount: videos.filter(
+        (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
+      ).length,
       recentVideos: videos.slice(0, 10),
       recentJobs: jobs.slice(0, 5),
       recentErrors: errors.slice(0, 5),
@@ -369,17 +420,11 @@ export const api = {
       youtubeChannelId: data.youtubeChannelId || `UC_${Date.now()}`,
       title: data.title || 'Channel Baru',
       customUrl: data.customUrl || `@${id}`,
-      thumbnailUrl: data.thumbnailUrl || 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=160&auto=format&fit=crop&q=80',
+      thumbnailUrl: data.thumbnailUrl || '',
       status: 'CONNECTED',
       monetizationStatus: data.monetizationStatus || 'NOT_MONETIZED',
-      watchHours: 0,
-      revenue: {
-        adSenseReguler: 0,
-        liveStream: 0,
-        ytShopping: 0,
-        channelMemberships: 0,
-        totalChannelRevenue: 0,
-      },
+      watchHours: data.watchHours || 0,
+      revenue: data.revenue,
       nicheCategory: data.nicheCategory || 'General',
       nicheBadge: data.nicheBadge || 'cyan',
       publishFrequency: data.publishFrequency || '1/day',
@@ -522,12 +567,18 @@ export const api = {
       channels[idx].lastSyncAt = now;
       channels[idx].status = 'CONNECTED';
       channels[idx].videoCount = channelVideos.length;
-      channels[idx].unmanagedVideoCount = channelVideos.filter((v) => !v.isManaged).length;
+      channels[idx].unmanagedVideoCount = channelVideos.filter(
+        (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
+      ).length;
       setStorageItem(KEYS.CHANNELS, channels);
     }
 
-    const unmanaged = channelVideos.filter((v) => !v.isManaged).length;
-    const managed = channelVideos.filter((v) => v.isManaged).length;
+    const unmanaged = channelVideos.filter(
+      (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
+    ).length;
+    const managed = channelVideos.filter(
+      (v) => v.isManaged || v.privacyStatus !== 'private' || v.publishAt || v.scheduledPublishAt
+    ).length;
 
     return {
       success: true,
@@ -854,7 +905,8 @@ export const api = {
 
   // Master Titles (100% Isolated Per Channel / Profile)
   getMasterTitles: async (profileOrChannelId?: string) => {
-    const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+    setStorageItem(KEYS.TITLES, list);
     if (!profileOrChannelId || profileOrChannelId === 'ALL') {
       return list;
     }
@@ -888,7 +940,7 @@ export const api = {
   },
 
   createMasterTitle: async (data: Partial<MasterTitle> & { channelId?: string }) => {
-    const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
     const targetChan = channels.find(
       (c) =>
@@ -928,7 +980,7 @@ export const api = {
   },
 
   updateMasterTitle: async (id: string, data: Partial<MasterTitle>) => {
-    const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     const idx = list.findIndex((t) => t.id === id);
     if (idx >= 0) {
       list[idx] = { ...list[idx], ...data };
@@ -939,7 +991,7 @@ export const api = {
   },
 
   deleteMasterTitle: async (id: string) => {
-    let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
+    let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.TITLES, list);
     return { success: true };
@@ -947,7 +999,8 @@ export const api = {
 
   // Master Thumbnails (100% Isolated Per Channel / Profile)
   getMasterThumbnails: async (profileOrChannelId?: string) => {
-    const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
+    let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
+    setStorageItem(KEYS.THUMBNAILS, list);
     if (!profileOrChannelId || profileOrChannelId === 'ALL') {
       return list;
     }
@@ -981,7 +1034,7 @@ export const api = {
   },
 
   createMasterThumbnail: async (data: Partial<MasterThumbnail> & { channelId?: string }) => {
-    const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
+    const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
     const targetChan = channels.find(
       (c) =>
@@ -1006,9 +1059,7 @@ export const api = {
       profileId: resolvedProfileId,
       channelId: resolvedChannelId,
       name: data.name || 'Thumbnail',
-      url:
-        data.url ||
-        'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=640&auto=format&fit=crop&q=80',
+      url: data.url || '',
       orderIndex: list.filter(
         (th) =>
           th.profileId === resolvedProfileId ||
@@ -1024,7 +1075,7 @@ export const api = {
   },
 
   deleteMasterThumbnail: async (id: string) => {
-    let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
+    let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.THUMBNAILS, list);
     return { success: true };
@@ -1368,18 +1419,27 @@ export const api = {
     const targetBlockId = profileId || channel?.contentProfileId || channel?.blockId;
     const targetBlock = profiles.find((p) => p.id === targetBlockId) || profiles[0];
 
+    const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
+    const eligibleVideos = videos.filter(
+      (v) =>
+        (v.channelId === channelId || v.channelId === channel?.youtubeChannelId) &&
+        !v.isManaged &&
+        v.managementStatus !== 'COMPLETED'
+    );
+    const eligibleCount = eligibleVideos.length;
+
     const newBatch: AutomationBatch = {
       id: `batch-dry-${Date.now()}`,
       batchNumber: `BAT-${Date.now().toString().slice(-4)}`,
       channelId,
       channelTitle: channel?.title || 'Simulasi Otomasi',
-      profileId: targetBlock?.id || 'profile-ayam-warna',
-      profileName: targetBlock?.name || 'AYAM WARNA-WARNI',
+      profileId: targetBlock?.id || channel?.contentProfileId || 'profile-default',
+      profileName: targetBlock?.name || channel?.title || 'Profil Konten',
       status: 'completed',
-      detectedCount: 3,
-      processedCount: 3,
-      scheduledCount: 3,
-      completedCount: 3,
+      detectedCount: eligibleCount,
+      processedCount: eligibleCount,
+      scheduledCount: eligibleCount,
+      completedCount: eligibleCount,
       failedCount: 0,
       isDryRun: true,
       startedAt: new Date().toISOString(),
@@ -1397,19 +1457,28 @@ export const api = {
     const targetBlockId = profileId || channel?.contentProfileId || channel?.blockId;
     const targetBlock = profiles.find((p) => p.id === targetBlockId) || profiles[0];
 
+    const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
+    const eligibleVideos = videos.filter(
+      (v) =>
+        (v.channelId === channelId || v.channelId === channel?.youtubeChannelId) &&
+        !v.isManaged &&
+        v.managementStatus !== 'COMPLETED'
+    );
+    const eligibleCount = eligibleVideos.length;
+
     const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
     const newBatch: AutomationBatch = {
       id: `batch-${Date.now()}`,
       batchNumber: `BAT-${Date.now().toString().slice(-4)}`,
       channelId,
       channelTitle: channel?.title || 'Otomasi Produksi',
-      profileId: targetBlock?.id || 'profile-ayam-warna',
-      profileName: targetBlock?.name || 'AYAM WARNA-WARNI',
+      profileId: targetBlock?.id || channel?.contentProfileId || 'profile-default',
+      profileName: targetBlock?.name || channel?.title || 'Profil Konten',
       status: 'running',
-      detectedCount: 5,
-      processedCount: 2,
-      scheduledCount: 2,
-      completedCount: 2,
+      detectedCount: eligibleCount,
+      processedCount: eligibleCount,
+      scheduledCount: eligibleCount,
+      completedCount: eligibleCount,
       failedCount: 0,
       isDryRun: false,
       startedAt: new Date().toISOString(),
@@ -1566,9 +1635,25 @@ export const api = {
     const enrolled: ManagedVideo[] = [];
 
     videos.forEach((v, i) => {
-      if (v.channelId === channelId && !v.isManaged) {
+      // Filter Status Privasi Ketat: Hanya video private tanpa jadwal tayang yang dapat di-enroll
+      const hasPublishAt = Boolean(
+        v.publishAt ||
+        v.scheduledPublishAt ||
+        (v as any).scheduledAt ||
+        (v as any).status?.publishAt
+      );
+      if (
+        v.channelId === channelId &&
+        !v.isManaged &&
+        v.privacyStatus === 'private' &&
+        !hasPublishAt &&
+        v.managementStatus !== 'SCHEDULED' &&
+        v.managementStatus !== 'COMPLETED' &&
+        v.managementScope !== 'EXCLUDED'
+      ) {
         videos[i].isManaged = true;
         videos[i].managementScope = 'REGULAR';
+        videos[i].isAmgEligible = true;
         enrolled.push(videos[i]);
         count++;
       }

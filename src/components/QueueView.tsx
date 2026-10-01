@@ -160,7 +160,7 @@ export const QueueView: React.FC = () => {
               {jobs.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-neutral-500">
-                    Tidak ada tugas aktif di antrean. Jalankan batch otomasi untuk memproses.
+                    Belum ada pekerjaan antrean aktif.
                   </td>
                 </tr>
               ) : (
@@ -169,7 +169,7 @@ export const QueueView: React.FC = () => {
                     <td className="py-3 px-3 font-mono font-bold text-neutral-200">
                       {job.id}
                     </td>
-                    <td className="py-3 px-3">{job.channelTitle || 'Ayam Warna'}</td>
+                    <td className="py-3 px-3">{job.channelTitle || '—'}</td>
                     <td className="py-3 px-3 max-w-[200px] truncate text-neutral-300 font-medium">
                       {job.videoTitle || job.videoId}
                     </td>
