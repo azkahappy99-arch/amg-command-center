@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "savedAt": "2026-10-02T11:20:10.788Z",
+  "owner": {
+    "id": "usr-owner-primary",
+    "email": "azkahappy99@gmail.com",
+    "role": "PRIMARY_OWNER",
+    "passwordHash": "72b0fbd7684eee34f648e6eef857e6e2b3fff86c7fb82e35ef148f13ae5fe061:da4693caaf2b9cbb846597c8a4b167e3a33fe35d3075c2499b4da0fda3a26344d0b1f948736eb395bfd0b147c2cce546cddb1f41dda2625308cf63e3a07f15ed",
+    "masterKeyHash": "3cecea18d7c94e369d4bce884cdb5361e008f9c9618e2ab6ed6a3e4124e19926:9df9ad4cb3743514f9d5b240e6881af5ea472aa9baa55766a92a471f8994f360e4931a2a0492b9b949e863677741a24efe5bde6d3241cba43d81be383f902afa",
+    "workspaceId": "ws-owner-primary",
+    "status": "ACTIVE",
+    "createdAt": "2026-10-02T11:17:38.629Z",
+    "updatedAt": "2026-10-02T11:17:38.629Z",
+    "lastLoginAt": "2026-10-02T11:17:38.629Z"
+  },
+  "workspace": {
+    "id": "ws-owner-primary",
+    "ownerId": "usr-owner-primary",
+    "name": "Owner Workspace (azkahappy99@gmail.com)",
+    "type": "OWNER_WORKSPACE",
+    "createdAt": "2026-10-02T11:17:38.629Z"
+  },
+  "sessions": [
+    {
+      "id": "de3ffc88cfefb9927697a78b221aeb0c574f836f20cb12cddd592ec53fe18fe3",
+      "userId": "usr-owner-primary",
+      "email": "azkahappy99@gmail.com",
+      "role": "PRIMARY_OWNER",
+      "workspaceId": "ws-owner-primary",
+      "deviceInfo": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
+      "ipAddress": "127.0.0.1",
+      "createdAt": "2026-10-02T11:17:38.630Z",
+      "expiresAt": "2026-10-09T11:17:38.630Z",
+      "lastActiveAt": "2026-10-02T11:17:38.630Z",
+      "isRevoked": false
+    }
+  ]
+}

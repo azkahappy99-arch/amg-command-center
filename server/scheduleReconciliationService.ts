@@ -573,7 +573,7 @@ export function evaluateChannelScheduleBuffer(
   videos: ManagedVideo[] = [],
   nowOverride?: Date
 ): ScheduleBufferEvaluation {
-  const now = nowOverride || new Date('2026-09-24T10:00:00.000Z'); // Fixed baseline anchor aligned with current simulated time
+  const now = nowOverride || new Date();
   const nowMs = now.getTime();
 
   // Find latest scheduled anchor
@@ -582,8 +582,14 @@ export function evaluateChannelScheduleBuffer(
   // Count scheduled videos in the future for this channel
   let stockCount = 0;
   for (const v of videos) {
-    if (v.channelId === channel.id) {
-      const scheduledAt = v.scheduledPublishAt || v.scheduledAt;
+    const isChanMatch =
+      v.channelId === channel.id ||
+      (channel.youtubeChannelId &&
+        (v.channelId === channel.youtubeChannelId ||
+          v.channelId === `chan-${channel.youtubeChannelId}`));
+
+    if (isChanMatch) {
+      const scheduledAt = v.publishAt || v.scheduledPublishAt || (v as any).status?.publishAt || v.scheduledAt;
       if (scheduledAt) {
         const schedMs = new Date(scheduledAt).getTime();
         // Video is scheduled in the future and not yet published

@@ -432,6 +432,7 @@ export default function App() {
             <ChannelsView
               channels={channels}
               profiles={profiles}
+              videos={videos}
               onChannelUpdated={loadAllData}
               onNavigateToAutomation={(chanId) => {
                 setSelectedChannelId(chanId);

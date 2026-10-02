@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Tv,
   Plus,
@@ -32,8 +32,10 @@ import {
   ChevronRight,
   MoreVertical,
   X,
+  Lock,
+  CalendarClock,
 } from 'lucide-react';
-import { Channel, ContentProfile, ScheduleConfig, NicheCategoryPreset } from '../types/index.ts';
+import { Channel, ContentProfile, ScheduleConfig, NicheCategoryPreset, ManagedVideo } from '../types/index.ts';
 import { api } from '../services/api.ts';
 import { YouTubeOAuthModal } from './YouTubeOAuthModal.tsx';
 import { ScheduleConfigEditor } from './ScheduleConfigEditor.tsx';
@@ -47,10 +49,16 @@ import {
   fetchMyYouTubeChannel,
   getStoredGisToken,
 } from '../services/youtubeGisAuth.ts';
+import {
+  formatWibDateTime,
+  getChannelScheduledAnchor,
+  getChannelUnmanagedVideos,
+} from '../utils/scheduleAndUnmanagedUtils.ts';
 
 interface ChannelsViewProps {
   channels: Channel[];
   profiles: ContentProfile[];
+  videos?: ManagedVideo[];
   onChannelUpdated: () => void;
   onNavigateToAutomation: (channelId: string) => void;
   onNavigateToTitles?: (channelId: string) => void;
@@ -95,6 +103,7 @@ interface TestConnData {
 export const ChannelsView: React.FC<ChannelsViewProps> = ({
   channels,
   profiles,
+  videos,
   onChannelUpdated,
   onNavigateToAutomation,
   onNavigateToTitles,
@@ -103,6 +112,37 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [selectedChannelForOAuth, setSelectedChannelForOAuth] = useState<Channel | null>(null);
+  const [loadedVideos, setLoadedVideos] = useState<ManagedVideo[]>(() => {
+    if (videos && videos.length > 0) return videos;
+    try {
+      const raw = localStorage.getItem('amg_videos');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [];
+  });
+  const [expandedUnmanagedChannelId, setExpandedUnmanagedChannelId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (videos && videos.length > 0) {
+      setLoadedVideos(videos);
+    } else {
+      api.getVideos()
+        .then((v) => {
+          if (Array.isArray(v) && v.length > 0) setLoadedVideos(v);
+        })
+        .catch(() => {
+          try {
+            const raw = localStorage.getItem('amg_videos');
+            if (raw) setLoadedVideos(JSON.parse(raw));
+          } catch {
+            // ignore
+          }
+        });
+    }
+  }, [videos]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [syncingChannelId, setSyncingChannelId] = useState<string | null>(null);
   const [testingChannelId, setTestingChannelId] = useState<string | null>(null);
@@ -1073,6 +1113,148 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                             </div>
                           )}
                         </div>
+
+                        {/* ================================================== */}
+                        {/* 1. JADWAL TERAKHIR TERVERIFIKASI                   */}
+                        {/* ================================================== */}
+                        {(() => {
+                          const anchorInfo = getChannelScheduledAnchor(channel, loadedVideos);
+                          const unmanagedVideos = getChannelUnmanagedVideos(channel, loadedVideos);
+
+                          return (
+                            <div className="space-y-3 pt-1">
+                              {/* Card Section: Jadwal Terakhir Terverifikasi */}
+                              <div className="p-3.5 rounded-xl bg-neutral-900/80 border border-neutral-800 space-y-1.5 shadow-xs">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                                    <CalendarClock className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                                    <span>Jadwal Terakhir Terverifikasi</span>
+                                  </span>
+                                  {anchorInfo.scheduledVideosCount > 0 ? (
+                                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 font-semibold border border-emerald-800/50">
+                                      {anchorInfo.scheduledVideosCount} Terjadwal
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-400">
+                                      0 Terjadwal
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="pt-0.5">
+                                  {anchorInfo.latestPublishAt ? (
+                                    <div className="space-y-1">
+                                      <div className="text-sm font-black text-emerald-400 flex items-center gap-1.5 font-mono">
+                                        <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                        <span>{formatWibDateTime(anchorInfo.latestPublishAt)}</span>
+                                      </div>
+                                      {anchorInfo.latestVideoTitle && (
+                                        <p
+                                          className="text-[11px] text-neutral-300 font-medium truncate pt-0.5"
+                                          title={anchorInfo.latestVideoTitle}
+                                        >
+                                          "{anchorInfo.latestVideoTitle}"
+                                        </p>
+                                      )}
+                                      <div className="text-[10px] text-emerald-400/90 flex items-center gap-1 pt-1 border-t border-neutral-800/60 font-semibold">
+                                        <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
+                                        <span>Titik Acuan Terverifikasi</span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="py-1 text-xs font-medium text-neutral-400 italic">
+                                      Belum ada jadwal terverifikasi
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* ================================================== */}
+                              {/* 2. SISA VIDEO PRIVATE — BELUM DIKELOLA AMG         */}
+                              {/* ================================================== */}
+                              <div className="p-3.5 rounded-xl bg-neutral-900/60 border border-neutral-800/90 space-y-2.5 shadow-xs">
+                                <div className="flex items-center justify-between">
+                                  <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                                    <span>Sisa Video Private (Belum Dikelola AMG)</span>
+                                  </div>
+                                  <span
+                                    className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                                      unmanagedVideos.length > 0
+                                        ? 'bg-amber-950 text-amber-300 border border-amber-800/50'
+                                        : 'bg-neutral-800 text-neutral-400'
+                                    }`}
+                                  >
+                                    {unmanagedVideos.length} Video
+                                  </span>
+                                </div>
+
+                                {unmanagedVideos.length === 0 ? (
+                                  <div className="p-3 rounded-lg bg-neutral-950/60 border border-neutral-800/60 text-center">
+                                    <p className="text-[11px] text-neutral-400 italic">
+                                      Belum ada video private yang menunggu dikelola AMG.
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-1.5">
+                                    {unmanagedVideos
+                                      .slice(0, expandedUnmanagedChannelId === channel.id ? 10 : 3)
+                                      .map((v) => (
+                                        <div
+                                          key={v.id}
+                                          className="p-2.5 rounded-lg bg-neutral-950/90 border border-neutral-800/80 hover:border-amber-900/40 transition text-xs space-y-1"
+                                        >
+                                          <div className="flex items-start justify-between gap-2">
+                                            <span
+                                              className="font-medium text-neutral-200 line-clamp-1 flex-1 text-[11px]"
+                                              title={v.titleBefore || 'Video Tanpa Judul'}
+                                            >
+                                              {v.titleBefore || 'Video Tanpa Judul'}
+                                            </span>
+                                          </div>
+
+                                          <div className="flex items-center justify-between text-[10px] pt-1 border-t border-neutral-900">
+                                            <span className="inline-flex items-center gap-1 font-bold text-amber-400 bg-amber-950/70 px-1.5 py-0.2 rounded border border-amber-800/40 text-[9px] uppercase tracking-wider">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                                              PRIVATE • BELUM DIKELOLA
+                                            </span>
+                                            {(v.originalUploadAt || v.uploadedAt || v.createdAt) && (
+                                              <span className="text-neutral-500 font-mono text-[10px]">
+                                                {new Date(
+                                                  v.originalUploadAt || v.uploadedAt || v.createdAt!
+                                                ).toLocaleDateString('id-ID', {
+                                                  day: 'numeric',
+                                                  month: 'short',
+                                                  year: 'numeric',
+                                                })}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))}
+
+                                    {unmanagedVideos.length > 3 && (
+                                      <button
+                                        onClick={() =>
+                                          setExpandedUnmanagedChannelId(
+                                            expandedUnmanagedChannelId === channel.id ? null : channel.id
+                                          )
+                                        }
+                                        className="w-full text-center text-[11px] text-amber-400 hover:text-amber-300 font-semibold py-1 hover:underline cursor-pointer flex items-center justify-center gap-1 transition"
+                                      >
+                                        {expandedUnmanagedChannelId === channel.id ? (
+                                          <span>Tutup daftar ({unmanagedVideos.length} video)</span>
+                                        ) : (
+                                          <span>Lihat semua {unmanagedVideos.length} video private...</span>
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {/* Schedule Buffer Stock Monitor Badge */}
                         <div className="pt-0.5">

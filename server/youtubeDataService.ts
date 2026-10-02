@@ -153,7 +153,7 @@ export class YouTubeDataService {
   public async getChannelUploads(
     channelId: string,
     uploadPlaylistId: string,
-    maxResults = 250
+    maxResults = 2500
   ): Promise<{ success: boolean; data?: YouTubeVideoItem[]; error?: string }> {
     const accessToken = await youtubeAuthService.getValidAccessToken(channelId);
     const headers: Record<string, string> = {};
@@ -281,38 +281,83 @@ export class YouTubeDataService {
   }
 
   /**
-   * Queries existing scheduled videos on the YouTube channel to determine latest scheduled publishAt,
-   * strictly filtering by AMG REGULAR scope eligibility. Excluded / personal videos are ignored.
+   * Queries existing scheduled videos on the YouTube channel to determine latest scheduled publishAt anchor,
+   * scanning all uploaded playlist items via nextPageToken.
+   * Filters videos with privacyStatus === 'private' and a valid publishAt timestamp.
+   * Returns the furthest/latest scheduled video in the future as the anchor.
+   */
+  public async getScheduledVideosAnchor(
+    channelId: string,
+    uploadPlaylistId: string
+  ): Promise<{
+    latestPublishAt: string | null;
+    latestVideoTitle: string | null;
+    latestVideoId: string | null;
+    totalScheduledCount: number;
+    scheduledVideos: Array<{
+      id: string;
+      title: string;
+      publishAt: string;
+      privacyStatus: string;
+      thumbnailUrl?: string;
+    }>;
+  }> {
+    const uploadsResult = await this.getChannelUploads(channelId, uploadPlaylistId, 2500);
+    if (!uploadsResult.success || !uploadsResult.data) {
+      return {
+        latestPublishAt: null,
+        latestVideoTitle: null,
+        latestVideoId: null,
+        totalScheduledCount: 0,
+        scheduledVideos: [],
+      };
+    }
+
+    // Filter scheduled videos: privacyStatus === 'private' and valid ISO publishAt
+    const scheduledList = uploadsResult.data.filter((v) => {
+      const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
+      if (!isPrivate) return false;
+      if (!v.publishAt) return false;
+      const time = new Date(v.publishAt).getTime();
+      return !isNaN(time) && time > 0;
+    });
+
+    let maxTimestamp = 0;
+    let furthestItem: YouTubeVideoItem | null = null;
+
+    for (const v of scheduledList) {
+      const time = new Date(v.publishAt!).getTime();
+      if (time > maxTimestamp) {
+        maxTimestamp = time;
+        furthestItem = v;
+      }
+    }
+
+    return {
+      latestPublishAt: furthestItem?.publishAt || null,
+      latestVideoTitle: furthestItem?.title || null,
+      latestVideoId: furthestItem?.id || null,
+      totalScheduledCount: scheduledList.length,
+      scheduledVideos: scheduledList.map((s) => ({
+        id: s.id,
+        title: s.title,
+        publishAt: s.publishAt!,
+        privacyStatus: s.privacyStatus,
+        thumbnailUrl: s.thumbnailUrl,
+      })),
+    };
+  }
+
+  /**
+   * Queries existing scheduled videos on the YouTube channel to determine latest scheduled publishAt.
    */
   public async getLatestScheduledDate(
     channelId: string,
     uploadPlaylistId: string,
-    isEligibleVideoId?: (videoId: string) => boolean
+    _isEligibleVideoId?: (videoId: string) => boolean
   ): Promise<string | null> {
-    const uploadsResult = await this.getChannelUploads(channelId, uploadPlaylistId, 50);
-    if (!uploadsResult.success || !uploadsResult.data) {
-      return null;
-    }
-
-    let latestTimestamp = 0;
-    let latestIsoString: string | null = null;
-
-    for (const v of uploadsResult.data) {
-      if (v.publishAt) {
-        // If an eligibility filter is provided, strictly enforce that video is AMG REGULAR eligible
-        if (isEligibleVideoId && !isEligibleVideoId(v.id)) {
-          continue; // Skip personal / excluded / unclassified videos!
-        }
-
-        const time = new Date(v.publishAt).getTime();
-        if (time > latestTimestamp) {
-          latestTimestamp = time;
-          latestIsoString = v.publishAt;
-        }
-      }
-    }
-
-    return latestIsoString;
+    const anchor = await this.getScheduledVideosAnchor(channelId, uploadPlaylistId);
+    return anchor.latestPublishAt;
   }
 
   /**

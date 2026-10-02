@@ -17,8 +17,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { dbStore, UserRecord, SessionRecord, UserAccessRequest, WorkspaceRecord } from './db.js';
 import { emailService } from './emailService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Temporary memory store for Owner inspection of active codes: requestId -> code
 const activeCodesMap = new Map<string, string>();
@@ -67,6 +71,23 @@ function resetRateLimit(identifier: string): void {
   rateLimitMap.delete(identifier);
 }
 
+export interface PersistentOwnerAuthData {
+  version: number;
+  savedAt: string;
+  owner: UserRecord;
+  workspace?: WorkspaceRecord;
+  sessions?: SessionRecord[];
+}
+
+const CANDIDATE_OWNER_AUTH_PATHS = [
+  path.resolve(process.cwd(), 'data/owner_auth.json'),
+  path.resolve(process.cwd(), 'server/data/owner_auth.json'),
+  path.resolve(__dirname, '../data/owner_auth.json'),
+  path.resolve(__dirname, 'data/owner_auth.json'),
+  '/app/applet/data/owner_auth.json',
+  '/app/applet/server/data/owner_auth.json',
+];
+
 export class AuthService {
   private bootstrapTokenFilePath: string;
 
@@ -80,7 +101,96 @@ export class AuthService {
       }
     }
     this.bootstrapTokenFilePath = path.join(dataDir, '.owner-bootstrap-token');
+    this.ensureOwnerAuthLoaded();
     this.ensureBootstrapState();
+  }
+
+  /**
+   * Ensures Primary Owner credentials and active sessions are auto-loaded
+   * from persistent file (server/data/owner_auth.json / data/owner_auth.json).
+   * Prevents Initial Owner Setup from ever re-appearing once provisioned.
+   */
+  public ensureOwnerAuthLoaded(): boolean {
+    const existingOwner = dbStore.getPrimaryOwner();
+    if (existingOwner && existingOwner.email && existingOwner.passwordHash) {
+      return true;
+    }
+
+    for (const filePath of CANDIDATE_OWNER_AUTH_PATHS) {
+      if (fs.existsSync(filePath)) {
+        try {
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const data: PersistentOwnerAuthData = JSON.parse(raw);
+          if (data && data.owner && data.owner.email && data.owner.passwordHash) {
+            dbStore.users.set(data.owner.id, data.owner);
+            if (data.workspace) {
+              dbStore.workspaces.set(data.workspace.id, data.workspace);
+            }
+            if (Array.isArray(data.sessions)) {
+              const now = Date.now();
+              for (const s of data.sessions) {
+                if (s && s.id && !s.isRevoked && new Date(s.expiresAt).getTime() > now) {
+                  dbStore.sessions.set(s.id, s);
+                }
+              }
+            }
+
+            if (fs.existsSync(this.bootstrapTokenFilePath)) {
+              try {
+                fs.unlinkSync(this.bootstrapTokenFilePath);
+              } catch {}
+            }
+
+            return true;
+          }
+        } catch (e) {
+          console.warn('[AuthService] Error reading persistent owner auth file:', filePath, e);
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Saves Primary Owner credentials and active sessions to persistent file storage
+   * in both data/owner_auth.json and server/data/owner_auth.json.
+   */
+  public savePersistentOwnerAuth(owner: UserRecord, workspace?: WorkspaceRecord, sessions?: SessionRecord[]): void {
+    const ws = workspace || dbStore.workspaces.get(owner.workspaceId) || {
+      id: owner.workspaceId,
+      ownerId: owner.id,
+      name: `Owner Workspace (${owner.email})`,
+      type: 'OWNER_WORKSPACE' as const,
+      createdAt: owner.createdAt || new Date().toISOString(),
+    };
+
+    const activeSessions = sessions || Array.from(dbStore.sessions.values()).filter(
+      (s) => s.userId === owner.id && !s.isRevoked
+    );
+
+    const payload: PersistentOwnerAuthData = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      owner,
+      workspace: ws,
+      sessions: activeSessions,
+    };
+
+    const targetDirs = [
+      path.resolve(process.cwd(), 'data'),
+      path.resolve(process.cwd(), 'server/data'),
+    ];
+
+    for (const dir of targetDirs) {
+      try {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const filePath = path.join(dir, 'owner_auth.json');
+        fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+      } catch (e) {
+        console.warn('[AuthService] Could not persist owner auth to:', dir, e);
+      }
+    }
   }
 
   /**
@@ -186,6 +296,7 @@ export class AuthService {
    * Checks whether Primary Owner has already been provisioned.
    */
   public isOwnerProvisioned(): boolean {
+    this.ensureOwnerAuthLoaded();
     return dbStore.isOwnerProvisioned();
   }
 
@@ -193,6 +304,7 @@ export class AuthService {
    * Returns current primary owner details (safe for status checking).
    */
   public getPrimaryOwner(): { id: string; email: string; workspaceId: string } | null {
+    this.ensureOwnerAuthLoaded();
     const owner = dbStore.getPrimaryOwner();
     if (!owner) return null;
     return {
@@ -314,6 +426,9 @@ export class AuthService {
     // 7. Create Active Multi-Device Session for Owner
     const session = this.createSession(owner, params.deviceInfo, params.ipAddress);
 
+    // 8. Persist Primary Owner data and session to server/data/owner_auth.json & data/owner_auth.json
+    this.savePersistentOwnerAuth(owner, workspace, [session]);
+
     dbStore.logActivity({
       user: email,
       operation: 'PRIMARY_OWNER_PROVISIONED',
@@ -383,6 +498,7 @@ export class AuthService {
     dbStore.saveToDisk();
 
     const session = this.createSession(owner, params.deviceInfo, params.ipAddress);
+    this.savePersistentOwnerAuth(owner);
 
     dbStore.logActivity({
       user: owner.email,
@@ -450,6 +566,7 @@ export class AuthService {
     dbStore.saveToDisk();
 
     const session = this.createSession(owner, params.deviceInfo, params.ipAddress);
+    this.savePersistentOwnerAuth(owner);
 
     dbStore.logActivity({
       user: owner.email,
@@ -750,7 +867,11 @@ export class AuthService {
    */
   public validateSession(token: string): { user: UserRecord; session: SessionRecord } | null {
     if (!token) return null;
-    const session = dbStore.sessions.get(token);
+    let session = dbStore.sessions.get(token);
+    if (!session) {
+      this.ensureOwnerAuthLoaded();
+      session = dbStore.sessions.get(token);
+    }
     if (!session || session.isRevoked) return null;
 
     const now = Date.now();

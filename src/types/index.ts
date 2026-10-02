@@ -127,6 +127,7 @@ export interface Channel {
   lastSyncAt?: string;
   lastScheduledPublishAt?: string; // LAST_SCHEDULED_DATETIME cutoff
   lastScheduledVideoId?: string; // Video ID of the latest scheduled slot
+  lastScheduledVideoTitle?: string; // Title of the latest scheduled video anchor
   uploadPlaylistId?: string;
   subscriberCount?: number;
   videoCount?: number;

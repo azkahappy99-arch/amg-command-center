@@ -53,6 +53,11 @@ import {
   evaluateVideoEligibilityWithBlock,
   calculateDetectedVideosCount,
 } from '../utils/blockIsolation.ts';
+import {
+  formatWibDateTime,
+  isVideoUnmanagedPrivateRaw,
+  getChannelScheduledAnchor,
+} from '../utils/scheduleAndUnmanagedUtils.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -617,6 +622,51 @@ export const api = {
   },
 
   syncChannel: async (id: string) => {
+    // 1. First attempt backend sync: POST /api/channels/:id/sync
+    try {
+      const backendRes = await authFetch(`/api/channels/${encodeURIComponent(id)}/sync`, {
+        method: 'POST',
+      });
+      if (backendRes.ok) {
+        const syncData = await backendRes.json();
+        if (syncData && syncData.success) {
+          let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+          channels = syncConnectedChannelState(channels);
+          const idx = channels.findIndex(
+            (c) => c.id === id || c.youtubeChannelId === id || c.id === `chan-${id}`
+          );
+          if (idx >= 0) {
+            channels[idx].status = 'CONNECTED';
+            channels[idx].lastSyncAt = syncData.syncTimestamp || new Date().toISOString();
+            if (syncData.latestScheduledPublishAt) {
+              channels[idx].lastScheduledPublishAt = syncData.latestScheduledPublishAt;
+              channels[idx].latestManagedScheduledAt = syncData.latestScheduledPublishAt;
+            }
+            if (syncData.latestScheduledVideoTitle) {
+              channels[idx].lastScheduledVideoTitle = syncData.latestScheduledVideoTitle;
+            }
+            if (syncData.latestScheduledVideoId) {
+              channels[idx].lastScheduledVideoId = syncData.latestScheduledVideoId;
+            }
+            if (syncData.unmanagedVideoCount !== undefined) {
+              channels[idx].unmanagedVideoCount = syncData.unmanagedVideoCount;
+            }
+            if (syncData.detectedTotal !== undefined) {
+              channels[idx].videoCount = syncData.detectedTotal;
+            }
+            if (syncData.totalScheduledCount !== undefined) {
+              channels[idx].scheduleStockCount = syncData.totalScheduledCount;
+            }
+            setStorageItem(KEYS.CHANNELS, channels);
+          }
+          return syncData;
+        }
+      }
+    } catch (e) {
+      console.warn('Backend syncChannel error, using client GIS fallback:', e);
+    }
+
+    // 2. Client-side GIS fallback
     const token = localStorage.getItem(KEYS.ACCESS_TOKEN);
     let fetchedVideos: ManagedVideo[] = [];
     if (token) {
@@ -649,22 +699,23 @@ export const api = {
     );
     const now = new Date().toISOString();
 
+    const anchorInfo = getChannelScheduledAnchor(channels[idx] || ({} as any), channelVideos);
+    const unmanagedRaw = channelVideos.filter(isVideoUnmanagedPrivateRaw);
+
     if (idx >= 0) {
       channels[idx].lastSyncAt = now;
       channels[idx].status = 'CONNECTED';
       channels[idx].videoCount = channelVideos.length;
-      channels[idx].unmanagedVideoCount = channelVideos.filter(
-        (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
-      ).length;
+      channels[idx].unmanagedVideoCount = unmanagedRaw.length;
+      if (anchorInfo.latestPublishAt) {
+        channels[idx].lastScheduledPublishAt = anchorInfo.latestPublishAt;
+        channels[idx].latestManagedScheduledAt = anchorInfo.latestPublishAt;
+        channels[idx].lastScheduledVideoTitle = anchorInfo.latestVideoTitle || undefined;
+        channels[idx].lastScheduledVideoId = anchorInfo.latestVideoId || undefined;
+      }
+      channels[idx].scheduleStockCount = anchorInfo.scheduledVideosCount;
       setStorageItem(KEYS.CHANNELS, channels);
     }
-
-    const unmanaged = channelVideos.filter(
-      (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
-    ).length;
-    const managed = channelVideos.filter(
-      (v) => v.isManaged || v.privacyStatus !== 'private' || v.publishAt || v.scheduledPublishAt
-    ).length;
 
     return {
       success: true,
@@ -675,17 +726,30 @@ export const api = {
       uploadPlaylistId: `UU_${yId}`,
       syncTimestamp: now,
       detectedTotal: channelVideos.length,
-      newUnmanaged: unmanaged,
-      alreadyManaged: managed,
+      newUnmanaged: unmanagedRaw.length,
+      unmanagedVideoCount: unmanagedRaw.length,
+      latestScheduledPublishAt: anchorInfo.latestPublishAt,
+      latestScheduledVideoTitle: anchorInfo.latestVideoTitle,
+      latestScheduledVideoId: anchorInfo.latestVideoId,
+      totalScheduledCount: anchorInfo.scheduledVideosCount,
+      alreadyManaged: channelVideos.length - unmanagedRaw.length,
       errors: 0,
       hasLiveYouTubeApi: !!token,
       actualFetchedFromYouTube: fetchedVideos.length || channelVideos.length,
-      sampleVideos: channelVideos.slice(0, 5).map((v) => ({
+      sampleVideos: channelVideos.slice(0, 10).map((v) => ({
         id: v.id,
         title: v.titleBefore,
         privacyStatus: v.privacyStatus,
         uploadStatus: 'processed',
+        publishAt: v.publishAt,
         definition: v.definition || 'hd',
+      })),
+      unmanagedPrivateVideos: unmanagedRaw.slice(0, 20).map((v) => ({
+        id: v.id,
+        youtubeVideoId: v.youtubeVideoId,
+        title: v.titleBefore || v.titleAssigned || 'Video Tanpa Judul',
+        privacyStatus: v.privacyStatus,
+        originalUploadAt: v.originalUploadAt || v.uploadedAt || v.createdAt,
       })),
     };
   },
@@ -1534,30 +1598,83 @@ export const api = {
   },
 
   getScheduleReconciliation: async (channelId: string) => {
-    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
-    const channel = channels.find((c) => c.id === channelId) || channels[0];
-    const now = new Date();
+    // 1. Try real backend reconcile endpoint: GET /api/scheduler/reconcile/:channelId
+    try {
+      const res = await authFetch(`/api/scheduler/reconcile/${encodeURIComponent(channelId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.channelId) {
+          // Sync anchor state into amg_channels in localStorage
+          let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+          const idx = channels.findIndex(
+            (c) => c.id === channelId || c.youtubeChannelId === channelId || c.id === `chan-${channelId}`
+          );
+          if (idx >= 0) {
+            if (data.latestScheduledPublishAt) {
+              channels[idx].lastScheduledPublishAt = data.latestScheduledPublishAt;
+              channels[idx].latestManagedScheduledAt = data.latestScheduledPublishAt;
+            }
+            if (data.latestScheduledVideoTitle) {
+              channels[idx].lastScheduledVideoTitle = data.latestScheduledVideoTitle;
+            }
+            if (data.latestScheduledVideoId) {
+              channels[idx].lastScheduledVideoId = data.latestScheduledVideoId;
+            }
+            setStorageItem(KEYS.CHANNELS, channels);
+          }
+          return data;
+        }
+      }
+    } catch (err) {
+      console.warn('Backend scheduler reconcile error, using local fallback:', err);
+    }
 
-    const nextScheduleSlots = [1, 2, 3, 4, 5].map((dayOffset) => {
-      const slotTime = new Date(now.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-      slotTime.setHours(16, 0, 0, 0);
-      return {
+    // 2. Client-side fallback from amg_videos and amg_channels
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    const channel = channels.find((c) => c.id === channelId || c.youtubeChannelId === channelId) || channels[0];
+    const allVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []).filter(isRealVideo);
+    const anchorInfo = getChannelScheduledAnchor(channel, allVideos);
+
+    const effectiveAnchor = anchorInfo.latestPublishAt || channel.lastScheduledPublishAt || null;
+    const effectiveTitle = anchorInfo.latestVideoTitle || channel.lastScheduledVideoTitle || null;
+
+    const times = channel.scheduleConfig?.times || (channel.publishTime ? [channel.publishTime] : ['16:00']);
+    const timezone = channel.scheduleConfig?.timezone || channel.timezone || 'Asia/Jakarta';
+
+    // Calculate next continuation slots starting strictly AFTER effectiveAnchor
+    const slots = [];
+    let baseDate = effectiveAnchor ? new Date(effectiveAnchor) : new Date();
+    if (isNaN(baseDate.getTime())) baseDate = new Date();
+
+    for (let dayOffset = 1; dayOffset <= 15; dayOffset++) {
+      const slotTime = new Date(baseDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+      const timeStr = times[0] || '16:00';
+      const [h, m] = timeStr.split(':').map(Number);
+      slotTime.setHours(h || 16, m || 0, 0, 0);
+
+      slots.push({
         index: dayOffset,
         dateString: slotTime.toISOString().split('T')[0],
-        timeString: '16:00',
+        timeString: timeStr,
         isoPublishAt: slotTime.toISOString(),
-        formattedDisplay: slotTime.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
-      };
-    });
+        formattedDisplay: formatWibDateTime(slotTime.toISOString()),
+        timezone,
+        timezoneAbbreviation: 'WIB',
+      });
+    }
 
     return {
       channelId,
       channelTitle: channel?.title || 'YouTube Channel',
-      timezone: 'Asia/Jakarta',
-      storedCursorPublishAt: nextScheduleSlots[0].isoPublishAt,
-      verifiedYouTubePublishAt: nextScheduleSlots[0].isoPublishAt,
-      sourceOfTruthPublishAt: nextScheduleSlots[0].isoPublishAt,
-      nextScheduleSlots,
+      timezone,
+      storedCursorPublishAt: effectiveAnchor,
+      verifiedYouTubePublishAt: effectiveAnchor,
+      sourceOfTruthPublishAt: effectiveAnchor,
+      latestScheduledPublishAt: effectiveAnchor,
+      latestScheduledVideoTitle: effectiveTitle,
+      latestScheduledVideoId: anchorInfo.latestVideoId || channel.lastScheduledVideoId || null,
+      totalScheduledVideos: anchorInfo.scheduledVideosCount,
+      nextScheduleSlots: slots,
     };
   },
 

@@ -94,11 +94,89 @@ class DatabaseStore {
     youtubeApiKeyConfigured: !!process.env.YOUTUBE_API_KEY,
   };
 
+  public getOwnerAuthFileCandidates(): string[] {
+    return [
+      path.resolve(process.cwd(), 'data/owner_auth.json'),
+      path.resolve(process.cwd(), 'server/data/owner_auth.json'),
+      '/app/applet/data/owner_auth.json',
+      '/app/applet/server/data/owner_auth.json',
+    ];
+  }
+
+  public loadOwnerAuthFromDisk(): boolean {
+    for (const filePath of this.getOwnerAuthFileCandidates()) {
+      if (fs.existsSync(filePath)) {
+        try {
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const data = JSON.parse(raw);
+          if (data && data.owner && data.owner.email && data.owner.passwordHash) {
+            this.users.set(data.owner.id, data.owner);
+            if (data.workspace) {
+              this.workspaces.set(data.workspace.id, data.workspace);
+            }
+            if (Array.isArray(data.sessions)) {
+              for (const s of data.sessions) {
+                if (s && s.id && !s.isRevoked) {
+                  this.sessions.set(s.id, s);
+                }
+              }
+            }
+            return true;
+          }
+        } catch (e) {
+          console.warn('[DatabaseStore] Could not parse owner auth file:', filePath, e);
+        }
+      }
+    }
+    return false;
+  }
+
+  public saveOwnerAuthToDisk(): void {
+    const owner = this.getPrimaryOwner();
+    if (!owner) return;
+    const workspace = this.workspaces.get(owner.workspaceId) || {
+      id: owner.workspaceId,
+      ownerId: owner.id,
+      name: `Owner Workspace (${owner.email})`,
+      type: 'OWNER_WORKSPACE' as const,
+      createdAt: owner.createdAt || new Date().toISOString(),
+    };
+    const activeSessions = Array.from(this.sessions.values()).filter(
+      (s) => s.userId === owner.id && !s.isRevoked
+    );
+
+    const payload = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      owner,
+      workspace,
+      sessions: activeSessions,
+    };
+
+    const targetDirs = [
+      path.resolve(process.cwd(), 'data'),
+      path.resolve(process.cwd(), 'server/data'),
+    ];
+
+    for (const dir of targetDirs) {
+      try {
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const filePath = path.join(dir, 'owner_auth.json');
+        fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8');
+      } catch (e) {
+        console.warn('[DatabaseStore] Could not write owner auth file to:', dir, e);
+      }
+    }
+  }
+
   public isOwnerProvisioned(): boolean {
     for (const u of this.users.values()) {
       if (u.role === 'PRIMARY_OWNER') {
         return true;
       }
+    }
+    if (this.loadOwnerAuthFromDisk()) {
+      return true;
     }
     return false;
   }
@@ -107,6 +185,13 @@ class DatabaseStore {
     for (const u of this.users.values()) {
       if (u.role === 'PRIMARY_OWNER') {
         return u;
+      }
+    }
+    if (this.loadOwnerAuthFromDisk()) {
+      for (const u of this.users.values()) {
+        if (u.role === 'PRIMARY_OWNER') {
+          return u;
+        }
       }
     }
     return null;
@@ -180,6 +265,7 @@ class DatabaseStore {
         console.log(`[DatabaseStore] Loaded persistent database: ${this.channels.size} channels, ${this.videos.size} videos from ${this.dbFilePath}`);
         this.clearSeededData();
         this.sanitizeBlockIntegrity();
+        this.loadOwnerAuthFromDisk();
         return;
       } catch (err) {
         console.error('[DatabaseStore] Failed to parse existing database file, seeding default:', err);
@@ -189,6 +275,7 @@ class DatabaseStore {
     // Seed master configurations only if file does not exist
     this.seedInitialData();
     this.clearSeededData();
+    this.loadOwnerAuthFromDisk();
     this.saveToDisk();
   }
 

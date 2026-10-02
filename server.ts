@@ -54,6 +54,7 @@ function extractAuthSession(req: Request) {
 // 0. AUTHENTICATION & ACCESS CONTROL (PRIMARY OWNER & USER)
 // ==========================================
 app.get('/api/auth/status', (req: Request, res: Response) => {
+  authService.ensureOwnerAuthLoaded();
   const isProvisioned = authService.isOwnerProvisioned();
   const sessionData = extractAuthSession(req);
   const primaryOwner = authService.getPrimaryOwner();
@@ -490,6 +491,149 @@ app.get('/api/stats', (req: Request, res: Response) => {
   });
 });
 
+// Strict evaluation of unmanaged raw private videos according to 5 AMG criteria
+function isVideoUnmanagedPrivateRaw(v: any): boolean {
+  if (!v) return false;
+
+  // CONDITION A — Privacy: Must be private
+  const privacy = (v.privacyStatus || '').toLowerCase();
+  if (privacy !== 'private') {
+    return false;
+  }
+
+  // CONDITION B / EXCLUSION 1 — Belum Terjadwal: publishAt == null
+  const publishAt = v.publishAt || v.status?.publishAt || v.scheduledPublishAt;
+  if (publishAt) {
+    const t = new Date(publishAt).getTime();
+    if (!isNaN(t) && t > 0) {
+      return false; // Already scheduled on YouTube
+    }
+  }
+
+  // EXCLUSION 2 — Sudah Diproses AMG
+  if (v.isManaged === true) {
+    return false;
+  }
+  const status = (v.managementStatus || '').toUpperCase();
+  if (
+    status === 'MANAGED' ||
+    status === 'PROCESSED' ||
+    status === 'COMPLETED' ||
+    status === 'SCHEDULED' ||
+    status === 'EXCLUDED'
+  ) {
+    return false;
+  }
+  if (v.processedAt || v.amgProcessedAt) {
+    return false;
+  }
+
+  // EXCLUSION 3 — Master Title Sudah Diterapkan melalui workflow AMG
+  if (
+    v.titleAssigned &&
+    v.titleAssigned.trim() !== '' &&
+    v.titleAssigned !== v.titleBefore
+  ) {
+    return false;
+  }
+
+  // EXCLUSION 4 — Master Thumbnail Sudah Diterapkan melalui workflow AMG
+  if (
+    v.thumbnailAssigned &&
+    v.thumbnailAssigned.trim() !== '' &&
+    v.thumbnailAssigned !== v.thumbnailBefore
+  ) {
+    return false;
+  }
+
+  // EXCLUSION 5 — Video Sedang/Sudah Masuk Workflow Automation
+  if (status === 'QUEUED' || status === 'PROCESSING' || status === 'RETRY') {
+    return false;
+  }
+  if (v.automationBatchId && v.automationBatchId.trim() !== '') {
+    return false;
+  }
+
+  // Passes ALL rules: Strictly raw private video waiting to be managed by AMG
+  return true;
+}
+
+// Computes the furthest scheduled video anchor and unmanaged counts for a channel
+function refreshChannelScheduleAndUnmanagedState(channel: any, allVideos: any[]) {
+  const channelVideos = allVideos.filter(
+    (v) =>
+      v.channelId === channel.id ||
+      (channel.youtubeChannelId &&
+        (v.channelId === channel.youtubeChannelId ||
+          v.channelId === `chan-${channel.youtubeChannelId}`))
+  );
+
+  let maxTime = 0;
+  let latestAnchorPublishAt: string | null = null;
+  let latestAnchorTitle: string | null = null;
+  let latestAnchorId: string | null = null;
+  let scheduledCount = 0;
+
+  for (const v of channelVideos) {
+    const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
+    if (!isPrivate) continue;
+
+    const pubAt = v.publishAt || v.status?.publishAt || v.scheduledPublishAt;
+    if (pubAt) {
+      const t = new Date(pubAt).getTime();
+      if (!isNaN(t) && t > 0) {
+        scheduledCount++;
+        if (t > maxTime) {
+          maxTime = t;
+          latestAnchorPublishAt = pubAt;
+          latestAnchorTitle = v.titleBefore || v.titleAssigned || v.id;
+          latestAnchorId = v.youtubeVideoId || v.id;
+        }
+      }
+    }
+  }
+
+  // Also check channel's stored anchor if later than video records
+  const storedAnchor = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+  if (storedAnchor) {
+    const storedTime = new Date(storedAnchor).getTime();
+    if (!isNaN(storedTime) && storedTime > maxTime) {
+      maxTime = storedTime;
+      latestAnchorPublishAt = storedAnchor;
+      latestAnchorTitle = channel.lastScheduledVideoTitle || latestAnchorTitle;
+      latestAnchorId = channel.lastScheduledVideoId || latestAnchorId;
+    }
+  }
+
+  if (latestAnchorPublishAt) {
+    channel.lastScheduledPublishAt = latestAnchorPublishAt;
+    channel.latestManagedScheduledAt = latestAnchorPublishAt;
+    if (latestAnchorTitle) channel.lastScheduledVideoTitle = latestAnchorTitle;
+    if (latestAnchorId) channel.lastScheduledVideoId = latestAnchorId;
+  }
+  channel.scheduleStockCount = scheduledCount;
+
+  // Unmanaged videos according to 5 strict AMG criteria
+  const unmanagedList = channelVideos.filter(isVideoUnmanagedPrivateRaw);
+  channel.unmanagedVideoCount = unmanagedList.length;
+  channel.videoCount = channelVideos.length;
+
+  const bufferEval = evaluateChannelScheduleBuffer(channel, allVideos);
+  channel.scheduleBufferDays = bufferEval.scheduleBufferDays;
+  channel.scheduleStockCount = bufferEval.scheduleStockCount;
+  channel.scheduleAlertStatus = bufferEval.scheduleAlertStatus;
+  channel.bufferExhaustionDate = bufferEval.bufferExhaustionDate;
+
+  return {
+    latestAnchorPublishAt,
+    latestAnchorTitle,
+    latestAnchorId,
+    scheduledCount,
+    unmanagedList,
+    bufferEval,
+  };
+}
+
 // ==========================================
 // 2. CHANNELS
 // ==========================================
@@ -520,11 +664,7 @@ app.get('/api/channels', (req: Request, res: Response) => {
       effectiveStatus = c.status || 'CONNECTED';
     }
 
-    const bufferEval = evaluateChannelScheduleBuffer(c, allVideos);
-    c.scheduleBufferDays = bufferEval.scheduleBufferDays;
-    c.scheduleStockCount = bufferEval.scheduleStockCount;
-    c.scheduleAlertStatus = bufferEval.scheduleAlertStatus;
-    c.bufferExhaustionDate = bufferEval.bufferExhaustionDate;
+    const { bufferEval } = refreshChannelScheduleAndUnmanagedState(c, allVideos);
 
     return {
       ...c,
@@ -559,11 +699,7 @@ app.get('/api/channels/:id', (req: Request, res: Response) => {
   }
 
   const allVideos = Array.from(dbStore.videos.values());
-  const bufferEval = evaluateChannelScheduleBuffer(channel, allVideos);
-  channel.scheduleBufferDays = bufferEval.scheduleBufferDays;
-  channel.scheduleStockCount = bufferEval.scheduleStockCount;
-  channel.scheduleAlertStatus = bufferEval.scheduleAlertStatus;
-  channel.bufferExhaustionDate = bufferEval.bufferExhaustionDate;
+  const { unmanagedList } = refreshChannelScheduleAndUnmanagedState(channel, allVideos);
 
   const authStatus = youtubeAuthService.getConnectionStatus(channel.id);
   let effectiveStatus: string = channel.status;
@@ -577,22 +713,26 @@ app.get('/api/channels/:id', (req: Request, res: Response) => {
     effectiveStatus = 'AUTHORIZATION REQUIRED';
   }
 
-  // Calculate unmanaged video count
-  const unmanagedCount = Array.from(dbStore.videos.values()).filter(v => v.channelId === channel.id && !v.isManaged).length;
-  const recentVideos = Array.from(dbStore.videos.values())
-    .filter(v => v.channelId === channel.id)
+  const recentVideos = allVideos
+    .filter(
+      (v) =>
+        v.channelId === channel.id ||
+        (channel.youtubeChannelId &&
+          (v.channelId === channel.youtubeChannelId ||
+            v.channelId === `chan-${channel.youtubeChannelId}`))
+    )
     .slice(0, 10);
   const recentJobs = Array.from(dbStore.automationJobs.values())
-    .filter(j => j.channelId === channel.id)
+    .filter((j) => j.channelId === channel.id)
     .slice(0, 10);
   const recentErrors = Array.from(dbStore.errorLogs.values())
-    .filter(e => e.channelId === channel.id)
+    .filter((e) => e.channelId === channel.id)
     .slice(0, 5);
 
   res.json({
     ...channel,
     status: effectiveStatus,
-    unmanagedVideoCount: unmanagedCount,
+    unmanagedVideoCount: unmanagedList.length,
     connectionDetails: {
       isConnected: authStatus.isConnected,
       hasRefreshToken: authStatus.hasRefreshToken,
@@ -794,10 +934,18 @@ app.post('/api/schedule/preview', (req: Request, res: Response) => {
       targetConfig = resolveScheduleConfig(channel, profile);
     }
     if (channel) {
+      const allVids = Array.from(dbStore.videos.values());
+      refreshChannelScheduleAndUnmanagedState(channel, allVids);
       lastScheduledPublishAt = channel.lastScheduledPublishAt || null;
-      for (const v of dbStore.videos.values()) {
-        if (v.channelId === channel.id && v.scheduledPublishAt) {
-          occupiedSlots.push(v.scheduledPublishAt);
+      for (const v of allVids) {
+        if (
+          v.channelId === channel.id ||
+          (channel.youtubeChannelId && (v.channelId === channel.youtubeChannelId || v.channelId === `chan-${channel.youtubeChannelId}`))
+        ) {
+          const pub = v.publishAt || (v as any).status?.publishAt || v.scheduledPublishAt;
+          if (pub) {
+            occupiedSlots.push(pub);
+          }
         }
       }
     }
@@ -909,7 +1057,7 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
       });
     }
 
-    const uploadsResult = await youtubeDataService.getChannelUploads(channel.id, uploadsPlaylistId, 500);
+    const uploadsResult = await youtubeDataService.getChannelUploads(channel.id, uploadsPlaylistId, 2500);
     if (!uploadsResult.success || !uploadsResult.data) {
       return res.status(502).json({
         success: false,
@@ -993,16 +1141,23 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
     }
 
     channel.lastSyncAt = new Date().toISOString();
-    const channelVideos = Array.from(dbStore.videos.values()).filter((v) => v.channelId === channel.id);
-    const unmanaged = channelVideos.filter((v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt);
-    const managed = channelVideos.filter((v) => v.isManaged || v.privacyStatus !== 'private' || v.publishAt || v.scheduledPublishAt);
-    const eligibleRegular = channelVideos.filter((v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt && v.managementScope === 'REGULAR' && v.isAmgEligible);
-    const unclassified = channelVideos.filter((v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt && v.managementScope === 'UNCLASSIFIED');
-    const excluded = channelVideos.filter((v) => v.managementScope === 'EXCLUDED' || v.privacyStatus !== 'private' || v.publishAt || v.scheduledPublishAt);
-
-    channel.unmanagedVideoCount = eligibleRegular.length;
     channel.status = 'CONNECTED';
     channel.isSeeded = false; // Confirmed active real channel
+
+    const allVideosNow = Array.from(dbStore.videos.values());
+    const { latestAnchorPublishAt, latestAnchorTitle, latestAnchorId, scheduledCount, unmanagedList, bufferEval } =
+      refreshChannelScheduleAndUnmanagedState(channel, allVideosNow);
+
+    dbStore.channels.set(channel.id, channel);
+    dbStore.saveToDisk();
+
+    const channelVideos = allVideosNow.filter(
+      (v) =>
+        v.channelId === channel.id ||
+        (channel.youtubeChannelId &&
+          (v.channelId === channel.youtubeChannelId ||
+            v.channelId === `chan-${channel.youtubeChannelId}`))
+    );
 
     dbStore.logActivity({
       user: 'Administrator',
@@ -1010,7 +1165,7 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
       channelTitle: channel.title,
       operation: 'LIVE YOUTUBE SYNC (READ-ONLY)',
       previousValue: `${channel.videoCount || 0} recorded videos`,
-      newValue: `Live YouTube sync completed: ${realVideos.length} actual videos fetched. ${eligibleRegular.length} AMG regular eligible, ${unclassified.length} unclassified, ${excluded.length} excluded. Zero modifications performed (Read-Only Mode).`,
+      newValue: `Live YouTube sync completed: ${realVideos.length} actual videos fetched. ${scheduledCount} scheduled anchor (${latestAnchorPublishAt || 'None'}), ${unmanagedList.length} unmanaged private raw videos. Zero modifications performed (Read-Only Mode).`,
       result: 'SUCCESS',
     });
 
@@ -1023,12 +1178,17 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
       uploadPlaylistId: uploadsPlaylistId,
       syncTimestamp: channel.lastSyncAt,
       detectedTotal: channelVideos.length,
-      newUnmanaged: unmanaged.length,
-      alreadyManaged: managed.length,
+      newUnmanaged: unmanagedList.length,
+      unmanagedVideoCount: unmanagedList.length,
+      latestScheduledPublishAt: latestAnchorPublishAt,
+      latestScheduledVideoTitle: latestAnchorTitle,
+      latestScheduledVideoId: latestAnchorId,
+      totalScheduledCount: scheduledCount,
+      alreadyManaged: channelVideos.length - unmanagedList.length,
       scopeSummary: {
-        includedCount: eligibleRegular.length,
-        excludedCount: excluded.length,
-        needsScopeAssignmentCount: unclassified.length,
+        includedCount: unmanagedList.length,
+        excludedCount: channelVideos.length - unmanagedList.length,
+        needsScopeAssignmentCount: 0,
         totalDetected: channelVideos.length,
       },
       errors: 0,
@@ -1043,6 +1203,14 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
         definition: v.definition,
         duration: v.duration,
         thumbnailUrl: v.thumbnailUrl,
+      })),
+      unmanagedPrivateVideos: unmanagedList.slice(0, 20).map((v) => ({
+        id: v.id,
+        youtubeVideoId: v.youtubeVideoId,
+        title: v.titleBefore || v.titleAssigned || 'Video Tanpa Judul',
+        privacyStatus: v.privacyStatus,
+        originalUploadAt: v.originalUploadAt || v.uploadedAt || v.createdAt,
+        thumbnailUrl: v.thumbnailBefore || v.thumbnailAssigned || '',
       })),
     });
   } catch (err: any) {
@@ -1833,11 +2001,9 @@ app.post('/api/videos/batch-sync', (req: Request, res: Response) => {
   }
 
   if (channel) {
-    channel.videoCount = videos.length;
-    channel.unmanagedVideoCount = Array.from(dbStore.videos.values()).filter(
-      v => v.channelId === channel.id && !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
-    ).length;
     channel.lastSyncAt = new Date().toISOString();
+    refreshChannelScheduleAndUnmanagedState(channel, Array.from(dbStore.videos.values()));
+    dbStore.channels.set(channel.id, channel);
   }
 
   dbStore.saveToDisk();
@@ -2377,47 +2543,166 @@ app.post('/api/test/phase2-acceptance', (req: Request, res: Response) => {
 // 9. SCHEDULER
 // ==========================================
 app.get('/api/scheduler/reconcile/:channelId', async (req: Request, res: Response) => {
-  const channel = dbStore.channels.get(req.params.channelId);
+  const targetId = req.params.channelId;
+  const channel =
+    dbStore.channels.get(targetId) ||
+    dbStore.getChannelByYoutubeId(targetId) ||
+    Array.from(dbStore.channels.values()).find(
+      (c) => c.id === targetId || c.youtubeChannelId === targetId || c.id === `chan-${targetId}`
+    );
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
-  // Query actual YouTube channel if uploads playlist and token exist, strictly ignoring personal/excluded videos
-  let youtubeLatest: string | null = null;
+  // 1. Query live YouTube channel for scheduled videos anchor via exhaustive scan if token and upload playlist exist
+  let youtubeAnchor: {
+    latestPublishAt: string | null;
+    latestVideoTitle: string | null;
+    latestVideoId: string | null;
+    totalScheduledCount: number;
+    scheduledVideos: Array<{
+      id: string;
+      title: string;
+      publishAt: string;
+      privacyStatus: string;
+      thumbnailUrl?: string;
+    }>;
+  } | null = null;
+
   const hasAuth = await youtubeAuthService.getValidAccessToken(channel.id);
   if (hasAuth && channel.uploadPlaylistId) {
-    youtubeLatest = await youtubeDataService.getLatestScheduledDate(channel.id, channel.uploadPlaylistId, (vidId) => {
-      const local = Array.from(dbStore.videos.values()).find(v => v.youtubeVideoId === vidId || v.id === vidId);
-      // Only AMG REGULAR eligible videos count towards the cursor!
-      return !local || (local.managementScope === 'REGULAR' && local.isAmgEligible);
-    });
+    try {
+      youtubeAnchor = await youtubeDataService.getScheduledVideosAnchor(channel.id, channel.uploadPlaylistId);
+      // Upsert any scheduled videos into dbStore
+      if (youtubeAnchor.scheduledVideos && youtubeAnchor.scheduledVideos.length > 0) {
+        for (const sv of youtubeAnchor.scheduledVideos) {
+          const existing = Array.from(dbStore.videos.values()).find(
+            (ev) => ev.youtubeVideoId === sv.id || ev.id === `yt-${sv.id}` || ev.id === sv.id
+          );
+          if (existing) {
+            existing.publishAt = sv.publishAt;
+            existing.scheduledPublishAt = sv.publishAt;
+            existing.privacyStatus = 'private';
+            existing.managementStatus = 'SCHEDULED';
+            existing.isManaged = true;
+          } else {
+            const newRecord = {
+              id: `yt-${sv.id}`,
+              youtubeVideoId: sv.id,
+              channelId: channel.id,
+              channelTitle: channel.title,
+              titleBefore: sv.title,
+              titleAssigned: '',
+              thumbnailBefore: sv.thumbnailUrl || '',
+              thumbnailAssigned: '',
+              originalUploadAt: new Date().toISOString(),
+              processingStatus: 'processed' as const,
+              privacyStatus: 'private' as const,
+              publishAt: sv.publishAt,
+              scheduledPublishAt: sv.publishAt,
+              managementStatus: 'SCHEDULED' as const,
+              managementScope: 'EXCLUDED' as const,
+              isAmgEligible: false,
+              isManaged: true,
+              isSeeded: false,
+              contentProfileId: channel.contentProfileId || '',
+              retryCount: 0,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            dbStore.videos.set(newRecord.id, newRecord as any);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('YouTube scheduled anchor scan error:', e);
+    }
   }
 
-  // Check local database for latest AMG REGULAR scheduled video
-  let latestLocalAmgScheduled: string | null = null;
-  let latestTimestamp = 0;
-  for (const v of dbStore.videos.values()) {
-    if (v.channelId === channel.id && v.managementScope === 'REGULAR' && v.isAmgEligible && v.scheduledPublishAt) {
-      const time = new Date(v.scheduledPublishAt).getTime();
-      if (time > latestTimestamp) {
-        latestTimestamp = time;
-        latestLocalAmgScheduled = v.scheduledPublishAt;
+  // 2. Scan all videos for this channel in dbStore to find furthest scheduled video in future
+  const channelVideos = Array.from(dbStore.videos.values()).filter(
+    (v) =>
+      v.channelId === channel.id ||
+      (channel.youtubeChannelId &&
+        (v.channelId === channel.youtubeChannelId ||
+          v.channelId === `chan-${channel.youtubeChannelId}`))
+  );
+
+  let furthestPublishAt: string | null = null;
+  let furthestTitle: string | null = null;
+  let furthestId: string | null = null;
+  let maxTimestamp = 0;
+  let scheduledCount = 0;
+
+  for (const v of channelVideos) {
+    const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
+    if (!isPrivate) continue;
+
+    const pubAt = v.publishAt || (v as any).status?.publishAt || v.scheduledPublishAt;
+    if (pubAt) {
+      const t = new Date(pubAt).getTime();
+      if (!isNaN(t) && t > 0) {
+        scheduledCount++;
+        if (t > maxTimestamp) {
+          maxTimestamp = t;
+          furthestPublishAt = pubAt;
+          furthestTitle = v.titleBefore || v.titleAssigned || null;
+          furthestId = v.youtubeVideoId || v.id;
+        }
       }
     }
   }
 
-  // Effective latest anchor strictly prioritizes confirmed AMG REGULAR scheduled videos
-  const effectiveLatest = youtubeLatest || latestLocalAmgScheduled || channel.lastScheduledPublishAt || null;
+  // Compare with youtubeAnchor
+  if (youtubeAnchor?.latestPublishAt) {
+    const ytTime = new Date(youtubeAnchor.latestPublishAt).getTime();
+    if (ytTime > maxTimestamp) {
+      maxTimestamp = ytTime;
+      furthestPublishAt = youtubeAnchor.latestPublishAt;
+      furthestTitle = youtubeAnchor.latestVideoTitle;
+      furthestId = youtubeAnchor.latestVideoId;
+    }
+    if (youtubeAnchor.totalScheduledCount > scheduledCount) {
+      scheduledCount = youtubeAnchor.totalScheduledCount;
+    }
+  }
+
+  // Compare with stored anchor on channel
+  const storedAnchor = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+  if (storedAnchor) {
+    const storedTime = new Date(storedAnchor).getTime();
+    if (!isNaN(storedTime) && storedTime > maxTimestamp) {
+      maxTimestamp = storedTime;
+      furthestPublishAt = storedAnchor;
+      furthestTitle = channel.lastScheduledVideoTitle || furthestTitle;
+      furthestId = channel.lastScheduledVideoId || furthestId;
+    }
+  }
+
+  const effectiveLatest = furthestPublishAt;
+  const effectiveLatestTitle = furthestTitle;
+  const effectiveLatestId = furthestId;
+
+  if (effectiveLatest) {
+    channel.lastScheduledPublishAt = effectiveLatest;
+    channel.latestManagedScheduledAt = effectiveLatest;
+    channel.lastScheduledVideoTitle = effectiveLatestTitle || undefined;
+    channel.lastScheduledVideoId = effectiveLatestId || undefined;
+    channel.scheduleStockCount = scheduledCount;
+    dbStore.channels.set(channel.id, channel);
+    dbStore.saveToDisk();
+  }
 
   const profile = channel.contentProfileId ? dbStore.profiles.get(channel.contentProfileId) : null;
   const resolvedConfig = resolveScheduleConfig(channel, profile);
 
   const occupiedSlots: string[] = [];
-  for (const v of dbStore.videos.values()) {
-    if (v.channelId === channel.id && v.scheduledPublishAt) {
-      occupiedSlots.push(v.scheduledPublishAt);
+  for (const v of channelVideos) {
+    const pubAt = v.publishAt || (v as any).status?.publishAt || v.scheduledPublishAt;
+    if (pubAt) {
+      occupiedSlots.push(pubAt);
     }
   }
 
-  // Calculate next 15 slots
+  // Calculate next 15 slots strictly continuing AFTER effectiveLatest
   const nextSchedules = calculateNextSchedules(
     15,
     resolvedConfig,
@@ -2428,10 +2713,14 @@ app.get('/api/scheduler/reconcile/:channelId', async (req: Request, res: Respons
   res.json({
     channelId: channel.id,
     channelTitle: channel.title,
-    timezone: channel.timezone,
+    timezone: channel.timezone || 'Asia/Jakarta',
     storedCursorPublishAt: channel.lastScheduledPublishAt,
-    verifiedYouTubePublishAt: youtubeLatest,
+    verifiedYouTubePublishAt: effectiveLatest,
     sourceOfTruthPublishAt: effectiveLatest,
+    latestScheduledPublishAt: effectiveLatest,
+    latestScheduledVideoTitle: effectiveLatestTitle,
+    latestScheduledVideoId: effectiveLatestId,
+    totalScheduledVideos: scheduledCount,
     nextScheduleSlots: nextSchedules,
   });
 });

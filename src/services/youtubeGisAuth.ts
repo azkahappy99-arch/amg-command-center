@@ -438,7 +438,7 @@ export async function fetchChannelVideosFromYouTube(
     if (uploadsPlaylistId) {
       let pageToken: string | undefined = undefined;
       let pagesCount = 0;
-      const MAX_PAGES = 10; // Supports up to 500 videos per full scan
+      const MAX_PAGES = 60; // Supports up to 3000 videos for exhaustive scan across all pages
 
       try {
         do {
@@ -703,10 +703,68 @@ function updateChannelVideosInStorage(
             c.youtubeChannelId === channelId
         );
         if (cIdx >= 0) {
+          // Identify furthest scheduled anchor in future
+          let maxSched = 0;
+          let latestPubAt: string | null = null;
+          let latestTitle: string | null = null;
+          let latestId: string | null = null;
+          let scheduledCount = 0;
+
+          for (const nv of newVideos) {
+            const isPriv = (nv.privacyStatus || '').toLowerCase() === 'private';
+            if (!isPriv) continue;
+            const pub = nv.publishAt || (nv as any).status?.publishAt || nv.scheduledPublishAt;
+            if (pub) {
+              const t = new Date(pub).getTime();
+              if (!isNaN(t) && t > 0) {
+                scheduledCount++;
+                if (t > maxSched) {
+                  maxSched = t;
+                  latestPubAt = pub;
+                  latestTitle = nv.titleBefore || nv.titleAssigned || nv.id;
+                  latestId = nv.youtubeVideoId || nv.id;
+                }
+              }
+            }
+          }
+
+          if (latestPubAt) {
+            parsedChannels[cIdx].lastScheduledPublishAt = latestPubAt;
+            parsedChannels[cIdx].latestManagedScheduledAt = latestPubAt;
+            parsedChannels[cIdx].lastScheduledVideoTitle = latestTitle || parsedChannels[cIdx].lastScheduledVideoTitle;
+            parsedChannels[cIdx].lastScheduledVideoId = latestId || parsedChannels[cIdx].lastScheduledVideoId;
+          }
+          parsedChannels[cIdx].scheduleStockCount = scheduledCount;
           parsedChannels[cIdx].videoCount = newVideos.length;
-          parsedChannels[cIdx].unmanagedVideoCount = newVideos.filter(
-            (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
-          ).length;
+
+          // Strict 5-exclusion filter for unmanaged private raw videos
+          parsedChannels[cIdx].unmanagedVideoCount = newVideos.filter((v) => {
+            const priv = (v.privacyStatus || '').toLowerCase();
+            if (priv !== 'private') return false;
+            const pub = v.publishAt || v.scheduledPublishAt;
+            if (pub) {
+              const t = new Date(pub).getTime();
+              if (!isNaN(t) && t > 0) return false;
+            }
+            if (v.isManaged === true) return false;
+            const st = (v.managementStatus || '').toUpperCase();
+            if (
+              st === 'MANAGED' ||
+              st === 'PROCESSED' ||
+              st === 'COMPLETED' ||
+              st === 'SCHEDULED' ||
+              st === 'EXCLUDED' ||
+              st === 'QUEUED' ||
+              st === 'PROCESSING' ||
+              st === 'RETRY'
+            ) {
+              return false;
+            }
+            if (v.automationBatchId && v.automationBatchId.trim() !== '') return false;
+            if (v.titleAssigned && v.titleAssigned.trim() !== '' && v.titleAssigned !== v.titleBefore) return false;
+            if (v.thumbnailAssigned && v.thumbnailAssigned.trim() !== '' && v.thumbnailAssigned !== v.thumbnailBefore) return false;
+            return true;
+          }).length;
           parsedChannels[cIdx].lastSyncAt = new Date().toISOString();
           localStorage.setItem('amg_channels', JSON.stringify(parsedChannels));
         }

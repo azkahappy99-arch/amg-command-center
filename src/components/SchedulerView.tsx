@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Channel } from '../types/index.ts';
 import { api } from '../services/api.ts';
+import { formatWibDateTime } from '../utils/scheduleAndUnmanagedUtils.ts';
 
 interface SchedulerViewProps {
   channels: Channel[];
@@ -127,26 +128,56 @@ export const SchedulerView: React.FC<SchedulerViewProps> = ({
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
               {/* Box 1: Latest Scheduled on YouTube */}
-              <div className="p-4 rounded-xl bg-neutral-950/80 border border-neutral-800/80 space-y-1">
-                <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
-                  VIDEO TERAKHIR DI YOUTUBE
-                </div>
-                <div className="text-sm font-bold text-neutral-100 flex items-center gap-1.5">
-                  {selectedChannel?.latestManagedScheduledAt ? (
-                    <span>
-                      {new Date(selectedChannel.latestManagedScheduledAt).toLocaleString('id-ID', {
-                        dateStyle: 'medium',
-                        timeStyle: 'short',
-                      })}
+              <div className="p-4 rounded-xl bg-neutral-950/80 border border-neutral-800/80 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">
+                    VIDEO TERAKHIR DI YOUTUBE
+                  </div>
+                  {scheduleData?.totalScheduledVideos > 0 && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-neutral-800 text-neutral-300">
+                      {scheduleData.totalScheduledVideos} Terjadwal
                     </span>
-                  ) : (
-                    <span className="text-neutral-400 font-normal">Belum ada jadwal</span>
                   )}
                 </div>
-                <div className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1">
-                  <CheckCircle className="w-3.5 h-3.5" />
+
+                {(() => {
+                  const latestDate =
+                    scheduleData?.latestScheduledPublishAt ||
+                    scheduleData?.verifiedYouTubePublishAt ||
+                    selectedChannel?.lastScheduledPublishAt ||
+                    selectedChannel?.latestManagedScheduledAt;
+                  const latestTitle =
+                    scheduleData?.latestScheduledVideoTitle ||
+                    selectedChannel?.lastScheduledVideoTitle;
+
+                  return latestDate ? (
+                    <div className="space-y-1">
+                      {latestTitle && (
+                        <div
+                          className="text-xs font-bold text-neutral-200 line-clamp-2 leading-tight"
+                          title={latestTitle}
+                        >
+                          "{latestTitle}"
+                        </div>
+                      )}
+                      <div className="text-sm font-black text-emerald-400 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                        <span>{formatWibDateTime(latestDate)}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-sm font-normal text-neutral-400">
+                      Belum ada jadwal
+                    </div>
+                  );
+                })()}
+
+                <div className="text-[11px] text-emerald-400 flex items-center gap-1 mt-1 pt-1 border-t border-neutral-900">
+                  <CheckCircle className="w-3.5 h-3.5 shrink-0" />
                   <span>
-                    {selectedChannel?.latestManagedScheduledAt ? 'Titik Acuan Terverifikasi' : 'Siap Menentukan Acuan'}
+                    {scheduleData?.latestScheduledPublishAt || selectedChannel?.lastScheduledPublishAt || selectedChannel?.latestManagedScheduledAt
+                      ? 'Titik Acuan Terverifikasi'
+                      : 'Siap Menentukan Acuan'}
                   </span>
                 </div>
               </div>
