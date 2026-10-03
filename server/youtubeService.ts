@@ -48,17 +48,35 @@ export class YouTubeService {
 
     // Call live YouTube Data API if token is available
     const accessToken = await youtubeAuthService.getValidAccessToken(channel.id);
-    if (accessToken && video.youtubeVideoId) {
-      try {
-        if (metadata.title) {
-          await youtubeDataService.updateVideoTitle(channel.id, video.youtubeVideoId, metadata.title);
+    if (!accessToken) {
+      return {
+        success: false,
+        error: `OAuth Access Token tidak tersedia atau telah kedaluwarsa untuk channel "${channel.title}". Silakan hubungkan kembali via Google GIS (RECONNECT REQUIRED).`,
+      };
+    }
+
+    if (!video.youtubeVideoId) {
+      return {
+        success: false,
+        error: `YouTube Video ID tidak ditemukan untuk video ${videoId}. Operasi YouTube API dibatalkan.`,
+      };
+    }
+
+    try {
+      if (metadata.title) {
+        const titleRes = await youtubeDataService.updateVideoTitle(channel.id, video.youtubeVideoId, metadata.title);
+        if (!titleRes.success) {
+          return { success: false, error: `Gagal memperbarui judul di YouTube API: ${titleRes.error}` };
         }
-        if (metadata.scheduledPublishAt) {
-          await youtubeDataService.scheduleVideo(channel.id, video.youtubeVideoId, metadata.scheduledPublishAt);
-        }
-      } catch (err: any) {
-        console.warn(`[YouTubeService] Live update warning for video ${videoId}:`, err.message);
       }
+      if (metadata.scheduledPublishAt) {
+        const schedRes = await youtubeDataService.scheduleVideo(channel.id, video.youtubeVideoId, metadata.scheduledPublishAt);
+        if (!schedRes.success) {
+          return { success: false, error: `Gagal menjadwalkan publikasi di YouTube API: ${schedRes.error}` };
+        }
+      }
+    } catch (err: any) {
+      return { success: false, error: `Exception saat memanggil YouTube Data API: ${err.message}` };
     }
 
     return { success: true };
@@ -83,12 +101,27 @@ export class YouTubeService {
     dbStore.videos.set(video.id, video);
 
     const accessToken = await youtubeAuthService.getValidAccessToken(channel.id);
-    if (accessToken && video.youtubeVideoId) {
-      try {
-        await youtubeDataService.updateVideoThumbnail(channel.id, video.youtubeVideoId, thumbnailUrl);
-      } catch (err: any) {
-        console.warn(`[YouTubeService] Live thumbnail update warning for video ${videoId}:`, err.message);
+    if (!accessToken) {
+      return {
+        success: false,
+        error: `OAuth Access Token tidak tersedia untuk thumbnail upload pada channel "${channel.title}".`,
+      };
+    }
+
+    if (!video.youtubeVideoId) {
+      return {
+        success: false,
+        error: `YouTube Video ID tidak ditemukan untuk video ${videoId}. Thumbnail upload dibatalkan.`,
+      };
+    }
+
+    try {
+      const thumbRes = await youtubeDataService.updateVideoThumbnail(channel.id, video.youtubeVideoId, thumbnailUrl);
+      if (!thumbRes.success) {
+        return { success: false, error: `Gagal mengunggah thumbnail ke YouTube API: ${thumbRes.error}` };
       }
+    } catch (err: any) {
+      return { success: false, error: `Exception saat mengunggah thumbnail ke YouTube API: ${err.message}` };
     }
 
     return { success: true };

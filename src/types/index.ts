@@ -258,6 +258,7 @@ export interface AutomationBatch {
   scheduledCount: number;
   completedCount: number;
   failedCount: number;
+  lastHeartbeatAt?: string;
   isSeeded?: boolean;
 }
 

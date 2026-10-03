@@ -31,8 +31,8 @@ export interface YouTubeVideoItem {
   definition?: 'hd' | 'sd';
 }
 
-// STRICT READ-ONLY SAFETY LOCK: Enforces no modifications to YouTube content during audit & connection testing
-export const AMG_READ_ONLY_MODE = true;
+// AMG_READ_ONLY_MODE: Defaults to false to allow live YouTube Data API mutations
+export const AMG_READ_ONLY_MODE = process.env.AMG_READ_ONLY_MODE === 'true';
 
 export class YouTubeDataService {
   private apiKey: string;

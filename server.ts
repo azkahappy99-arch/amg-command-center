@@ -3028,7 +3028,7 @@ app.post('/api/phase3/rollback/:batchId', async (req: Request, res: Response) =>
   try {
     const { batchId } = req.params;
     const result = await phase3Engine.emergencyRollbackBatch(batchId);
-    res.json({ success: true, message: 'Rollback executed', ...result });
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

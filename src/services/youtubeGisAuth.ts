@@ -8,7 +8,8 @@ import { ManagedVideo, ManagementScope, VideoManagementStatus } from '../types/i
 
 export const GIS_CONFIG = {
   CLIENT_ID: '140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com',
-  SCOPE: 'https://www.googleapis.com/auth/youtube.readonly',
+  SCOPE:
+    'https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly',
   STORAGE_KEY_TOKEN: 'amg_youtube_access_token',
   STORAGE_KEY_EXPIRES: 'amg_youtube_token_expires_at',
   STORAGE_KEY_CHANNEL: 'amg_youtube_connected_channel',

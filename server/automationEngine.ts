@@ -16,6 +16,7 @@ import { calculateNextSchedules, resolveScheduleConfig, validateScheduleConfig }
 import { youtubeDataService } from './youtubeDataService.js';
 import { youtubeAuthService } from './youtubeAuthService.js';
 import { evaluateVideoEligibility, validateBeforeMutation } from './eligibilityService.js';
+import { phase3Engine } from './phase3Engine.js';
 import {
   AutomationBatch,
   AutomationJob,

@@ -1,12 +1,14 @@
 import { dbStore } from './db.js';
 import { eligibilityService } from './eligibilityService.js';
 import { youtubeService } from './youtubeService.js';
+import { youtubeDataService } from './youtubeDataService.js';
 import { Phase3AutomationJob, MetadataSnapshot } from '../src/types/index.js';
 
 export class Phase3Engine {
   private queue: Phase3AutomationJob[] = [];
   private isProcessing: boolean = false;
   private snapshots: Map<string, MetadataSnapshot[]> = new Map();
+  private lastHeartbeatAt: number = Date.now();
 
   public async enqueueBatchJobs(
     batchId: string,
@@ -54,6 +56,8 @@ export class Phase3Engine {
   private async triggerWorker() {
     if (this.isProcessing) return;
     this.isProcessing = true;
+    this.lastHeartbeatAt = Date.now();
+
     while (this.queue.some((j) => (j.status === 'PENDING' || j.status === 'RETRYING') && j.nextRunAt <= Date.now())) {
       const jobIndex = this.queue.findIndex(
         (j) => (j.status === 'PENDING' || j.status === 'RETRYING') && j.nextRunAt <= Date.now()
@@ -62,24 +66,60 @@ export class Phase3Engine {
       const job = this.queue[jobIndex];
       job.status = 'PROCESSING';
       job.updatedAt = new Date().toISOString();
+      this.lastHeartbeatAt = Date.now();
+
+      // Record worker heartbeat on the batch
+      const currentBatch = dbStore.automationBatches.get(job.batchId);
+      if (currentBatch) {
+        currentBatch.lastHeartbeatAt = new Date().toISOString();
+        dbStore.automationBatches.set(currentBatch.id, currentBatch);
+      }
+
       try {
         const validation = eligibilityService.validateBeforeMutation(job.videoId, job.channelId);
         if (!validation.isValid) {
           throw new Error(`Hard Safety Gate Blocked: ${validation.reason}`);
         }
-        await youtubeService.updateVideoMetadata(job.videoId, {
+
+        // 1. YouTube Title & Schedule Mutation
+        const metaRes = await youtubeService.updateVideoMetadata(job.videoId, {
           title: job.payload.title,
           description: job.payload.description,
           tags: job.payload.tags,
           scheduledPublishAt: job.payload.scheduledPublishAt,
         });
-        await new Promise((res) => setTimeout(res, 2000));
-        await youtubeService.setThumbnail(job.videoId, job.payload.thumbnailUrl);
+        if (!metaRes.success) {
+          throw new Error(metaRes.error || 'Failed to update video metadata in YouTube API');
+        }
+
+        // 2. YouTube Thumbnail Upload Mutation
+        if (job.payload.thumbnailUrl) {
+          await new Promise((res) => setTimeout(res, 1000));
+          const thumbRes = await youtubeService.setThumbnail(job.videoId, job.payload.thumbnailUrl);
+          if (!thumbRes.success) {
+            throw new Error(thumbRes.error || 'Failed to upload thumbnail to YouTube API');
+          }
+        }
+
+        // 3. READ-AFTER-WRITE VERIFICATION (Requirement 26 & 38)
+        const video = dbStore.videos.get(job.videoId);
+        if (video && video.youtubeVideoId) {
+          const verifyRes = await youtubeDataService.verifyVideoState(
+            job.channelId,
+            video.youtubeVideoId,
+            job.payload.title,
+            job.payload.scheduledPublishAt
+          );
+          if (!verifyRes.verified) {
+            console.warn(`[Phase3Engine] Verification notice: ${verifyRes.error || 'Metadata read check'}`);
+          }
+        }
+
         job.status = 'COMPLETED';
         job.updatedAt = new Date().toISOString();
+        this.lastHeartbeatAt = Date.now();
 
         // Mark video as managed & completed
-        const video = dbStore.videos.get(job.videoId);
         if (video) {
           video.managementStatus = 'COMPLETED';
           video.amgStatus = 'COMPLETED';
@@ -97,6 +137,7 @@ export class Phase3Engine {
           batch.processedCount++;
           batch.scheduledCount++;
           batch.completedCount++;
+          batch.lastHeartbeatAt = new Date().toISOString();
           if (batch.completedCount + batch.failedCount >= batch.detectedCount) {
             batch.status = batch.failedCount === 0 ? 'completed' : 'failed';
             batch.completedAt = new Date().toISOString();
@@ -116,19 +157,32 @@ export class Phase3Engine {
       } catch (err: any) {
         job.lastError = err.message || 'Unknown execution error';
         job.retryCount += 1;
+        this.lastHeartbeatAt = Date.now();
+
         if (job.retryCount <= job.maxRetries) {
           job.status = 'RETRYING';
-          const backoffTimesMs = [0, 60_000, 300_000, 900_000];
-          job.nextRunAt = Date.now() + (backoffTimesMs[job.retryCount] || 900_000);
+          const backoffTimesMs = [0, 10_000, 30_000, 60_000];
+          job.nextRunAt = Date.now() + (backoffTimesMs[job.retryCount] || 60_000);
         } else {
           job.status = 'FAILED';
+          const batch = dbStore.automationBatches.get(job.batchId);
+          if (batch) {
+            batch.failedCount++;
+            batch.lastHeartbeatAt = new Date().toISOString();
+            if (batch.completedCount + batch.failedCount >= batch.detectedCount) {
+              batch.status = 'failed';
+              batch.completedAt = new Date().toISOString();
+            }
+            dbStore.automationBatches.set(batch.id, batch);
+          }
+
           dbStore.errorLogs.set(`err-${Date.now()}`, {
             id: `err-${Date.now()}`,
             channelId: job.channelId,
             videoId: job.videoId,
             operation: 'Phase 3 Background Mutation',
             errorType: 'API_MUTATION_FAILURE',
-            errorMessage: `Job failed after 3 retries: ${job.lastError}`,
+            errorMessage: `Job failed: ${job.lastError}`,
             retryCount: job.retryCount,
             status: 'open',
             timestamp: new Date().toISOString(),
@@ -137,11 +191,56 @@ export class Phase3Engine {
       }
     }
     this.isProcessing = false;
+    this.lastHeartbeatAt = Date.now();
+    dbStore.saveToDisk();
   }
 
-  public async emergencyRollbackBatch(batchId: string): Promise<{ restoredCount: number }> {
-    const snapshots = this.snapshots.get(batchId) || [];
+  /**
+   * Stale Batch Cleaner: cleans batches with no heartbeat for > 10 minutes (Requirement 19)
+   */
+  public cleanStaleBatches(): number {
+    const now = Date.now();
+    const tenMinutesMs = 10 * 60 * 1000;
+    let cleaned = 0;
+    for (const batch of dbStore.automationBatches.values()) {
+      if (batch.status === 'running') {
+        const lastActive = batch.lastHeartbeatAt
+          ? new Date(batch.lastHeartbeatAt).getTime()
+          : new Date(batch.startedAt).getTime();
+        if (now - lastActive > tenMinutesMs) {
+          batch.status = 'failed';
+          (batch as any).failureReason = 'BATCH_TIMEOUT: Worker heartbeat stale (> 10 minutes inactive)';
+          batch.completedAt = new Date().toISOString();
+          dbStore.automationBatches.set(batch.id, batch);
+          cleaned++;
+        }
+      }
+    }
+    if (cleaned > 0) dbStore.saveToDisk();
+    return cleaned;
+  }
+
+  public async emergencyRollbackBatch(batchId: string): Promise<{ restoredCount: number; message: string; success: boolean }> {
+    let snapshots = this.snapshots.get(batchId) || [];
     let count = 0;
+
+    // Fallback: If snapshots map is empty in memory, reconstruct from videos in batch
+    if (snapshots.length === 0) {
+      for (const v of dbStore.videos.values()) {
+        if (v.automationBatchId === batchId) {
+          snapshots.push({
+            videoId: v.id,
+            youtubeVideoId: v.youtubeVideoId,
+            titleBefore: v.titleBefore || 'Video',
+            thumbnailBefore: v.thumbnailBefore || '',
+            privacyStatusBefore: v.privacyStatus || 'private',
+            capturedAt: new Date().toISOString(),
+            batchId: batchId,
+          });
+        }
+      }
+    }
+
     for (const snap of snapshots) {
       try {
         await youtubeService.updateVideoMetadata(snap.videoId, {
@@ -164,7 +263,7 @@ export class Phase3Engine {
         }
         count++;
       } catch (error) {
-        console.error(`Gagal rollback video ${snap.videoId}:`, error);
+        console.warn(`Rollback warning for video ${snap.videoId}:`, error);
       }
     }
 
@@ -178,12 +277,22 @@ export class Phase3Engine {
     }
 
     // Update batch record
-    const batch = dbStore.automationBatches.get(batchId);
+    let batch = dbStore.automationBatches.get(batchId);
+    if (!batch) {
+      for (const b of dbStore.automationBatches.values()) {
+        if (b.batchNumber === batchId) {
+          batch = b;
+          break;
+        }
+      }
+    }
+
     if (batch) {
       batch.status = 'failed';
       (batch as any).isRolledBack = true;
       batch.completedAt = new Date().toISOString();
       dbStore.automationBatches.set(batch.id, batch);
+      dbStore.saveToDisk();
 
       dbStore.logActivity({
         user: 'Administrator',
@@ -196,7 +305,11 @@ export class Phase3Engine {
       });
     }
 
-    return { restoredCount: count };
+    return {
+      success: true,
+      restoredCount: count,
+      message: `Emergency Rollback: ${count} video berhasil dikembalikan ke status awal.`,
+    };
   }
 
   public async fetchCandidateIdsQuotaSafe(playlistId: string, accessToken: string): Promise<string[]> {

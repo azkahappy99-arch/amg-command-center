@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { dbStore } from './db.js';
 
 export interface StoredCredentials {
   channelId: string;
@@ -209,14 +210,34 @@ export class YoutubeAuthService {
    */
   public storeCredentials(channelId: string, creds: StoredCredentials): void {
     credentialsVault.set(channelId, creds);
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
+    if (cleanId !== channelId) {
+      credentialsVault.set(cleanId, creds);
+    } else {
+      credentialsVault.set(`chan-${channelId}`, creds);
+    }
     saveCredentialsToDisk();
   }
 
   /**
    * Retrieves active access token for a channel, refreshing if expired.
+   * Resolves channel ID across aliases (e.g. chan-UC..., UC...) and dbStore channels.
    */
   public async getValidAccessToken(channelId: string): Promise<string | null> {
-    const creds = credentialsVault.get(channelId);
+    if (!channelId) return null;
+    let creds = credentialsVault.get(channelId);
+    if (!creds) {
+      const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
+      creds = credentialsVault.get(cleanId) || credentialsVault.get(`chan-${cleanId}`);
+    }
+    if (!creds) {
+      const channel = dbStore.channels.get(channelId) || dbStore.getChannelByYoutubeId(channelId);
+      if (channel) {
+        creds = credentialsVault.get(channel.id) ||
+                (channel.youtubeChannelId ? credentialsVault.get(channel.youtubeChannelId) : undefined) ||
+                (channel.youtubeChannelId ? credentialsVault.get(`chan-${channel.youtubeChannelId}`) : undefined);
+      }
+    }
     if (!creds) return null;
 
     // Refresh if expiring in less than 5 minutes
