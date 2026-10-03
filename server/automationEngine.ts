@@ -63,30 +63,48 @@ export class AutomationEngine {
       return { success: false, error: `Content Profile not found with ID: ${profileId}` };
     }
 
-    // Fetch Master Titles for this profile
+    // Fetch Master Titles strictly bound to this profile / channel
     const titles: RotationTitle[] = [];
-    for (const tId of profile.masterTitleIds) {
+    const seenTitleIds = new Set<string>();
+    for (const tId of profile.masterTitleIds || []) {
       const t = dbStore.masterTitles.get(tId);
-      if (t && t.isActive) {
+      if (t && t.isActive && !seenTitleIds.has(t.id)) {
+        seenTitleIds.add(t.id);
+        titles.push({ id: t.id, text: t.text, orderIndex: t.orderIndex });
+      }
+    }
+    for (const t of dbStore.masterTitles.values()) {
+      const belongs = t.profileId === profile.id || (t as any).channelId === channel.id || (t as any).channelId === channel.youtubeChannelId;
+      if (belongs && t.isActive && !seenTitleIds.has(t.id)) {
+        seenTitleIds.add(t.id);
         titles.push({ id: t.id, text: t.text, orderIndex: t.orderIndex });
       }
     }
 
-    // Fetch Master Thumbnails for this profile
+    // Fetch Master Thumbnails strictly bound to this profile / channel
     const thumbnails: RotationThumbnail[] = [];
-    for (const thId of profile.masterThumbnailIds) {
+    const seenThumbIds = new Set<string>();
+    for (const thId of profile.masterThumbnailIds || []) {
       const th = dbStore.masterThumbnails.get(thId);
-      if (th && th.isActive) {
+      if (th && th.isActive && !seenThumbIds.has(th.id)) {
+        seenThumbIds.add(th.id);
+        thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
+      }
+    }
+    for (const th of dbStore.masterThumbnails.values()) {
+      const belongs = th.profileId === profile.id || (th as any).channelId === channel.id || (th as any).channelId === channel.youtubeChannelId;
+      if (belongs && th.isActive && !seenThumbIds.has(th.id)) {
+        seenThumbIds.add(th.id);
         thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
       }
     }
 
     if (titles.length === 0) {
-      return { success: false, error: 'No active Master Titles found for profile: ' + profile.name };
+      return { success: false, error: 'Belum ada Master Title aktif untuk channel: ' + channel.title };
     }
 
     if (thumbnails.length === 0) {
-      return { success: false, error: 'No active Master Thumbnails found for profile: ' + profile.name };
+      return { success: false, error: 'Belum ada Master Thumbnail aktif untuk channel: ' + channel.title };
     }
 
     // 1. EVALUATE & CLASSIFY ALL UNMANAGED VIDEOS

@@ -588,8 +588,9 @@ export class AuthService {
    * Request User Access (New User Workflow):
    * User enters email -> Single-use access code generated and stored for Owner Master Gmail approval.
    */
-  public requestUserAccess(emailRaw: string, ipAddress?: string): { success: boolean; message?: string; error?: string } {
+  public requestUserAccess(emailRaw: string, ipAddress?: string, usernameRaw?: string): { success: boolean; message?: string; error?: string } {
     const email = (emailRaw || '').trim().toLowerCase();
+    const username = (usernameRaw || '').trim();
     if (!email || !email.includes('@')) {
       return { success: false, error: 'Valid email address required.' };
     }
@@ -597,6 +598,16 @@ export class AuthService {
     const owner = dbStore.getPrimaryOwner();
     if (owner && owner.email === email) {
       return { success: false, error: 'This is the Primary Owner address. Please use the Owner Login tab.' };
+    }
+
+    // Check duplicate email or username across existing users
+    for (const u of dbStore.users.values()) {
+      if (u.email.toLowerCase() === email) {
+        return { success: false, error: 'Email ini sudah terdaftar sebagai akun AMG. Silakan langsung login.' };
+      }
+      if (username && u.username && u.username.toLowerCase() === username.toLowerCase()) {
+        return { success: false, error: 'Username AMG ini sudah digunakan. Silakan pilih username lain.' };
+      }
     }
 
     const rateKey = `user-req:${email}:${ipAddress || 'unknown'}`;
@@ -615,6 +626,7 @@ export class AuthService {
     const accessReq: UserAccessRequest = {
       id: requestId,
       email,
+      username: username || undefined,
       accessCodeHash,
       status: 'PENDING',
       requestedAt: new Date(now).toISOString(),
@@ -688,6 +700,7 @@ export class AuthService {
    */
   public verifyAccessAndRegister(params: {
     email: string;
+    username?: string;
     accessCode: string;
     password: string;
     confirmPassword?: string;
@@ -741,6 +754,7 @@ export class AuthService {
     const user: UserRecord = {
       id: userId,
       email,
+      username: params.username || matchingRequest.username || undefined,
       role: 'USER', // STRICTLY USER. Cannot be OWNER.
       passwordHash: this.hashCredential(password),
       workspaceId,
@@ -782,16 +796,18 @@ export class AuthService {
 
   /**
    * Normal User Login:
+   * Accepts Email OR Username AMG + Password AMG.
    * Role is STRICTLY USER. Only grants access to their own USER_WORKSPACE.
    */
   public loginUser(params: {
-    email: string;
+    email?: string;
+    identifier?: string;
     password: string;
     deviceInfo?: string;
     ipAddress?: string;
   }): { success: boolean; token?: string; user?: any; workspaceId?: string; error?: string } {
-    const email = (params.email || '').trim().toLowerCase();
-    const rateKey = `user-login:${email}:${params.ipAddress || 'unknown'}`;
+    const ident = (params.identifier || params.email || '').trim().toLowerCase();
+    const rateKey = `user-login:${ident}:${params.ipAddress || 'unknown'}`;
 
     const rateCheck = checkRateLimit(rateKey);
     if (rateCheck.isBlocked) {
@@ -800,15 +816,21 @@ export class AuthService {
 
     let foundUser: UserRecord | null = null;
     for (const u of dbStore.users.values()) {
-      if (u.email === email && u.role === 'USER') {
-        foundUser = u;
-        break;
+      if (u.role === 'USER') {
+        if (u.email.toLowerCase() === ident || (u.username && u.username.toLowerCase() === ident)) {
+          foundUser = u;
+          break;
+        }
       }
     }
 
     if (!foundUser || !this.verifyCredential(params.password || '', foundUser.passwordHash)) {
       recordFailedAttempt(rateKey);
-      return { success: false, error: 'Email atau password user tidak valid.' };
+      return { success: false, error: 'Email/Username atau password user tidak valid.' };
+    }
+
+    if (foundUser.status === 'SUSPENDED') {
+      return { success: false, error: 'Akun Anda sedang ditangguhkan (SUSPENDED). Hubungi Administrator AMG.' };
     }
 
     resetRateLimit(rateKey);
@@ -833,6 +855,101 @@ export class AuthService {
       user: this.sanitizeUser(foundUser),
       workspaceId: foundUser.workspaceId,
     };
+  }
+
+  /**
+   * Admin User Management (Administrative only - no operational user data access)
+   */
+  public getUsersForAdmin(): any[] {
+    const list: any[] = [];
+    for (const u of dbStore.users.values()) {
+      list.push({
+        id: u.id,
+        email: u.email,
+        username: u.username || '-',
+        role: u.role,
+        status: u.status,
+        createdAt: u.createdAt,
+        lastLoginAt: u.lastLoginAt,
+        isOnline: dbStore.isUserOnline(u.id),
+      });
+    }
+    return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  public suspendUser(userId: string): { success: boolean; error?: string } {
+    const user = dbStore.users.get(userId);
+    if (!user) return { success: false, error: 'User tidak ditemukan' };
+    if (user.role === 'PRIMARY_OWNER') return { success: false, error: 'Tidak dapat menangguhkan Primary Owner' };
+
+    user.status = 'SUSPENDED';
+    user.updatedAt = new Date().toISOString();
+    dbStore.users.set(user.id, user);
+
+    // Revoke all active sessions for this user
+    for (const session of dbStore.sessions.values()) {
+      if (session.userId === userId) {
+        session.isRevoked = true;
+      }
+    }
+    dbStore.saveToDisk();
+
+    dbStore.logActivity({
+      user: 'Primary Owner',
+      operation: 'USER_SUSPENDED',
+      previousValue: 'ACTIVE',
+      newValue: `User [${user.email}] suspended. All sessions revoked.`,
+      result: 'SUCCESS',
+    });
+
+    return { success: true };
+  }
+
+  public activateUser(userId: string): { success: boolean; error?: string } {
+    const user = dbStore.users.get(userId);
+    if (!user) return { success: false, error: 'User tidak ditemukan' };
+
+    user.status = 'ACTIVE';
+    user.updatedAt = new Date().toISOString();
+    dbStore.users.set(user.id, user);
+    dbStore.saveToDisk();
+
+    dbStore.logActivity({
+      user: 'Primary Owner',
+      operation: 'USER_ACTIVATED',
+      previousValue: 'SUSPENDED',
+      newValue: `User [${user.email}] activated.`,
+      result: 'SUCCESS',
+    });
+
+    return { success: true };
+  }
+
+  public deleteUser(userId: string): { success: boolean; error?: string } {
+    const user = dbStore.users.get(userId);
+    if (!user) return { success: false, error: 'User tidak ditemukan' };
+    if (user.role === 'PRIMARY_OWNER') return { success: false, error: 'Tidak dapat menghapus Primary Owner' };
+
+    // Revoke and delete sessions
+    for (const [sId, s] of dbStore.sessions.entries()) {
+      if (s.userId === userId) {
+        dbStore.sessions.delete(sId);
+      }
+    }
+
+    dbStore.workspaces.delete(user.workspaceId);
+    dbStore.users.delete(userId);
+    dbStore.saveToDisk();
+
+    dbStore.logActivity({
+      user: 'Primary Owner',
+      operation: 'USER_DELETED',
+      previousValue: user.email,
+      newValue: `User [${user.email}] deleted permanently.`,
+      result: 'SUCCESS',
+    });
+
+    return { success: true };
   }
 
   /**

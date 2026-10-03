@@ -380,10 +380,12 @@ export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = f
   const allChannels = await fetchAllMyYouTubeChannels(token);
   const channel = allChannels[0];
 
-  try {
-    await fetchChannelVideosFromYouTube(token, `chan-${channel.id}`);
-  } catch (videoErr) {
-    console.warn('Initial YouTube videos sync warning:', videoErr);
+  for (const ch of allChannels) {
+    try {
+      await fetchChannelVideosFromYouTube(token, ch.id);
+    } catch (videoErr) {
+      console.warn(`Initial YouTube videos sync warning for channel ${ch.title}:`, videoErr);
+    }
   }
 
   return {
@@ -425,7 +427,33 @@ export async function fetchChannelVideosFromYouTube(
       return [];
     }
 
-    const channelItem = chanData.items[0];
+    const cleanChanId = targetChannelId ? targetChannelId.replace(/^chan-/, '') : '';
+    let channelItem = chanData.items[0];
+    if (cleanChanId) {
+      const matched = chanData.items.find((it: any) => it.id === cleanChanId);
+      if (matched) {
+        channelItem = matched;
+      } else if (cleanChanId.startsWith('UC')) {
+        try {
+          const directRes = await fetch(
+            `https://www.googleapis.com/youtube/v3/channels?part=snippet,contentDetails,statistics&id=${cleanChanId}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+              },
+            }
+          );
+          if (directRes.ok) {
+            const directData = await directRes.json();
+            if (directData.items && directData.items.length > 0) {
+              channelItem = directData.items[0];
+            }
+          }
+        } catch {}
+      }
+    }
+
     const chanId = channelItem.id;
     const chanTitle = channelItem.snippet?.title || 'YouTube Channel';
     const uploadsPlaylistId =

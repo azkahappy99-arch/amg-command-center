@@ -96,6 +96,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   // User Auth Form
   const [userMode, setUserMode] = useState<'LOGIN' | 'REQUEST' | 'REGISTER'>('LOGIN');
   const [userEmail, setUserEmail] = useState('');
+  const [userUsername, setUserUsername] = useState('');
   const [userPassword, setUserPassword] = useState('');
   const [userConfirmPassword, setUserConfirmPassword] = useState('');
   const [userAccessCode, setUserAccessCode] = useState('');
@@ -337,6 +338,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email: userEmail,
+          username: userUsername.trim() || undefined,
           accessCode: userAccessCode,
           password: userPassword,
           confirmPassword: userConfirmPassword,
@@ -369,7 +371,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: userEmail,
+          identifier: userEmail.trim(),
+          email: userEmail.trim(),
           password: userPassword,
         }),
       });
@@ -960,16 +963,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <form onSubmit={handleUserLogin} className="space-y-3">
                   <div>
                     <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                      Email Pengguna
+                      Email atau Username AMG
                     </label>
                     <div className="relative">
                       <Mail className="w-4 h-4 absolute left-3 top-3 text-neutral-500" />
                       <input
-                        type="email"
+                        type="text"
                         required
                         value={userEmail}
                         onChange={(e) => setUserEmail(e.target.value)}
-                        placeholder="pengguna@contoh.com"
+                        placeholder="pengguna@contoh.com atau username AMG"
                         className="w-full bg-neutral-950 border border-neutral-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
                       />
                     </div>
@@ -1041,18 +1044,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               {/* Mode: Register with Code */}
               {userMode === 'REGISTER' && (
                 <form onSubmit={handleUserVerifyRegister} className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-neutral-300 mb-1">
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={userEmail}
-                      onChange={(e) => setUserEmail(e.target.value)}
-                      placeholder="email.anda@gmail.com"
-                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                        Email
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={userEmail}
+                        onChange={(e) => setUserEmail(e.target.value)}
+                        placeholder="email.anda@gmail.com"
+                        className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-neutral-300 mb-1">
+                        Username AMG (Opsional)
+                      </label>
+                      <input
+                        type="text"
+                        value={userUsername}
+                        onChange={(e) => setUserUsername(e.target.value)}
+                        placeholder="contoh: user_azka"
+                        className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
                   </div>
 
                   <div>

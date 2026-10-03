@@ -23,6 +23,7 @@ import {
 export interface UserRecord {
   id: string;
   email: string;
+  username?: string;
   role: 'PRIMARY_OWNER' | 'USER';
   passwordHash: string;
   masterKeyHash?: string;
@@ -50,6 +51,7 @@ export interface SessionRecord {
 export interface UserAccessRequest {
   id: string;
   email: string;
+  username?: string;
   accessCodeHash: string;
   status: 'PENDING' | 'APPROVED' | 'EXPIRED' | 'REJECTED';
   requestedAt: string;
@@ -195,6 +197,47 @@ class DatabaseStore {
       }
     }
     return null;
+  }
+
+  public getOnlineUsersCount(): number {
+    const now = Date.now();
+    const activeWindowMs = 15 * 60 * 1000; // 15 minutes window
+    const onlineUserIds = new Set<string>();
+
+    for (const session of this.sessions.values()) {
+      if (
+        session &&
+        !session.isRevoked &&
+        new Date(session.expiresAt).getTime() > now
+      ) {
+        const lastActiveTime = new Date(session.lastActiveAt || session.createdAt).getTime();
+        if (now - lastActiveTime <= activeWindowMs) {
+          onlineUserIds.add(session.userId);
+        }
+      }
+    }
+    // Return distinct online users count (minimum 1 if at least one unrevoked session exists)
+    return Math.max(onlineUserIds.size, 1);
+  }
+
+  public isUserOnline(userId: string): boolean {
+    const now = Date.now();
+    const activeWindowMs = 15 * 60 * 1000;
+
+    for (const session of this.sessions.values()) {
+      if (
+        session &&
+        session.userId === userId &&
+        !session.isRevoked &&
+        new Date(session.expiresAt).getTime() > now
+      ) {
+        const lastActiveTime = new Date(session.lastActiveAt || session.createdAt).getTime();
+        if (now - lastActiveTime <= activeWindowMs) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private dbFilePath: string;

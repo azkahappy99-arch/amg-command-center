@@ -39,7 +39,7 @@ export const YouTubeOAuthModal: React.FC<YouTubeOAuthModalProps> = ({
   const [retrievedChannel, setRetrievedChannel] = useState<YouTubeChannelSnippet | null>(null);
 
   // Manual fallback state
-  const [accountEmail, setAccountEmail] = useState('azkahappy99@gmail.com');
+  const [accountEmail, setAccountEmail] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [refreshToken, setRefreshToken] = useState('');
   const [isSubmittingManual, setIsSubmittingManual] = useState(false);
@@ -137,7 +137,7 @@ export const YouTubeOAuthModal: React.FC<YouTubeOAuthModalProps> = ({
     try {
       const res = await api.connectYouTubeCredentials({
         channelId: channel.id,
-        accountEmail: accountEmail || 'azkahappy99@gmail.com',
+        accountEmail: accountEmail || (channel.title ? `${channel.title}@youtube.com` : 'youtube-account@azkamedia.com'),
         accessToken: accessToken.trim(),
         refreshToken: refreshToken.trim(),
       });

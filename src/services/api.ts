@@ -845,9 +845,9 @@ export const api = {
       unmarkChannelAsUnlinked(data.channelId);
     }
 
-    // Attempt backend sync in background if server is online
+    // Attempt backend sync in background if server is online with authentication
     try {
-      fetch('/api/auth/youtube/gis-sync', {
+      await authFetch('/api/auth/youtube/gis-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -927,6 +927,39 @@ export const api = {
         scheduleAlertStatus: 'SAFE',
       };
       channels.unshift(targetChannel);
+    }
+
+    const assignedProfId = targetChannel.contentProfileId || targetChannel.blockId || `profile-${targetChannel.id}`;
+    targetChannel.contentProfileId = assignedProfId;
+    targetChannel.blockId = assignedProfId;
+
+    // Ensure dedicated content profile exists for this channel
+    const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
+    const hasProfile = profiles.some((p) => p.id === assignedProfId || p.id === `profile-${targetChannel.id}`);
+    if (!hasProfile) {
+      profiles.push({
+        id: assignedProfId,
+        blockId: assignedProfId,
+        name: `Master Konfigurasi ${targetChannel.title}`,
+        description: `Dedicated Master Configuration for ${targetChannel.title}`,
+        nicheCategory: targetChannel.nicheCategory || 'General',
+        nicheBadge: targetChannel.nicheBadge || 'cyan',
+        publishFrequency: targetChannel.publishFrequency || '1/day',
+        publishTime: targetChannel.publishTime || '16:00',
+        timezone: targetChannel.timezone || 'Asia/Jakarta',
+        scheduleConfig: targetChannel.scheduleConfig || {
+          mode: 'DAILY',
+          videosPerDay: 1,
+          times: ['16:00'],
+          timezone: 'Asia/Jakarta',
+        },
+        masterTitleIds: [],
+        masterThumbnailIds: [],
+        assignedChannelCount: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+      setStorageItem(KEYS.PROFILES, profiles);
     }
 
     setStorageItem(KEYS.CHANNELS, channels);

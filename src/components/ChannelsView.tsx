@@ -47,6 +47,7 @@ import { ScheduleBufferBadge } from './ScheduleBufferBadge';
 import {
   authorizeAndFetchYouTubeChannel,
   fetchMyYouTubeChannel,
+  fetchChannelVideosFromYouTube,
   getStoredGisToken,
 } from '../services/youtubeGisAuth.ts';
 import {
@@ -309,10 +310,26 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
           accessToken: result.accessToken,
           channelData: chan,
         });
+
+        // 4. Initial Full Channel Video Scan immediately after connecting
+        try {
+          await fetchChannelVideosFromYouTube(result.accessToken, chan.id);
+        } catch (scanErr) {
+          console.warn('[GIS] Initial video scan warning:', scanErr);
+        }
       }
 
+      // Refresh loadedVideos state from localStorage immediately
+      try {
+        const raw = localStorage.getItem('amg_videos');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) setLoadedVideos(parsed);
+        }
+      } catch {}
+
       setBannerMessage({
-        text: `Otorisasi Berhasil! ${channelsToSync.length} Channel YouTube (${channelsToSync.map(c => c.title).join(', ')}) telah terhubung langsung via YouTube Data API v3. Status: CONNECTED.`,
+        text: `Otorisasi Berhasil! ${channelsToSync.length} Channel YouTube (${channelsToSync.map(c => c.title).join(', ')}) telah terhubung langsung via YouTube Data API v3 dan seluruh video telah dipindai. Status: CONNECTED.`,
         type: 'success',
       });
 
@@ -1620,13 +1637,24 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                   try {
                     setIsAdding(true);
                     const result = await authorizeAndFetchYouTubeChannel(true);
-                    await api.gisSyncChannel({
-                      accessToken: result.accessToken,
-                      channelData: result.channel,
-                    });
+                    const channelsToSync = result.allChannels && result.allChannels.length > 0 
+                      ? result.allChannels 
+                      : [result.channel];
+                    for (const chan of channelsToSync) {
+                      await api.gisSyncChannel({
+                        accessToken: result.accessToken,
+                        channelData: chan,
+                      });
+                      try {
+                        await fetchChannelVideosFromYouTube(result.accessToken, chan.id);
+                      } catch (scanErr) {
+                        console.warn('[GIS] Initial video scan warning:', scanErr);
+                      }
+                    }
                     setIsAddModalOpen(false);
+                    const titles = channelsToSync.map((c: any) => c.title).join(', ');
                     setBannerMessage({
-                      text: `Channel "${result.channel.title}" (${result.channel.id}) berhasil ditautkan dan tersimpan permanen!`,
+                      text: `${channelsToSync.length} Channel YouTube (${titles}) berhasil ditautkan dan tersimpan permanen!`,
                       type: 'success',
                     });
                     onChannelUpdated();

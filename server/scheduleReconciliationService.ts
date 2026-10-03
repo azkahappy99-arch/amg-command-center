@@ -471,10 +471,16 @@ export function calculateNextSchedules(
       const candidateUtc = localTimeToUtcDate(currentYear, currentMonth, currentDay, hour, minute, timezone);
       const candidateMs = candidateUtc.getTime();
 
-      // Rule: Candidate slot must be strictly AFTER both the baseline cutoff time and current time!
+      // Rule: Candidate slot must be strictly AFTER the baseline cursor cutoff time!
       // (e.g. if latest was 1 Oct 14:00, 08:00 and 14:00 on 1 Oct are skipped; 20:00 is accepted)
-      // Never schedule in the past (nextScheduledAt > currentTime).
-      if (candidateMs <= baselineTimeMs || candidateMs <= currentNowMs) {
+      if (candidateMs <= baselineTimeMs) {
+        continue;
+      }
+      // If there is no anchor, ensure we do not schedule in the past relative to now
+      if (!hasVerifiedAnchor && candidateMs <= currentNowMs) {
+        continue;
+      }
+      if (nowOverride && candidateMs <= nowOverride.getTime()) {
         continue;
       }
 

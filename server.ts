@@ -4,7 +4,7 @@
  * Port: 3000
  */
 
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -165,11 +165,23 @@ app.post('/api/auth/owner/recover', (req: Request, res: Response) => {
   });
 });
 
+app.get('/api/public/info', (req: Request, res: Response) => {
+  const onlineCount = dbStore.getOnlineUsersCount();
+  res.json({
+    appName: 'AMG COMMAND CENTER',
+    brand: 'Azka Media Group',
+    tagline: 'Secure Access & Video Automation',
+    onlineUsersCount: onlineCount,
+    isOwnerProvisioned: authService.isOwnerProvisioned(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.post('/api/auth/user/request-access', (req: Request, res: Response) => {
-  const { email } = req.body;
+  const { email, username } = req.body;
   const ipAddress = req.ip || req.socket.remoteAddress || 'local';
 
-  const result = authService.requestUserAccess(email, ipAddress);
+  const result = authService.requestUserAccess(email, ipAddress, username);
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }
@@ -181,12 +193,13 @@ app.post('/api/auth/user/request-access', (req: Request, res: Response) => {
 });
 
 app.post('/api/auth/user/verify-register', (req: Request, res: Response) => {
-  const { email, accessCode, password, confirmPassword } = req.body;
+  const { email, username, accessCode, password, confirmPassword } = req.body;
   const ipAddress = req.ip || req.socket.remoteAddress || 'local';
   const deviceInfo = req.headers['user-agent'] || 'User Device';
 
   const result = authService.verifyAccessAndRegister({
     email,
+    username,
     accessCode,
     password,
     confirmPassword,
@@ -207,12 +220,13 @@ app.post('/api/auth/user/verify-register', (req: Request, res: Response) => {
 });
 
 app.post('/api/auth/user/login', (req: Request, res: Response) => {
-  const { email, password } = req.body;
+  const { email, identifier, password } = req.body;
   const ipAddress = req.ip || req.socket.remoteAddress || 'local';
   const deviceInfo = req.headers['user-agent'] || 'User Device';
 
   const result = authService.loginUser({
     email,
+    identifier: identifier || email,
     password,
     deviceInfo,
     ipAddress,
@@ -228,6 +242,46 @@ app.post('/api/auth/user/login', (req: Request, res: Response) => {
     user: result.user,
     workspaceId: result.workspaceId,
   });
+});
+
+// Admin User Management Endpoints (Owner only - strictly administrative, no user data access)
+app.get('/api/admin/users', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Access Denied: Hanya Primary Owner yang memiliki hak administratif.' });
+  }
+  const users = authService.getUsersForAdmin();
+  res.json(users);
+});
+
+app.post('/api/admin/users/:id/suspend', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Access Denied: Hanya Primary Owner yang memiliki hak administratif.' });
+  }
+  const result = authService.suspendUser(req.params.id);
+  if (!result.success) return res.status(400).json({ error: result.error });
+  res.json({ success: true, message: 'User berhasil ditangguhkan.' });
+});
+
+app.post('/api/admin/users/:id/activate', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Access Denied: Hanya Primary Owner yang memiliki hak administratif.' });
+  }
+  const result = authService.activateUser(req.params.id);
+  if (!result.success) return res.status(400).json({ error: result.error });
+  res.json({ success: true, message: 'User berhasil diaktifkan kembali.' });
+});
+
+app.delete('/api/admin/users/:id', (req: Request, res: Response) => {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
+    return res.status(403).json({ error: 'Access Denied: Hanya Primary Owner yang memiliki hak administratif.' });
+  }
+  const result = authService.deleteUser(req.params.id);
+  if (!result.success) return res.status(400).json({ error: result.error });
+  res.json({ success: true, message: 'User berhasil dihapus secara permanen.' });
 });
 
 app.get('/api/auth/sessions', (req: Request, res: Response) => {
@@ -299,11 +353,11 @@ app.post('/api/auth/owner/revoke-request', (req: Request, res: Response) => {
 function getRequestContext(req: Request): {
   isAuthenticated: boolean;
   user: any;
-  role: 'PRIMARY_OWNER' | 'USER';
+  role: 'PRIMARY_OWNER' | 'USER' | null;
   workspaceId: string;
   isOwner: boolean;
 } {
-  const sessionData = extractAuthSession(req);
+  const sessionData = (req as any).auth || extractAuthSession(req);
   if (sessionData) {
     return {
       isAuthenticated: true,
@@ -313,14 +367,25 @@ function getRequestContext(req: Request): {
       isOwner: sessionData.user.role === 'PRIMARY_OWNER',
     };
   }
-  const owner = authService.getPrimaryOwner();
   return {
     isAuthenticated: false,
-    user: owner || null,
-    role: 'PRIMARY_OWNER' as const,
-    workspaceId: 'ws-owner-primary',
-    isOwner: true,
+    user: null,
+    role: null,
+    workspaceId: '',
+    isOwner: false,
   };
+}
+
+/**
+ * Middleware: Strictly requires authenticated session for all operational endpoints.
+ */
+function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const sessionData = extractAuthSession(req);
+  if (!sessionData) {
+    return res.status(401).json({ error: 'Sesi tidak valid atau telah kedaluwarsa. Silakan login terlebih dahulu.' });
+  }
+  (req as any).auth = sessionData;
+  next();
 }
 
 // ==========================================
@@ -335,7 +400,7 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-app.get('/api/stats', (req: Request, res: Response) => {
+app.get('/api/stats', requireAuth, (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
   let channels = Array.from(dbStore.channels.values());
   let videos = Array.from(dbStore.videos.values());
@@ -344,17 +409,19 @@ app.get('/api/stats', (req: Request, res: Response) => {
 
   if (ctx.role === 'USER') {
     // Isolated User Workspace: Only data explicitly belonging to this user
-    channels = channels.filter(c => c.workspaceId === ctx.workspaceId || c.ownerId === ctx.user?.id);
+    channels = channels.filter(c => c.workspaceId === ctx.workspaceId && c.ownerId === ctx.user?.id);
     const userChannelIds = new Set(channels.map(c => c.id).concat(channels.map(c => c.youtubeChannelId || '')));
     videos = videos.filter(v => (v as any).workspaceId === ctx.workspaceId || userChannelIds.has(v.channelId));
     batches = batches.filter(b => (b as any).workspaceId === ctx.workspaceId || userChannelIds.has(b.channelId));
     errorLogs = errorLogs.filter(e => (e as any).workspaceId === ctx.workspaceId || userChannelIds.has(e.channelId || ''));
   } else {
-    // Primary Owner: sees Owner Workspace data
-    channels = channels.filter(c => !c.workspaceId || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary');
+    // Primary Owner: sees ONLY Owner Workspace data (never sees user operational data)
+    channels = channels.filter(c => c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com');
     const ownerChannelIds = new Set(channels.map(c => c.id).concat(channels.map(c => c.youtubeChannelId || '')));
-    videos = videos.filter(v => !(v as any).workspaceId || (v as any).workspaceId === 'ws-owner-primary' || ownerChannelIds.has(v.channelId));
+    videos = videos.filter(v => ((v as any).workspaceId === 'ws-owner-primary' || !(v as any).workspaceId) && ownerChannelIds.has(v.channelId));
+    batches = batches.filter(b => ((b as any).workspaceId === 'ws-owner-primary' || !(b as any).workspaceId) && ownerChannelIds.has(b.channelId));
   }
+
 
   const totalChannels = channels.length;
   const connectedChannels = channels.filter(c => 
@@ -637,13 +704,13 @@ function refreshChannelScheduleAndUnmanagedState(channel: any, allVideos: any[])
 // ==========================================
 // 2. CHANNELS
 // ==========================================
-app.get('/api/channels', (req: Request, res: Response) => {
+app.get('/api/channels', requireAuth, (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
   let rawChannels = Array.from(dbStore.channels.values());
   if (ctx.role === 'USER') {
-    rawChannels = rawChannels.filter(c => c.workspaceId === ctx.workspaceId || c.ownerId === ctx.user?.id);
+    rawChannels = rawChannels.filter(c => c.workspaceId === ctx.workspaceId && c.ownerId === ctx.user?.id);
   } else {
-    rawChannels = rawChannels.filter(c => !c.workspaceId || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary');
+    rawChannels = rawChannels.filter(c => c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com');
   }
 
   const allVideos = Array.from(dbStore.videos.values());
@@ -684,17 +751,21 @@ app.get('/api/channels', (req: Request, res: Response) => {
   res.json(channels);
 });
 
-app.get('/api/channels/:id', (req: Request, res: Response) => {
+app.get('/api/channels/:id', requireAuth, (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
   const channel = dbStore.channels.get(req.params.id);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
   }
 
-  // Workspace access verification
-  if (ctx.role === 'USER') {
-    if (channel.workspaceId !== ctx.workspaceId && channel.ownerId !== ctx.user?.id) {
-      return res.status(403).json({ error: 'Access forbidden: Channel does not belong to your user workspace.' });
+  // Workspace access & privacy verification
+  if (ctx.isOwner) {
+    if (channel.workspaceId !== 'ws-owner-primary' && channel.ownerId !== 'usr-owner-primary' && channel.ownerId !== 'azkahappy99@gmail.com') {
+      return res.status(403).json({ error: 'Access Denied: Admin tidak memiliki izin mengakses data operasional channel user.' });
+    }
+  } else {
+    if (channel.workspaceId !== ctx.workspaceId || channel.ownerId !== ctx.user?.id) {
+      return res.status(403).json({ error: 'Access Denied: Anda tidak memiliki akses ke channel ini.' });
     }
   }
 
@@ -745,21 +816,27 @@ app.get('/api/channels/:id', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/channels', (req: Request, res: Response) => {
+app.post('/api/channels', requireAuth, (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
   const { title, youtubeChannelId, contentProfileId, publishFrequency, publishTime, timezone, scheduleConfig, useProfileSchedule, nicheCategory, nicheBadge } = req.body;
   if (!title || !youtubeChannelId) {
     return res.status(400).json({ error: 'Title and YouTube Channel ID are required.' });
   }
 
-  // Duplicate Channel Prevention
+  // Duplicate Channel Prevention scoped to account
   const normYtId = youtubeChannelId.trim();
-  const existing = dbStore.getChannelByYoutubeId(normYtId);
-  if (existing) {
+  const existingForUser = Array.from(dbStore.channels.values()).find(
+    (c) =>
+      (c.youtubeChannelId === normYtId || c.id === normYtId) &&
+      (ctx.isOwner
+        ? c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com'
+        : c.ownerId === ctx.user?.id)
+  );
+  if (existingForUser) {
     return res.status(409).json({
-      error: `Channel sudah terhubung. Channel "${existing.title}" (${normYtId}) sudah terdaftar di AMG Command Center.`,
+      error: 'Channel sudah terhubung.',
       alreadyExists: true,
-      channel: existing,
+      channel: existingForUser,
     });
   }
 
@@ -784,12 +861,34 @@ app.post('/api/channels', (req: Request, res: Response) => {
   }
 
   const id = `chan-${Date.now()}`;
+  const profileId = contentProfileId || `profile-${id}`;
+  if (!dbStore.profiles.has(profileId)) {
+    dbStore.profiles.set(profileId, {
+      id: profileId,
+      name: `Master Konfigurasi ${title.trim()}`,
+      nicheCategory: resolvedNicheCategory || 'General',
+      nicheBadge: resolvedNicheBadge || 'amber',
+      masterTitleIds: [],
+      masterThumbnailIds: [],
+      scheduleConfig: finalScheduleConfig || {
+        mode: 'DAILY',
+        videosPerDay: 1,
+        times: ['16:00'],
+        timezone: 'Asia/Jakarta',
+      },
+      isSeeded: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    } as any);
+  }
+
   const newChannel = {
     id,
     youtubeChannelId: normYtId,
     title: title.trim(),
     status: 'CONNECTED' as const,
-    contentProfileId: contentProfileId || '',
+    contentProfileId: profileId,
+    blockId: profileId,
     nicheCategory: resolvedNicheCategory || 'General',
     nicheBadge: resolvedNicheBadge || 'amber',
     publishFrequency: finalScheduleConfig ? `${finalScheduleConfig.videosPerDay}/day` : (publishFrequency || '1/day'),
@@ -1538,6 +1637,10 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'accessToken and channelData with valid channel id are required.' });
   }
 
+  const ctx = getRequestContext(req);
+  const targetOwnerId = ctx.isAuthenticated && !ctx.isOwner ? ctx.user.id : (ctx.user?.id || 'usr-owner-primary');
+  const targetWorkspaceId = ctx.isAuthenticated && !ctx.isOwner ? ctx.workspaceId : 'ws-owner-primary';
+
   // 1. Search for existing channel by youtubeChannelId (unique key)
   let channel = dbStore.getChannelByYoutubeId(channelData.id);
 
@@ -1562,6 +1665,28 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
 
   const now = new Date().toISOString();
 
+  const profileId = channel?.contentProfileId || `profile-${targetId}`;
+  if (!dbStore.profiles.has(profileId)) {
+    dbStore.profiles.set(profileId, {
+      id: profileId,
+      workspaceId: targetWorkspaceId,
+      name: `Master Konfigurasi ${channelData.title || (channel ? channel.title : 'Channel')}`,
+      nicheCategory: channel?.nicheCategory || 'General',
+      nicheBadge: channel?.nicheBadge || 'emerald',
+      masterTitleIds: [],
+      masterThumbnailIds: [],
+      scheduleConfig: channel?.scheduleConfig || {
+        mode: 'DAILY',
+        videosPerDay: 1,
+        times: ['16:00'],
+        timezone: 'Asia/Jakarta',
+      },
+      isSeeded: false,
+      createdAt: now,
+      updatedAt: now,
+    } as any);
+  }
+
   if (channel) {
     channel.title = channelData.title || channel.title;
     channel.youtubeChannelId = channelData.id;
@@ -1571,15 +1696,18 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
     if (channelData.subscriberCount !== undefined) channel.subscriberCount = channelData.subscriberCount;
     if (channelData.videoCount !== undefined) channel.videoCount = channelData.videoCount;
     channel.status = 'CONNECTED';
+    channel.contentProfileId = profileId;
+    (channel as any).blockId = profileId;
     channel.hasOAuthConfigured = true;
     channel.isSeeded = false;
     channel.platform = 'YouTube';
-    channel.ownerId = 'azkahappy99@gmail.com';
+    if (!channel.ownerId) channel.ownerId = targetOwnerId;
+    if (!channel.workspaceId) channel.workspaceId = targetWorkspaceId;
     channel.connectedAt = channel.connectedAt || now;
     channel.updatedAt = now;
     dbStore.upsertChannel(channel);
   } else {
-    // Brand new channel — APPEND to database
+    // Brand new channel — APPEND to database with dedicated profile and config
     channel = {
       id: targetId,
       youtubeChannelId: channelData.id,
@@ -1588,23 +1716,31 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
       channelUrl: channelData.customUrl ? `https://youtube.com/${channelData.customUrl}` : `https://youtube.com/channel/${channelData.id}`,
       thumbnailUrl: channelData.thumbnailUrl || '',
       status: 'CONNECTED',
-      contentProfileId: '',
+      contentProfileId: profileId,
       publishFrequency: '1/day',
       publishTime: '16:00',
       timezone: 'Asia/Jakarta',
+      scheduleConfig: {
+        mode: 'DAILY',
+        videosPerDay: 1,
+        times: ['16:00'],
+        timezone: 'Asia/Jakarta',
+      },
       subscriberCount: channelData.subscriberCount || 0,
       videoCount: channelData.videoCount || 0,
       unmanagedVideoCount: 0,
       hasOAuthConfigured: true,
       isSeeded: false,
       platform: 'YouTube',
-      ownerId: 'azkahappy99@gmail.com',
+      ownerId: targetOwnerId,
+      workspaceId: targetWorkspaceId,
       connectedAt: now,
       nicheCategory: 'General',
       nicheBadge: 'emerald',
       createdAt: now,
       updatedAt: now,
     };
+    (channel as any).blockId = profileId;
     dbStore.upsertChannel(channel as any);
   }
 
