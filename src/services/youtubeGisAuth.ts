@@ -698,6 +698,10 @@ function updateChannelVideosInStorage(
             !v.isSeeded &&
             !v.id?.startsWith('vid-old-') &&
             !v.id?.startsWith('vid-new-') &&
+            !v.id?.startsWith('vid-') &&
+            !v.titleBefore?.toLowerCase().includes('suara ayam pagi menenangkan') &&
+            !v.titleBefore?.toLowerCase().includes('dummy') &&
+            !v.titleBefore?.toLowerCase().includes('mock') &&
             !v.titleBefore?.includes('Copy of A') &&
             !v.titleBefore?.includes('[DEMO FIXTURE]') &&
             !v.titleBefore?.includes('Demo Fixture') &&

@@ -44,7 +44,7 @@ import {
   ActivityLog,
   AutomationBatch,
 } from './types/index.ts';
-import { api, sanitizeChannel } from './services/api.ts';
+import { api, sanitizeChannel, isRealVideo } from './services/api.ts';
 import {
   authorizeAndFetchYouTubeChannel,
   getStoredGisToken,
@@ -156,7 +156,11 @@ export default function App() {
       if (profilesData) setProfiles(profilesData);
       if (titlesData) setTitles(titlesData);
       if (thumbsData) setThumbnails(thumbsData);
-      if (videosData) setVideos(videosData);
+      if (videosData) {
+        const cleanVids = videosData.filter(isRealVideo);
+        setVideos(cleanVids);
+        localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
+      }
       if (notifsData) setNotifications(notifsData);
       if (logsData) setActivityLogs(logsData);
     } catch (err) {

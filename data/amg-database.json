@@ -1,7 +1,31 @@
 {
   "version": 1,
-  "savedAt": "2026-10-03T17:06:34.581Z",
-  "channels": [],
+  "savedAt": "2026-10-03T17:49:42.415Z",
+  "channels": [
+    [
+      "chan-1791049429497",
+      {
+        "id": "chan-1791049429497",
+        "title": "Ayam YAHYA",
+        "youtubeChannelId": "UC_1791049429497",
+        "status": "CONNECTED",
+        "connectedAt": "2026-10-03T17:43:49.497Z",
+        "contentProfileId": "profile-default",
+        "thumbnailUrl": "https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=150",
+        "videoCount": 8,
+        "unmanagedVideoCount": 8,
+        "publishFrequency": "1/day",
+        "publishTime": "16:00",
+        "timezone": "Asia/Jakarta",
+        "lastScheduledPublishAt": "2026-10-03T09:00:00.000Z",
+        "latestManagedScheduledAt": "2026-10-03T09:00:00.000Z",
+        "createdAt": "2026-10-03T17:43:49.497Z",
+        "updatedAt": "2026-10-03T17:43:49.497Z",
+        "isSeeded": false,
+        "blockId": "profile-default"
+      }
+    ]
+  ],
   "profiles": [
     [
       "profile-ayam-warna",

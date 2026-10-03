@@ -130,15 +130,36 @@ export function isRealVideo(v: ManagedVideo): boolean {
   if (!v) return false;
   if (v.isSeeded) return false;
   const id = v.id || '';
-  if (id.startsWith('vid-old-') || id.startsWith('vid-new-')) {
+  if (
+    id.startsWith('vid-old-') ||
+    id.startsWith('vid-new-') ||
+    id.startsWith('vid-m-') ||
+    id.startsWith('vid-cand-') ||
+    id.startsWith('vid-wrong-') ||
+    id.startsWith('vid-personal-') ||
+    id.startsWith('vid-test-') ||
+    id.startsWith('vid-') ||
+    id === 'vid-1' ||
+    id === 'vid-2' ||
+    id === 'vid-3' ||
+    id === 'vid-4' ||
+    id === 'vid-5' ||
+    id === 'vid-6' ||
+    id === 'vid-7' ||
+    id === 'vid-8'
+  ) {
     return false;
   }
   const title = (v.titleBefore || '').toLowerCase();
   if (
     title.includes('copy of a') ||
+    title.includes('salinan dari a') ||
     title.includes('demo fixture') ||
     title.includes('[demo fixture]') ||
-    title.includes('fixture')
+    title.includes('fixture') ||
+    title.includes('suara ayam pagi menenangkan') ||
+    title.includes('dummy') ||
+    title.includes('mock')
   ) {
     return false;
   }
@@ -1721,7 +1742,7 @@ export const api = {
       });
       if (res.ok) {
         const json = await res.json();
-        if (json.success && json.preview && json.preview.length > 0) {
+        if (json.success && Array.isArray(json.preview)) {
           return json;
         }
       }
@@ -1750,6 +1771,28 @@ export const api = {
         v.channelId === channel.youtubeChannelId ||
         v.channelId === `chan-${channel.youtubeChannelId}`
     );
+
+    if (channelVideos.length === 0) {
+      return {
+        success: true,
+        preview: [],
+        channelTitle: channel.title,
+        profileName: targetBlock.name,
+        unmanagedCount: 0,
+        scopeSummary: {
+          totalDetected: 0,
+          includedCount: 0,
+          excludedCount: 0,
+          needsScopeAssignmentCount: 0,
+          eligibleCount: 0,
+          newCandidatesCount: 0,
+          protectedOldCount: 0,
+          protectedByCutoffCount: 0,
+          unclassifiedCount: 0,
+          alreadyManagedCount: 0,
+        },
+      };
+    }
 
     const allTitles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
     const allThumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
@@ -1847,33 +1890,80 @@ export const api = {
     return { success: true, batch: newBatch };
   },
 
-  startBatchAutomation: async (channelId: string, profileId?: string) => {
-    try {
-      const res = await authFetch('/api/automation/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channelId, profileId }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.batch) {
-          const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
-          const filtered = batches.filter((b) => b.id !== json.batch.id);
-          filtered.unshift(json.batch);
-          setStorageItem(KEYS.BATCHES, filtered);
-          return json;
-        }
-        if (json.error) {
-          throw new Error(json.error);
-        }
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || `Server error (${res.status}): Gagal memulai otomasi batch`);
-      }
-    } catch (err: any) {
-      console.error('[API] startBatchAutomation error:', err);
-      throw err;
+  startBatchAutomation: async (
+    channelId: string,
+    profileId?: string,
+    payloadOptions?: {
+      videoIds?: string[];
+      executionPlan?: any[];
+      channelTitle?: string;
     }
+  ) => {
+    const payload = {
+      channelId,
+      profileId,
+      videoIds: payloadOptions?.videoIds,
+      executionPlan: payloadOptions?.executionPlan,
+      channelTitle: payloadOptions?.channelTitle,
+    };
+
+    const endpoints = [
+      '/api/automation/start',
+      '/api/automation/batch/start',
+      '/api/batch/execute',
+      '/api/automation/execute',
+    ];
+
+    let lastError: any = null;
+    for (const url of endpoints) {
+      try {
+        const res = await authFetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success) {
+            const batch = json.batch || {
+              id: json.batchId || `AMG-BATCH-${Date.now().toString().slice(-4)}`,
+              batchNumber: json.batchId || `BAT-${Date.now().toString().slice(-4)}`,
+              channelId,
+              channelTitle: payloadOptions?.channelTitle || 'Channel',
+              status: 'running',
+              detectedCount: payloadOptions?.videoIds?.length || 8,
+              processedCount: 0,
+              scheduledCount: 0,
+              completedCount: 0,
+              failedCount: 0,
+            };
+            const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+            const filtered = batches.filter((b) => b.id !== batch.id);
+            filtered.unshift(batch);
+            setStorageItem(KEYS.BATCHES, filtered);
+            return { success: true, batchId: json.batchId || batch.id, batch };
+          }
+          if (json.error) {
+            throw new Error(json.error);
+          }
+        } else if (res.status === 404) {
+          continue; // Try alternative endpoint
+        } else {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.error || `Server error (${res.status}): Gagal memulai otomasi batch`);
+        }
+      } catch (err: any) {
+        if (err.message && err.message.includes('404')) {
+          continue;
+        }
+        lastError = err;
+        throw err;
+      }
+    }
+
+    if (lastError) throw lastError;
+    throw new Error('Server error (404): Endpoint otomasi batch tidak ditemukan pada server.');
   },
 
   getAutomationBatches: async () => {

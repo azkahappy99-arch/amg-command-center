@@ -144,10 +144,25 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsExecuting(true);
     setShowConfirmModal(false);
     try {
-      const res = await api.startBatchAutomation(selectedChannelId);
+      const videoIds = includedItems.map((item) => item.videoId);
+      const executionPlan = includedItems.map((item) => ({
+        videoId: item.videoId,
+        title: item.assignedTitle,
+        thumbnailUrl: item.assignedThumbnail,
+        publishDate: item.publishDate,
+        publishTime: item.publishTime,
+        managementScope: item.managementScope,
+      }));
+
+      const res = await api.startBatchAutomation(selectedChannelId, selectedProfile?.id, {
+        videoIds,
+        executionPlan,
+        channelTitle: selectedChannel?.title,
+      });
       if (res.success) {
+        const batchNum = res.batch?.batchNumber || res.batchId || 'AMG-BATCH';
         setExecutionMessage(
-          `Batch ${res.batch.batchNumber} successfully launched into Phase 3 Worker Queue! Pre-mutation snapshots created.`
+          `Batch ${batchNum} successfully launched into Phase 3 Worker Queue (${includedItems.length} videos)! Pre-mutation snapshots created.`
         );
         onAutomationTriggered();
         fetchBatches();

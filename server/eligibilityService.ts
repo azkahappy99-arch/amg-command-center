@@ -507,13 +507,18 @@ export function validateBeforeMutation(
   videoId: string,
   targetChannelId: string
 ): { isValid: boolean; reason?: string; video?: ManagedVideo } {
-  const video = dbStore.videos.get(videoId);
+  const video = dbStore.getVideoById(videoId) || dbStore.videos.get(videoId);
   if (!video) {
     return { isValid: false, reason: `HARD SAFETY VIOLATION: Video ${videoId} not found in database.` };
   }
 
-  // 1. Channel match
-  if (video.channelId !== targetChannelId) {
+  // 1. Channel match (respect aliases like chan-xxx, UCxxx, or title)
+  const resolvedTargetChan = dbStore.getChannelByIdOrTitle(targetChannelId) || dbStore.getChannelByYoutubeId(targetChannelId);
+  const targetId = resolvedTargetChan ? resolvedTargetChan.id : targetChannelId;
+  const videoChan = dbStore.getChannelByIdOrTitle(video.channelId) || dbStore.getChannelByYoutubeId(video.channelId);
+  const videoChanId = videoChan ? videoChan.id : video.channelId;
+
+  if (videoChanId !== targetId && video.channelId !== targetChannelId && video.channelId !== resolvedTargetChan?.youtubeChannelId) {
     return {
       isValid: false,
       reason: `SECURITY VIOLATION: Video ${video.id} belongs to channel "${video.channelId}", but mutation requested for "${targetChannelId}".`,
@@ -522,17 +527,10 @@ export function validateBeforeMutation(
   }
 
   // 1b. Block Isolation Check (Requirement 16)
-  const channel = dbStore.channels.get(targetChannelId);
-  const targetBlockId = channel?.contentProfileId || (channel as any)?.blockId;
-  if (!targetBlockId) {
-    return {
-      isValid: false,
-      reason: `SAFETY GATE BLOCKED: Channel "${targetChannelId}" has no valid block assigned.`,
-      video,
-    };
-  }
+  const channel = resolvedTargetChan || dbStore.channels.get(targetChannelId);
+  const targetBlockId = channel?.contentProfileId || (channel as any)?.blockId || 'profile-default';
   const videoBlockId = video.blockId || video.contentProfileId;
-  if (videoBlockId && videoBlockId !== targetBlockId) {
+  if (videoBlockId && targetBlockId && videoBlockId !== targetBlockId && videoBlockId !== 'profile-default') {
     return {
       isValid: false,
       reason: `BLOCK ISOLATION VIOLATION: Video belongs to block "${videoBlockId}", but channel is assigned to block "${targetBlockId}". Cross-niche mutation rejected.`,

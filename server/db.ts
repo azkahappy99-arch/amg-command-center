@@ -499,6 +499,29 @@ class DatabaseStore {
     return undefined;
   }
 
+  public getChannelByIdOrTitle(identifier: string): Channel | undefined {
+    if (!identifier) return undefined;
+    const direct = this.channels.get(identifier);
+    if (direct) return direct;
+
+    const norm = identifier.trim().toLowerCase();
+    for (const c of this.channels.values()) {
+      if (
+        c.id.toLowerCase() === norm ||
+        (c.youtubeChannelId && c.youtubeChannelId.toLowerCase() === norm) ||
+        (c.title && c.title.toLowerCase() === norm)
+      ) {
+        return c;
+      }
+    }
+    for (const c of this.channels.values()) {
+      if (c.title && c.title.toLowerCase().includes(norm)) {
+        return c;
+      }
+    }
+    return undefined;
+  }
+
   public getVideoById(id: string): ManagedVideo | undefined {
     if (!id) return undefined;
     const direct = this.videos.get(id);
@@ -730,6 +753,18 @@ class DatabaseStore {
         id.startsWith('vid-wrong-') ||
         id.startsWith('vid-personal-') ||
         id.startsWith('vid-test-') ||
+        id.startsWith('vid-') ||
+        id === 'vid-1' ||
+        id === 'vid-2' ||
+        id === 'vid-3' ||
+        id === 'vid-4' ||
+        id === 'vid-5' ||
+        id === 'vid-6' ||
+        id === 'vid-7' ||
+        id === 'vid-8' ||
+        v.titleBefore?.toLowerCase().includes('suara ayam pagi menenangkan') ||
+        v.titleBefore?.toLowerCase().includes('dummy') ||
+        v.titleBefore?.toLowerCase().includes('mock') ||
         v.titleBefore?.toLowerCase().includes('copy of a') ||
         v.titleBefore?.toLowerCase().includes('salinan dari a') ||
         v.titleBefore?.includes('[DEMO FIXTURE]') ||

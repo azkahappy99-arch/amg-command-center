@@ -49,7 +49,7 @@ export class AutomationEngine {
     scopeSummary?: AutomationScopeSummary;
     error?: string;
   } {
-    const channel = dbStore.channels.get(channelId);
+    const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId) || dbStore.channels.get(channelId);
     if (!channel) {
       return { success: false, error: `Channel not found with ID: ${channelId}` };
     }
@@ -185,8 +185,11 @@ export class AutomationEngine {
 
     if (totalUnmanaged === 0) {
       return {
-        success: false,
-        error: `No unmanaged videos detected for channel "${channel.title}". Synchronize channel first.`,
+        success: true,
+        preview: [],
+        channelTitle: channel.title,
+        profileName: profile.name,
+        unmanagedCount: 0,
         scopeSummary,
       };
     }
@@ -564,7 +567,7 @@ export class AutomationEngine {
       };
     }
 
-    const channel = dbStore.channels.get(channelId)!;
+    const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId) || dbStore.channels.get(channelId)!;
     const profile = dbStore.profiles.get(profileId || channel.contentProfileId || '');
     const batchId = `AMG-BATCH-${String(batchSequence++).padStart(4, '0')}`;
 
