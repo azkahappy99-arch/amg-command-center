@@ -19,6 +19,7 @@ import {
   UserCheck,
   Check,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { Channel, ContentProfile, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
 import { api } from '../services/api.ts';
@@ -63,6 +64,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [isEnrolling, setIsEnrolling] = useState(false);
   const [rollingBackBatchId, setRollingBackBatchId] = useState<string | null>(null);
   const [batchToRollback, setBatchToRollback] = useState<AutomationBatch | null>(null);
+  const [isClearingStale, setIsClearingStale] = useState(false);
+  const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
   const selectedProfile = profiles.find((p) => p.id === selectedChannel?.contentProfileId || p.id === selectedChannel?.blockId || p.blockId === selectedChannel?.blockId);
@@ -162,7 +165,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       const res = await api.emergencyRollbackBatch(batchId);
       if (res.success) {
         setExecutionMessage(
-          `Emergency Rollback Completed: Restored ${res.restoredCount} videos in batch ${batchId} to their original pre-mutation titles & private status.`
+          res.message || `Emergency Rollback Completed: Restored ${res.restoredCount} videos in batch ${batchId}.`
         );
         setBatchToRollback(null);
         await fetchBatches();
@@ -173,6 +176,50 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       alert(err.message || 'Emergency Rollback failed');
     } finally {
       setRollingBackBatchId(null);
+    }
+  };
+
+  const handleClearStaleLogs = async () => {
+    if (
+      !confirm(
+        'Bersihkan seluruh log riwayat batch yang macet, gagal, atau telah selesai? Batch aktif yang sedang berjalan di worker tidak akan dihapus.'
+      )
+    ) {
+      return;
+    }
+    setIsClearingStale(true);
+    try {
+      const res = await api.clearStaleBatches();
+      setExecutionMessage(res.message || 'Log riwayat batch berhasil dibersihkan.');
+      await fetchBatches();
+      if (selectedChannelId) {
+        await fetchPreview(selectedChannelId);
+      }
+      onAutomationTriggered();
+    } catch (err: any) {
+      alert(err.message || 'Gagal membersihkan log riwayat batch');
+    } finally {
+      setIsClearingStale(false);
+    }
+  };
+
+  const handleDeleteBatch = async (batchId: string) => {
+    if (!confirm('Hapus riwayat batch ini secara permanen dari database?')) {
+      return;
+    }
+    setDeletingBatchId(batchId);
+    try {
+      const res = await api.deleteAutomationBatch(batchId);
+      setExecutionMessage(res.message || 'Batch berhasil dihapus dari database.');
+      await fetchBatches();
+      if (selectedChannelId) {
+        await fetchPreview(selectedChannelId);
+      }
+      onAutomationTriggered();
+    } catch (err: any) {
+      alert(err.message || 'Gagal menghapus batch');
+    } finally {
+      setDeletingBatchId(null);
     }
   };
 
@@ -672,7 +719,18 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
             <History className="w-4 h-4 text-neutral-400" />
             Riwayat Batch Otomasi
           </h3>
-          <span className="text-xs text-neutral-400">{batches.length} Batch Tercatat</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleClearStaleLogs}
+              disabled={isClearingStale}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold border border-neutral-700 transition active:scale-95 cursor-pointer disabled:opacity-50"
+              title="Bersihkan riwayat batch yang macet, gagal, atau telah selesai"
+            >
+              <Trash2 className={`w-3.5 h-3.5 ${isClearingStale ? 'animate-spin text-amber-400' : 'text-neutral-400'}`} />
+              <span>{isClearingStale ? 'Membersihkan...' : 'Bersihkan Log Riwayat'}</span>
+            </button>
+            <span className="text-xs text-neutral-400">{batches.length} Batch Tercatat</span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -764,21 +822,32 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                         : 'Sedang Berjalan'}
                     </td>
                     <td className="py-3 px-3 text-right">
-                      {!batch.isDryRun && !isRolledBack ? (
-                        <button
-                          onClick={() => setBatchToRollback(batch)}
-                          disabled={isRollingBack}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 transition cursor-pointer active:scale-95 disabled:opacity-50"
-                          title="Pulihkan seluruh video pada batch ini ke metadata awal dan status privat"
-                        >
-                          <RotateCcw className={`w-3 h-3 text-rose-400 ${isRollingBack ? 'animate-spin' : ''}`} />
-                          <span>{isRollingBack ? 'Memulihkan...' : 'Pemulihan Darurat'}</span>
-                        </button>
-                      ) : (
-                        <span className="text-[11px] text-neutral-500 font-mono">
-                          {isRolledBack ? 'Dipulihkan' : 'N/A'}
-                        </span>
-                      )}
+                      <div className="flex items-center justify-end gap-1.5">
+                        {!batch.isDryRun && !isRolledBack && (
+                          <button
+                            onClick={() => setBatchToRollback(batch)}
+                            disabled={isRollingBack}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 transition cursor-pointer active:scale-95 disabled:opacity-50"
+                            title="Pulihkan seluruh video pada batch ini ke metadata awal dan status privat"
+                          >
+                            <RotateCcw className={`w-3 h-3 text-rose-400 ${isRollingBack ? 'animate-spin' : ''}`} />
+                            <span>{isRollingBack ? 'Memulihkan...' : 'Pemulihan'}</span>
+                          </button>
+                        )}
+                        {isRolledBack && (
+                          <span className="text-[11px] text-purple-400 font-mono">Dipulihkan</span>
+                        )}
+                        {batch.status !== 'running' && (
+                          <button
+                            onClick={() => handleDeleteBatch(batch.id)}
+                            disabled={deletingBatchId === batch.id}
+                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-red-950/60 hover:text-red-400 text-neutral-400 border border-neutral-700/60 transition cursor-pointer active:scale-95 disabled:opacity-50"
+                            title={`Hapus riwayat batch ${batch.batchNumber} dari database`}
+                          >
+                            <Trash2 className={`w-3.5 h-3.5 ${deletingBatchId === batch.id ? 'animate-spin text-red-400' : ''}`} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

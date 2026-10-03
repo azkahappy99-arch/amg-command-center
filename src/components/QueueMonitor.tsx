@@ -56,6 +56,11 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
           jobs: res.jobs || [],
         });
         setErrorMsg(null);
+
+        // Serverless compatibility: Proactively tick worker if jobs are waiting but idle
+        if ((res.pending ?? 0) > 0 && (res.processing ?? 0) === 0) {
+          api.workerTickPhase3().catch(() => {});
+        }
       }
     } catch (err: any) {
       // Gracefully handle transient network glitch or server reboot without crashing

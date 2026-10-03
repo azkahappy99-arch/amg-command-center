@@ -2905,6 +2905,71 @@ app.get('/api/automation/batches', (req: Request, res: Response) => {
   res.json(batches);
 });
 
+app.post('/api/automation/batches/clear-stale', (req: Request, res: Response) => {
+  const removeTerminal = req.body?.removeTerminal !== false;
+  const result = phase3Engine.clearBatchLogs({ removeTerminal });
+  res.json({
+    success: true,
+    message: `Berhasil membersihkan ${result.staleCleaned} batch stale dan menghapus ${result.terminalRemoved} riwayat batch terminal.`,
+    ...result,
+  });
+});
+
+app.delete('/api/automation/batches/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  let batch = dbStore.automationBatches.get(id);
+  let batchKey = id;
+
+  if (!batch) {
+    for (const [k, b] of dbStore.automationBatches.entries()) {
+      if (b.batchNumber === id || b.id === id) {
+        batch = b;
+        batchKey = k;
+        break;
+      }
+    }
+  }
+
+  if (!batch) {
+    return res.status(404).json({ error: `Batch dengan ID "${id}" tidak ditemukan.` });
+  }
+
+  // Safety check: Cannot delete if actively processing
+  const queueStatus = phase3Engine.getQueueStatus(batch.id);
+  if (batch.status === 'running' && queueStatus.processing > 0) {
+    return res.status(400).json({
+      error: `Batch "${batch.batchNumber}" sedang memproses ${queueStatus.processing} video di worker queue. Hentikan atau lakukan rollback darurat terlebih dahulu.`,
+    });
+  }
+
+  dbStore.automationBatches.delete(batchKey);
+
+  // Clean associated persistent jobs
+  for (const [jobId, job] of dbStore.automationJobs.entries()) {
+    if (job.batchId === batch.id || job.batchId === batch.batchNumber) {
+      dbStore.automationJobs.delete(jobId);
+    }
+  }
+
+  // Release video lock if incomplete
+  if (batch.status !== 'completed') {
+    for (const v of dbStore.videos.values()) {
+      if (v.automationBatchId === batch.id || v.automationBatchId === batch.batchNumber) {
+        if (v.managementStatus !== 'COMPLETED') {
+          v.managementStatus = 'READY';
+          v.isManaged = false;
+          v.isAmgManaged = false;
+          v.automationBatchId = undefined;
+          dbStore.videos.set(v.id, v);
+        }
+      }
+    }
+  }
+
+  dbStore.saveToDisk();
+  res.json({ success: true, message: `Batch ${batch.batchNumber} berhasil dihapus dari database.` });
+});
+
 // ==========================================
 // 11. QUEUE & JOBS
 // ==========================================
@@ -3045,6 +3110,11 @@ app.get('/api/phase3/snapshots/:batchId', (req: Request, res: Response) => {
   res.json({ success: true, count: snapshots.length, snapshots });
 });
 
+app.post('/api/phase3/worker-tick', (req: Request, res: Response) => {
+  const status = phase3Engine.workerTick();
+  res.json({ success: true, ...status });
+});
+
 // ==========================================
 // VITE MIDDLEWARE (DEV) & STATIC (PROD)
 // ==========================================
@@ -3065,6 +3135,23 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[AMG] Server running on port ${PORT}`);
+
+    // One-time cleanup and stale batch monitor (Requirements 10, 11, 19)
+    try {
+      dbStore.sanitizeStaleBatches();
+      phase3Engine.cleanStaleBatches();
+    } catch (err) {
+      console.error('[Phase3Engine] Initial stale cleanup notice:', err);
+    }
+
+    // Periodic background cleaner every 5 minutes to prevent queue deadlock
+    setInterval(() => {
+      try {
+        phase3Engine.cleanStaleBatches();
+      } catch (e) {
+        console.error('[Phase3Engine] Periodic stale cleaner notice:', e);
+      }
+    }, 5 * 60 * 1000);
   });
 }
 

@@ -1713,6 +1713,22 @@ export const api = {
 
   // Automation
   getAutomationPreview: async (channelId: string, profileId?: string) => {
+    try {
+      const res = await authFetch('/api/automation/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, profileId }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.preview && json.preview.length > 0) {
+          return json;
+        }
+      }
+    } catch {
+      // fallback to client calculation
+    }
+
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
     const channel = channels.find((c) => c.id === channelId);
     if (!channel) {
@@ -1832,54 +1848,112 @@ export const api = {
   },
 
   startBatchAutomation: async (channelId: string, profileId?: string) => {
-    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
-    const channelIdx = channels.findIndex((c) => c.id === channelId);
-    const channel = channelIdx >= 0 ? channels[channelIdx] : channels[0];
-    const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
-    const targetBlockId = profileId || channel?.contentProfileId || channel?.blockId;
-    const targetBlock = profiles.find((p) => p.id === targetBlockId) || profiles[0];
-
-    const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
-    const eligibleVideos = videos.filter(
-      (v) =>
-        (v.channelId === channelId || v.channelId === channel?.youtubeChannelId) &&
-        !v.isManaged &&
-        v.managementStatus !== 'COMPLETED'
-    );
-    const eligibleCount = eligibleVideos.length;
-
-    const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
-    const newBatch: AutomationBatch = {
-      id: `batch-${Date.now()}`,
-      batchNumber: `BAT-${Date.now().toString().slice(-4)}`,
-      channelId,
-      channelTitle: channel?.title || 'Otomasi Produksi',
-      profileId: targetBlock?.id || channel?.contentProfileId || 'profile-default',
-      profileName: targetBlock?.name || channel?.title || 'Profil Konten',
-      status: 'running',
-      detectedCount: eligibleCount,
-      processedCount: eligibleCount,
-      scheduledCount: eligibleCount,
-      completedCount: eligibleCount,
-      failedCount: 0,
-      isDryRun: false,
-      startedAt: new Date().toISOString(),
-    };
-
-    // Advance cutoff if scheduling executed
-    if (channelIdx >= 0) {
-      const scheduledIso = new Date(Date.now() + 86400000).toISOString();
-      channels[channelIdx].lastScheduledPublishAt = scheduledIso;
-      channels[channelIdx].lastScheduledVideoId = `vid-${Date.now()}`;
-      setStorageItem(KEYS.CHANNELS, channels);
+    try {
+      const res = await authFetch('/api/automation/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, profileId }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.batch) {
+          const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+          const filtered = batches.filter((b) => b.id !== json.batch.id);
+          filtered.unshift(json.batch);
+          setStorageItem(KEYS.BATCHES, filtered);
+          return json;
+        }
+        if (json.error) {
+          throw new Error(json.error);
+        }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `Server error (${res.status}): Gagal memulai otomasi batch`);
+      }
+    } catch (err: any) {
+      console.error('[API] startBatchAutomation error:', err);
+      throw err;
     }
-
-    batches.unshift(newBatch);
-    setStorageItem(KEYS.BATCHES, batches);
-    return { success: true, batch: newBatch };
   },
 
-  getAutomationBatches: async () => getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches),
+  getAutomationBatches: async () => {
+    try {
+      const res = await authFetch('/api/automation/batches');
+      if (res.ok) {
+        const backendBatches = await res.json();
+        if (Array.isArray(backendBatches)) {
+          // One-time cleanup filter for legacy stale batches (BAT-7127, BAT-3054, BAT-2479)
+          const cleaned = backendBatches.map((b: AutomationBatch) => {
+            if (['BAT-7127', 'BAT-3054', 'BAT-2479'].includes(b.batchNumber)) {
+              return { ...b, status: 'failed' as const, failureReason: 'STALE_CLEANED' };
+            }
+            return b;
+          });
+          setStorageItem(KEYS.BATCHES, cleaned);
+          return cleaned;
+        }
+      }
+    } catch (e) {
+      console.warn('[api.getAutomationBatches] Failed to fetch from backend, fallback to storage:', e);
+    }
+    const local = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+    return local.map((b: AutomationBatch) => {
+      if (['BAT-7127', 'BAT-3054', 'BAT-2479'].includes(b.batchNumber)) {
+        return { ...b, status: 'failed' as const, failureReason: 'STALE_CLEANED' };
+      }
+      return b;
+    });
+  },
+
+  clearStaleBatches: async () => {
+    try {
+      const res = await authFetch('/api/automation/batches/clear-stale', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ removeTerminal: true }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+        const filtered = batches.filter(
+          (b) => b.status === 'running' && !['BAT-7127', 'BAT-3054', 'BAT-2479'].includes(b.batchNumber)
+        );
+        setStorageItem(KEYS.BATCHES, filtered);
+        return data;
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to clear stale batches');
+    } catch (e: any) {
+      const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+      const filtered = batches.filter(
+        (b) => b.status === 'running' && !['BAT-7127', 'BAT-3054', 'BAT-2479'].includes(b.batchNumber)
+      );
+      setStorageItem(KEYS.BATCHES, filtered);
+      return { success: true, message: 'Log riwayat batch dibersihkan.' };
+    }
+  },
+
+  deleteAutomationBatch: async (batchId: string) => {
+    try {
+      const res = await authFetch(`/api/automation/batches/${encodeURIComponent(batchId)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+        const filtered = batches.filter((b) => b.id !== batchId && b.batchNumber !== batchId);
+        setStorageItem(KEYS.BATCHES, filtered);
+        return data;
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Gagal menghapus batch.');
+    } catch (e: any) {
+      const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+      const filtered = batches.filter((b) => b.id !== batchId && b.batchNumber !== batchId);
+      setStorageItem(KEYS.BATCHES, filtered);
+      return { success: true, message: 'Batch berhasil dihapus.' };
+    }
+  },
 
   // Queue
   getQueue: async () => getStorageItem<AutomationJob[]>(KEYS.JOBS, initialAutomationJobs),
@@ -2095,6 +2169,20 @@ export const api = {
 
   // Phase 3 Worker & Rollback
   getPhase3QueueStatus: async (batchId?: string) => {
+    try {
+      const url = batchId
+        ? `/api/phase3/queue-status?batchId=${encodeURIComponent(batchId)}`
+        : '/api/phase3/queue-status';
+      const res = await authFetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          return data;
+        }
+      }
+    } catch (e) {
+      console.warn('[api.getPhase3QueueStatus] Backend queue status warning, fallback to storage:', e);
+    }
     const jobs = getStorageItem<AutomationJob[]>(KEYS.JOBS, initialAutomationJobs);
     return {
       success: true,
@@ -2108,11 +2196,56 @@ export const api = {
     };
   },
 
+  workerTickPhase3: async () => {
+    try {
+      const res = await authFetch('/api/phase3/worker-tick', { method: 'POST' });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      // ignore
+    }
+    return { success: true };
+  },
+
   queuePhase3Batch: async (batchId: string, channelId: string, jobs: any[]) => {
+    try {
+      const res = await authFetch('/api/phase3/queue-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId, channelId, jobs }),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('[api.queuePhase3Batch] Error dispatching to backend:', e);
+    }
     return { success: true, enqueued: jobs.length, jobs };
   },
 
   emergencyRollbackBatch: async (batchId: string) => {
-    return { success: true, message: 'Rollback darurat berhasil.', restoredCount: 3 };
+    try {
+      const res = await authFetch(`/api/phase3/rollback/${encodeURIComponent(batchId)}`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        // Update local storage batches
+        const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+        const updated = batches.map((b) =>
+          b.id === batchId || b.batchNumber === batchId
+            ? { ...b, status: 'failed' as const, isRolledBack: true }
+            : b
+        );
+        setStorageItem(KEYS.BATCHES, updated);
+        return data;
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Rollback failed (${res.status})`);
+    } catch (err: any) {
+      console.error('[API] Emergency rollback error:', err);
+      throw err;
+    }
   },
 };

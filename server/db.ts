@@ -308,6 +308,7 @@ class DatabaseStore {
         console.log(`[DatabaseStore] Loaded persistent database: ${this.channels.size} channels, ${this.videos.size} videos from ${this.dbFilePath}`);
         this.clearSeededData();
         this.sanitizeBlockIntegrity();
+        this.sanitizeStaleBatches();
         this.loadOwnerAuthFromDisk();
         return;
       } catch (err) {
@@ -318,6 +319,7 @@ class DatabaseStore {
     // Seed master configurations only if file does not exist
     this.seedInitialData();
     this.clearSeededData();
+    this.sanitizeStaleBatches();
     this.loadOwnerAuthFromDisk();
     this.saveToDisk();
   }
@@ -495,6 +497,69 @@ class DatabaseStore {
       }
     }
     return undefined;
+  }
+
+  public getVideoById(id: string): ManagedVideo | undefined {
+    if (!id) return undefined;
+    const direct = this.videos.get(id);
+    if (direct) return direct;
+
+    const norm = id.trim().toLowerCase();
+    for (const v of this.videos.values()) {
+      if (v.id.toLowerCase() === norm ||
+          (v.youtubeVideoId && v.youtubeVideoId.toLowerCase() === norm) ||
+          v.id.toLowerCase() === `yt-${norm}` ||
+          `yt-${v.youtubeVideoId?.toLowerCase()}` === norm) {
+        return v;
+      }
+    }
+    return undefined;
+  }
+
+  public sanitizeStaleBatches(): void {
+    let changed = false;
+    const now = Date.now();
+    const fifteenMinutesMs = 15 * 60 * 1000;
+    const targetStaleBatchNumbers = new Set(['BAT-7127', 'BAT-3054', 'BAT-2479', '7127', '3054', '2479']);
+
+    for (const [id, batch] of this.automationBatches.entries()) {
+      const isTargetStale = targetStaleBatchNumbers.has(batch.batchNumber) || targetStaleBatchNumbers.has(batch.id);
+      const isStaleRunning = batch.status === 'running' && (
+        !batch.lastHeartbeatAt ||
+        (now - new Date(batch.lastHeartbeatAt).getTime() > fifteenMinutesMs) ||
+        (now - new Date(batch.startedAt).getTime() > fifteenMinutesMs)
+      );
+
+      if (isTargetStale || isStaleRunning) {
+        batch.status = 'failed';
+        (batch as any).failureReason = isTargetStale 
+          ? 'STALE_CLEANED: One-time cleanup of locked legacy batch'
+          : 'STALE_TIMEOUT: Inactivity detected (>15m) without active worker heartbeat';
+        batch.completedAt = new Date().toISOString();
+        this.automationBatches.set(id, batch);
+        changed = true;
+
+        // Release any videos locked to this batch
+        for (const [vId, v] of this.videos.entries()) {
+          if (v.automationBatchId === batch.id || v.automationBatchId === batch.batchNumber) {
+            if (v.managementStatus !== 'COMPLETED') {
+              v.managementStatus = 'READY';
+              v.isManaged = false;
+              v.isAmgManaged = false;
+              v.automationBatchId = undefined;
+              v.scheduledPublishAt = undefined;
+              v.updatedAt = new Date().toISOString();
+              this.videos.set(vId, v);
+            }
+          }
+        }
+      }
+    }
+
+    if (changed) {
+      console.log('[DatabaseStore] Sanitized stale batches and released video locks.');
+      this.saveToDisk();
+    }
   }
 
   private seedInitialData() {

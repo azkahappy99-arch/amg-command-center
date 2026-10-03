@@ -275,6 +275,7 @@ export interface AutomationJob {
   completedAt?: string;
   retryCount: number;
   error?: string;
+  lastError?: string;
 }
 
 export interface ErrorLog {

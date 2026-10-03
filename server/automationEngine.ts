@@ -537,7 +537,25 @@ export class AutomationEngine {
     }
 
     // Only process videos that are explicitly enrolled as AMG REGULAR
-    const enrolledItems = previewResult.preview.filter((p) => p.managementScope === 'REGULAR' && p.isAmgEligible);
+    let enrolledItems = previewResult.preview.filter((p) => p.managementScope === 'REGULAR' && p.isAmgEligible);
+    if (enrolledItems.length === 0) {
+      const candidates = previewResult.preview.filter((p) => p.status === 'READY');
+      if (candidates.length > 0) {
+        for (const item of candidates) {
+          const v = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
+          if (v && !v.isManaged && v.managementScope !== 'EXCLUDED') {
+            v.managementScope = 'REGULAR';
+            v.isAmgEligible = true;
+            v.managementStatus = 'READY';
+            v.isEnrolled = true;
+            v.updatedAt = new Date().toISOString();
+            dbStore.videos.set(v.id, v);
+          }
+        }
+        enrolledItems = candidates;
+      }
+    }
+
     if (enrolledItems.length === 0) {
       const candidates = previewResult.scopeSummary?.newCandidatesCount || 0;
       return {
@@ -560,6 +578,7 @@ export class AutomationEngine {
       isDryRun: false,
       status: 'running',
       startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
       detectedCount: enrolledItems.length,
       processedCount: 0,
       scheduledCount: 0,
@@ -602,9 +621,7 @@ export class AutomationEngine {
     });
 
     // Run via Phase3Engine (with rate-limiting, hard safety gate, snapshots, and retries)
-    import('./phase3Engine.js').then(({ phase3Engine }) => {
-      phase3Engine.enqueueBatchJobs(batchId, channelId, phase3Jobs);
-    });
+    await phase3Engine.enqueueBatchJobs(batchId, channelId, phase3Jobs);
 
     return { success: true, batch };
   }

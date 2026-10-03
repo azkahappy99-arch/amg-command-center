@@ -33,20 +33,7 @@ export class YouTubeService {
       return { success: false, error: `Channel ${video.channelId} not found` };
     }
 
-    // Update in-memory database store
-    if (metadata.title !== undefined) {
-      video.titleAssigned = metadata.title;
-    }
-    if (metadata.privacyStatus !== undefined) {
-      video.privacyStatus = metadata.privacyStatus as any;
-    }
-    if (metadata.scheduledPublishAt !== undefined) {
-      video.scheduledPublishAt = metadata.scheduledPublishAt;
-    }
-    video.updatedAt = new Date().toISOString();
-    dbStore.videos.set(video.id, video);
-
-    // Call live YouTube Data API if token is available
+    // Authenticate via OAuth
     const accessToken = await youtubeAuthService.getValidAccessToken(channel.id);
     if (!accessToken) {
       return {
@@ -62,6 +49,7 @@ export class YouTubeService {
       };
     }
 
+    // Call live YouTube Data API
     try {
       if (metadata.title) {
         const titleRes = await youtubeDataService.updateVideoTitle(channel.id, video.youtubeVideoId, metadata.title);
@@ -78,6 +66,19 @@ export class YouTubeService {
     } catch (err: any) {
       return { success: false, error: `Exception saat memanggil YouTube Data API: ${err.message}` };
     }
+
+    // ONLY commit to database after YouTube API mutation succeeds
+    if (metadata.title !== undefined) {
+      video.titleAssigned = metadata.title;
+    }
+    if (metadata.privacyStatus !== undefined) {
+      video.privacyStatus = metadata.privacyStatus as any;
+    }
+    if (metadata.scheduledPublishAt !== undefined) {
+      video.scheduledPublishAt = metadata.scheduledPublishAt;
+    }
+    video.updatedAt = new Date().toISOString();
+    dbStore.videos.set(video.id, video);
 
     return { success: true };
   }
@@ -96,15 +97,11 @@ export class YouTubeService {
       return { success: false, error: `Channel ${video.channelId} not found` };
     }
 
-    video.thumbnailAssigned = thumbnailUrl;
-    video.updatedAt = new Date().toISOString();
-    dbStore.videos.set(video.id, video);
-
     const accessToken = await youtubeAuthService.getValidAccessToken(channel.id);
     if (!accessToken) {
       return {
         success: false,
-        error: `OAuth Access Token tidak tersedia untuk thumbnail upload pada channel "${channel.title}".`,
+        error: `OAuth Access Token tidak tersedia untuk thumbnail upload pada channel "${channel.title}". Silakan hubungkan kembali via Google GIS (RECONNECT REQUIRED).`,
       };
     }
 
@@ -115,6 +112,7 @@ export class YouTubeService {
       };
     }
 
+    // Call live YouTube Data API
     try {
       const thumbRes = await youtubeDataService.updateVideoThumbnail(channel.id, video.youtubeVideoId, thumbnailUrl);
       if (!thumbRes.success) {
@@ -123,6 +121,11 @@ export class YouTubeService {
     } catch (err: any) {
       return { success: false, error: `Exception saat mengunggah thumbnail ke YouTube API: ${err.message}` };
     }
+
+    // ONLY commit to database after YouTube API mutation succeeds
+    video.thumbnailAssigned = thumbnailUrl;
+    video.updatedAt = new Date().toISOString();
+    dbStore.videos.set(video.id, video);
 
     return { success: true };
   }
