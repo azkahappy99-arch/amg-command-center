@@ -734,6 +734,8 @@ class DatabaseStore {
         id === 'chan-murottal-quran' ||
         id === 'chan-1790528541320' ||
         id === 'chan-1790528541332' ||
+        id === 'chan-1791049429497' ||
+        c.title?.toLowerCase().includes('ayam yahya') ||
         c.title?.includes('[DEMO FIXTURE]') ||
         c.title?.includes('Demo Fixture') ||
         c.title?.toLowerCase().includes('fixture');
@@ -763,13 +765,9 @@ class DatabaseStore {
         id === 'vid-7' ||
         id === 'vid-8' ||
         v.titleBefore?.toLowerCase().includes('suara ayam pagi menenangkan') ||
-        v.titleBefore?.toLowerCase().includes('dummy') ||
-        v.titleBefore?.toLowerCase().includes('mock') ||
-        v.titleBefore?.toLowerCase().includes('copy of a') ||
-        v.titleBefore?.toLowerCase().includes('salinan dari a') ||
+        v.titleBefore?.toLowerCase().includes('[demo fixture]') ||
         v.titleBefore?.includes('[DEMO FIXTURE]') ||
-        v.channelTitle?.includes('[DEMO FIXTURE]') ||
-        v.channelTitle?.toLowerCase().includes('fixture');
+        v.channelTitle?.includes('[DEMO FIXTURE]');
 
       if (isFixture) {
         this.videos.delete(id);

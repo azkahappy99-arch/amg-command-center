@@ -118,7 +118,13 @@ export class AutomationEngine {
     let alreadyManagedCount = 0;
 
     for (const video of dbStore.videos.values()) {
-      if (video.channelId !== channelId) continue;
+      const isChannelMatch =
+        video.channelId === channel.id ||
+        video.channelId === channel.youtubeChannelId ||
+        video.channelId === `chan-${channel.youtubeChannelId}` ||
+        (channel.id.startsWith('chan-') && video.channelId === channel.id.replace('chan-', '')) ||
+        (channelId && video.channelId === channelId);
+      if (!isChannelMatch) continue;
 
       if (video.isManaged || video.managementStatus === 'COMPLETED' || video.managementStatus === 'SCHEDULED') {
         alreadyManagedCount++;
@@ -139,6 +145,11 @@ export class AutomationEngine {
       video.isProtected = evalRes.isProtected;
 
       if (evalRes.category === 'NEW_PRIVATE_CANDIDATE' || evalRes.category === 'ELIGIBLE') {
+        video.managementScope = 'REGULAR';
+        video.isAmgEligible = true;
+        video.isEnrolled = true;
+        video.managementStatus = video.processingStatus === 'processed' ? 'READY' : 'DISCOVERED';
+        enrolledRegularVideos.push(video);
         candidateVideos.push(video);
       } else if (evalRes.category === 'PROTECTED_OLD') {
         protectedOldVideos.push(video);
@@ -210,32 +221,31 @@ export class AutomationEngine {
     // Excluded, personal, or unclassified videos are strictly ignored.
     let latestAmgScheduledTime: string | null = null;
     let latestTimestamp = 0;
+    const occupiedSlots: string[] = [];
 
     for (const v of dbStore.videos.values()) {
-      if (v.channelId === channelId) {
-        const schedTimeStr = v.scheduledPublishAt || v.publishAt;
-        if (schedTimeStr) {
-          const time = new Date(schedTimeStr).getTime();
-          if (!isNaN(time) && time > latestTimestamp) {
-            latestTimestamp = time;
-            latestAmgScheduledTime = schedTimeStr;
-          }
+      const isChannelMatch =
+        v.channelId === channel.id ||
+        v.channelId === channel.youtubeChannelId ||
+        v.channelId === `chan-${channel.youtubeChannelId}` ||
+        (channel.id.startsWith('chan-') && v.channelId === channel.id.replace('chan-', '')) ||
+        (channelId && v.channelId === channelId);
+      if (!isChannelMatch) continue;
+
+      const schedTimeStr = v.scheduledPublishAt || v.publishAt;
+      if (schedTimeStr) {
+        const time = new Date(schedTimeStr).getTime();
+        if (!isNaN(time) && time > latestTimestamp) {
+          latestTimestamp = time;
+          latestAmgScheduledTime = schedTimeStr;
         }
+        occupiedSlots.push(schedTimeStr);
       }
     }
 
     // Fall back to channel.latestManagedScheduledAt or channel.lastScheduledPublishAt
     const effectiveLatest =
       latestAmgScheduledTime || channel.latestManagedScheduledAt || channel.lastScheduledPublishAt || null;
-
-    // Collect occupied publishAt slots to avoid collisions
-    const occupiedSlots: string[] = [];
-    for (const v of dbStore.videos.values()) {
-      if (v.channelId === channelId) {
-        const slot = v.scheduledPublishAt || v.publishAt;
-        if (slot) occupiedSlots.push(slot);
-      }
-    }
 
     // 4. GENERATE ROTATIONS & SCHEDULE SLOTS FOR ACTIVE ENROLLED VIDEOS
     const startingTitleOffset = channel.rotationTitleIndex || 0;

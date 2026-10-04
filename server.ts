@@ -1170,7 +1170,12 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
     // Upsert real videos into dbStore
     for (const v of realVideos) {
       const existing = Array.from(dbStore.videos.values()).find(
-        (ev) => ev.youtubeVideoId === v.id || ev.id === `yt-${v.id}`
+        (ev) =>
+          (ev.youtubeVideoId === v.id || ev.id === `yt-${v.id}` || ev.id === v.id) &&
+          (ev.channelId === channel.id ||
+            (channel.youtubeChannelId &&
+              (ev.channelId === channel.youtubeChannelId ||
+                ev.channelId === `chan-${channel.youtubeChannelId}`)))
       );
 
       const isPrivate = (v.privacyStatus || 'public') === 'private';
@@ -2913,7 +2918,7 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
     const effectiveTitle =
       channelTitle ||
       channel?.title ||
-      (channelId.startsWith('chan-') ? 'Ayam YAHYA' : channelId);
+      channelId;
 
     if (!channel) {
       // Upsert the channel so automation engine & phase3 can operate reliably

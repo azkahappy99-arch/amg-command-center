@@ -152,14 +152,11 @@ export function isRealVideo(v: ManagedVideo): boolean {
   }
   const title = (v.titleBefore || '').toLowerCase();
   if (
-    title.includes('copy of a') ||
-    title.includes('salinan dari a') ||
     title.includes('demo fixture') ||
     title.includes('[demo fixture]') ||
-    title.includes('fixture') ||
+    title.includes('demo seed fixture') ||
     title.includes('suara ayam pagi menenangkan') ||
-    title.includes('dummy') ||
-    title.includes('mock')
+    title.includes('mock dummy')
   ) {
     return false;
   }

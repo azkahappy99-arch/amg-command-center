@@ -239,26 +239,9 @@ export function evaluateVideoEligibility(
     };
   }
 
-  // CHECK 3 — UPLOAD TIME / ELIGIBILITY WINDOW (Requirements 1, 2, 14, 22)
-  // Historical private videos present before AMG connection MUST be considered.
-  // Connection time is NOT a boundary. Only apply window restriction if explicitly configured on the channel.
-  if (channel?.eligibilityWindowDays && channel.eligibilityWindowDays > 0) {
-    const customWindowMs = channel.eligibilityWindowDays * 24 * 60 * 60 * 1000;
-    const customCutoff = referenceNowMs - customWindowMs;
-    if (uploadTime < customCutoff) {
-      const daysOld = Math.round((referenceNowMs - uploadTime) / (24 * 60 * 60 * 1000));
-      return {
-        category: 'PROTECTED_OLD',
-        isEligible: false,
-        isProtected: true,
-        amgStatus: 'PROTECTED_OLD',
-        reason: `Diupload ${daysOld} hari lalu (di luar jendela filter kustom ${channel.eligibilityWindowDays} hari channel).`,
-        eligibilityWindowDays: channel.eligibilityWindowDays,
-        latestManagedUploadAt: channel.latestManagedUploadAt,
-        originalUploadAt: video.originalUploadAt,
-      };
-    }
-  }
+  // CHECK 3 — UPLOAD TIME (Section 2: Do NOT exclude raw videos due to upload age)
+  // Upload age (e.g. 7 days, 30 days, 2 months) is NEVER a sole reason to exclude private raw videos.
+  // Historical raw videos present on the channel ("Salinan dari A", etc.) are fully admitted into scope.
 
   // CHECK 4 — TITLE PATTERN MATCH
   // Video title must conform to eligibleTitlePatterns or common placeholder indications.
@@ -414,21 +397,13 @@ export function detectChannelCandidates(
       newCandidatesCount++;
       eligibleCount++;
       video.amgStatus = 'NEW_PRIVATE_CANDIDATE';
-      // Do not auto-enroll unless configured
-      if (config.autoEnroll) {
-        video.isEnrolled = true;
-        video.managementScope = 'REGULAR';
-        video.isAmgEligible = true;
-        video.managementStatus = video.processingStatus === 'processed' ? 'READY' : 'VALIDATING';
-        video.scopeAssignedAt = new Date().toISOString();
-        video.scopeAssignedBy = 'AUTO_ENROLL';
-      } else {
-        // Safe default: wait for user enrollment
-        video.managementStatus = 'NEW_PRIVATE_CANDIDATE';
-        video.managementScope = 'UNCLASSIFIED';
-        video.isAmgEligible = false;
-        video.isEnrolled = false;
-      }
+      // Raw private unscheduled videos in channel scope are admitted as REGULAR & eligible candidates
+      video.managementScope = 'REGULAR';
+      video.isAmgEligible = true;
+      video.isEnrolled = true;
+      video.managementStatus = video.processingStatus === 'processed' ? 'READY' : 'DISCOVERED';
+      video.scopeAssignedAt = video.scopeAssignedAt || new Date().toISOString();
+      video.scopeAssignedBy = video.scopeAssignedBy || 'SYSTEM';
     } else if (result.category === 'PROTECTED_OLD') {
       protectedOldCount++;
       video.amgStatus = 'PROTECTED_OLD';

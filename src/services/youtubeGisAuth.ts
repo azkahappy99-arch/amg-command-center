@@ -503,24 +503,35 @@ export async function fetchChannelVideosFromYouTube(
       }
     }
 
-    // Fallback: If playlist was empty or unavailable, try search
+    // Fallback: If playlist was empty or unavailable, try search with pagination
     if (videoIds.length === 0) {
       try {
-        const searchRes = await fetch(
-          'https://www.googleapis.com/youtube/v3/search?part=snippet&forMine=true&type=video&maxResults=50',
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: 'application/json',
-            },
-          }
-        );
-        if (searchRes.ok) {
-          const searchData = await searchRes.json();
+        let searchPageToken: string | undefined = undefined;
+        let searchPages = 0;
+        do {
+          const pageParam: string = searchPageToken ? `&pageToken=${encodeURIComponent(searchPageToken)}` : '';
+          const searchRes: Response = await fetch(
+            `https://www.googleapis.com/youtube/v3/search?part=snippet&forMine=true&type=video&maxResults=50${pageParam}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+              },
+            }
+          );
+          if (!searchRes.ok) break;
+          const searchData: any = await searchRes.json();
           if (Array.isArray(searchData.items)) {
-            videoIds = searchData.items.map((it: any) => it.id?.videoId).filter(Boolean);
+            for (const it of searchData.items) {
+              const vidId = it.id?.videoId;
+              if (vidId && !videoIds.includes(vidId)) {
+                videoIds.push(vidId);
+              }
+            }
           }
-        }
+          searchPageToken = searchData.nextPageToken;
+          searchPages++;
+        } while (searchPageToken && searchPages < 60);
       } catch (sErr) {
         console.warn('Search fallback notice:', sErr);
       }

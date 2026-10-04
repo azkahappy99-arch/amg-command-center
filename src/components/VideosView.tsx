@@ -58,7 +58,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
   const [privacyFilter, setPrivacyFilter] = useState<string>('ALL');
   const [managedFilter, setManagedFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [scopeFilter, setScopeFilter] = useState<string>('ALL');
+  const [scopeFilter, setScopeFilter] = useState<string>('CANDIDATE');
   const [selectedVideoIds, setSelectedVideoIds] = useState<string[]>([]);
   const [isUpdatingScope, setIsUpdatingScope] = useState(false);
 
@@ -589,6 +589,60 @@ export const VideosView: React.FC<VideosViewProps> = ({
             <option value="ERROR">ERROR</option>
           </select>
         </div>
+      </div>
+
+      {/* Work Table Mode Tabs: Primary Focus on Raw Videos Requiring Action (Section 8) */}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={() => {
+            setScopeFilter('CANDIDATE');
+            setPrivacyFilter('ALL');
+            setManagedFilter('ALL');
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-sm ${
+            scopeFilter === 'CANDIDATE'
+              ? 'bg-amber-500 text-neutral-950 shadow-amber-500/20 ring-2 ring-amber-400'
+              : 'bg-neutral-900 text-neutral-300 hover:bg-neutral-800 border border-neutral-800'
+          }`}
+        >
+          <Film className="w-3.5 h-3.5" />
+          <span>⚡ Tabel Kerja: Video Mentah / Perlu Tindakan ({candidateCount})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setScopeFilter('SCHEDULED');
+            setPrivacyFilter('ALL');
+            setManagedFilter('ALL');
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-sm ${
+            scopeFilter === 'SCHEDULED'
+              ? 'bg-blue-600 text-white shadow-blue-600/20 ring-2 ring-blue-400'
+              : 'bg-neutral-900 text-neutral-300 hover:bg-neutral-800 border border-neutral-800'
+          }`}
+        >
+          <Calendar className="w-3.5 h-3.5" />
+          <span>📅 Video Terjadwal ({scheduledCount})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setScopeFilter('ALL');
+            setPrivacyFilter('ALL');
+            setManagedFilter('ALL');
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer shadow-sm ${
+            scopeFilter === 'ALL'
+              ? 'bg-neutral-800 text-white ring-2 ring-neutral-500'
+              : 'bg-neutral-900 text-neutral-400 hover:bg-neutral-800 border border-neutral-800'
+          }`}
+        >
+          <Layers className="w-3.5 h-3.5" />
+          <span>📁 Semua Video ({channelVideos.length})</span>
+        </button>
       </div>
 
       {/* Videos List / Table */}

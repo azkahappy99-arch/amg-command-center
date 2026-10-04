@@ -32,7 +32,7 @@ export default async function handler(req: any, res: any) {
     const effectiveTitle =
       channelTitle ||
       channel?.title ||
-      (channelId.startsWith('chan-') ? 'Ayam YAHYA' : channelId);
+      channelId;
 
     if (!channel) {
       channel = dbStore.upsertChannel({
