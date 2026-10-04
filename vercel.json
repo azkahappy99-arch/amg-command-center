@@ -1,9 +1,14 @@
 {
+  "installCommand": "npm install --legacy-peer-deps",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/automation/start", "destination": "/api/automation/start" },
     { "source": "/api/automation/batch/start", "destination": "/api/automation/batch/start" },
     { "source": "/api/batch/execute", "destination": "/api/batch/execute" },
     { "source": "/api/automation/execute", "destination": "/api/automation/execute" },
-    { "source": "/api/automation/batch/execute", "destination": "/api/automation/batch/execute" }
+    { "source": "/api/automation/batch/execute", "destination": "/api/automation/batch/execute" },
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
