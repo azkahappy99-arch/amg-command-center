@@ -1896,16 +1896,27 @@ export const api = {
       channelTitle?: string;
     }
   ) => {
+    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(isRealVideo);
+    const channelVideos = rawVideos.filter(
+      (v) =>
+        v.channelId === channelId ||
+        v.channelId === `chan-${channelId}` ||
+        (channelId.startsWith('chan-') && v.channelId === channelId.replace('chan-', ''))
+    );
+
     const payload = {
       channelId,
       profileId,
       videoIds: payloadOptions?.videoIds,
       executionPlan: payloadOptions?.executionPlan,
       channelTitle: payloadOptions?.channelTitle,
+      videos: channelVideos,
     };
 
     const endpoints = [
       '/api/automation/start',
+      '/api/automation/batch',
+      '/api/automation/batches',
       '/api/automation/batch/start',
       '/api/batch/execute',
       '/api/automation/execute',
@@ -1920,8 +1931,11 @@ export const api = {
           body: JSON.stringify(payload),
         });
 
+        const contentType = res.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+
         if (res.ok) {
-          const json = await res.json();
+          const json = isJson ? await res.json() : {};
           if (json.success) {
             const batch = json.batch || {
               id: json.batchId || `AMG-BATCH-${Date.now().toString().slice(-4)}`,
@@ -1944,23 +1958,26 @@ export const api = {
           if (json.error) {
             throw new Error(json.error);
           }
-        } else if (res.status === 404) {
-          continue; // Try alternative endpoint
+        } else if (res.status === 404 && !isJson) {
+          // If the server/proxy returned an HTML 404, try next alternative alias
+          continue;
         } else {
-          const errJson = await res.json().catch(() => ({}));
-          throw new Error(errJson.error || `Server error (${res.status}): Gagal memulai otomasi batch`);
+          const errJson = isJson ? await res.json().catch(() => ({})) : {};
+          const msg = errJson.error || errJson.message || `Server error (${res.status}): Gagal memulai otomasi batch`;
+          throw new Error(msg);
         }
       } catch (err: any) {
-        if (err.message && err.message.includes('404')) {
+        lastError = err;
+        // Only retry if it was an HTML 404 route missing, not a business logic error
+        if (err.message && err.message.includes('404') && !err.message.includes('Video') && !err.message.includes('Channel')) {
           continue;
         }
-        lastError = err;
         throw err;
       }
     }
 
     if (lastError) throw lastError;
-    throw new Error('Server error (404): Endpoint otomasi batch tidak ditemukan pada server.');
+    throw new Error('Server error: Gagal memulai batch otomasi pada server.');
   },
 
   getAutomationBatches: async () => {

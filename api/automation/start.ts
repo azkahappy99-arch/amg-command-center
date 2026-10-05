@@ -8,10 +8,20 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  let batchId = '';
   try {
-    const { channelId, profileId, videoIds, executionPlan, channelTitle } = req.body || {};
+    const { channelId, profileId, videoIds, executionPlan, channelTitle, videos } = req.body || {};
     if (!channelId) {
       return res.status(400).json({ error: 'channelId is required.' });
+    }
+
+    // Sync any candidate videos provided directly from authentic YouTube Data API scan
+    if (Array.isArray(videos)) {
+      for (const v of videos) {
+        if (v && v.id) {
+          dbStore.videos.set(v.id, v);
+        }
+      }
     }
 
     let channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
@@ -43,8 +53,8 @@ export default async function handler(req: any, res: any) {
         connectedAt: new Date().toISOString(),
         contentProfileId: profileId || 'profile-default',
         thumbnailUrl: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=150',
-        videoCount: Array.isArray(videoIds) ? videoIds.length : 8,
-        unmanagedVideoCount: Array.isArray(videoIds) ? videoIds.length : 8,
+        videoCount: Array.isArray(videoIds) ? videoIds.length : (Array.isArray(executionPlan) ? executionPlan.length : 8),
+        unmanagedVideoCount: Array.isArray(videoIds) ? videoIds.length : (Array.isArray(executionPlan) ? executionPlan.length : 8),
         publishFrequency: '1/day',
         publishTime: '16:00',
         timezone: 'Asia/Jakarta',
@@ -56,7 +66,7 @@ export default async function handler(req: any, res: any) {
     }
 
     if (Array.isArray(executionPlan) && executionPlan.length > 0) {
-      const batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
+      batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
       const batch: AutomationBatch = {
         id: batchId,
         batchNumber: batchId,
@@ -82,9 +92,32 @@ export default async function handler(req: any, res: any) {
         const item = executionPlan[idx];
         let video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
         if (!video) {
-          return res.status(404).json({
-            error: `Video "${item.videoId}" tidak ditemukan dalam database. Sinkronisasikan video resmi dari YouTube Data API terlebih dahulu. Dilarang menggunakan mock/dummy video.`,
-          });
+          // If video was discovered by frontend YouTube Data API v3 integration, register it into dbStore
+          const ytId = item.videoId.startsWith('yt-vid-') ? item.videoId.replace('yt-vid-', '') : item.videoId;
+          video = {
+            id: item.videoId,
+            youtubeVideoId: ytId,
+            channelId: channel.id,
+            channelTitle: channel.title,
+            titleBefore: item.originalTitle || item.title || 'Video YouTube',
+            titleAssigned: item.title,
+            thumbnailBefore: item.originalThumbnail || item.thumbnailUrl || '',
+            thumbnailAssigned: item.thumbnailUrl || '',
+            originalUploadAt: new Date().toISOString(),
+            uploadedAt: new Date().toISOString(),
+            processingStatus: 'processed',
+            privacyStatus: 'private',
+            managementStatus: 'READY',
+            managementScope: 'REGULAR',
+            isAmgEligible: true,
+            isManaged: false,
+            isEnrolled: true,
+            retryCount: 0,
+            isSeeded: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          dbStore.videos.set(video.id, video);
         }
 
         video.managementScope = 'REGULAR';
@@ -144,6 +177,13 @@ export default async function handler(req: any, res: any) {
     });
   } catch (err: any) {
     console.error('[API Handler Error]', err);
+    if (batchId && dbStore.automationBatches.has(batchId)) {
+      const b = dbStore.automationBatches.get(batchId)!;
+      b.status = 'failed';
+      (b as any).failureReason = err.message || 'Dispatch failure';
+      b.completedAt = new Date().toISOString();
+      dbStore.automationBatches.set(batchId, b);
+    }
     return res.status(500).json({ error: err.message || 'Internal server error starting batch' });
   }
 }

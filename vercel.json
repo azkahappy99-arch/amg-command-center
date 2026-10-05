@@ -4,6 +4,8 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/automation/start", "destination": "/api/automation/start" },
+    { "source": "/api/automation/batch", "destination": "/api/automation/batch" },
+    { "source": "/api/automation/batches", "destination": "/api/automation/batches" },
     { "source": "/api/automation/batch/start", "destination": "/api/automation/batch/start" },
     { "source": "/api/batch/execute", "destination": "/api/batch/execute" },
     { "source": "/api/automation/execute", "destination": "/api/automation/execute" },
