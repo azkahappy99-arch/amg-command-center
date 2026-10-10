@@ -592,13 +592,14 @@ export class AutomationEngine {
       };
     }
 
-    // Process only up to remaining rolling capacity, preserving all other candidates for next dispatch
-    const totalEnrolled = enrolledItems.length;
-    if (enrolledItems.length > remainingCapacity) {
+    // Dynamic Batch Chaining (Requirement 1): Kapasitas 1 kloter = 50 video per eksekusi
+    const BATCH_CHUNK_SIZE = 50;
+    const firstKloterLimit = Math.min(BATCH_CHUNK_SIZE, remainingCapacity);
+    if (enrolledItems.length > firstKloterLimit) {
       console.log(
-        `[AutomationEngine] Clamping batch from ${enrolledItems.length} to ${remainingCapacity} items based on 24h rolling capacity (${usedLast24h}/${targetCapacity} used).`
+        `[AutomationEngine] Menyiapkan Kloter 1 sebanyak ${firstKloterLimit} video (dari total ${enrolledItems.length} video enrolled). Worker akan otomatis menarik kloter berikutnya.`
       );
-      enrolledItems = enrolledItems.slice(0, remainingCapacity);
+      enrolledItems = enrolledItems.slice(0, firstKloterLimit);
     }
 
     const batchId = `AMG-BATCH-${String(batchSequence++).padStart(4, '0')}`;

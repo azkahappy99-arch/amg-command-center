@@ -585,7 +585,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-red-900/30 transition active:scale-95 cursor-pointer"
             >
               <PlayCircle className="w-4 h-4" />
-              <span>Konfirmasi & Mulai Otomasi ({includedItems.length})</span>
+              <span>Konfirmasi & Mulai Otomasi (Semua: {includedItems.length} Video) - Kloter per 50</span>
             </button>
           </div>
         </div>
@@ -911,15 +911,15 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                 </div>
               )}
 
-              <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1.5 text-[11px]">
-                <div className="font-semibold text-neutral-200">Execution Plan:</div>
+              <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2 text-[11px]">
+                <div className="font-semibold text-neutral-200">Rencana Eksekusi Berantai (Auto-Chaining):</div>
                 <ul className="list-disc list-inside space-y-1 text-neutral-400">
-                  <li>Verify managementScope === 'REGULAR' & isAmgEligible === true</li>
-                  <li>Validate HD transcoding completion on YouTube</li>
-                  <li>Apply Master Titles via deterministic round-robin</li>
-                  <li>Upload Master Thumbnails via independent rotation</li>
-                  <li>Continuous schedule continuation starting from next available slot</li>
-                  <li>Verify changes and record in AMG Activity Logs</li>
+                  <li>Kapasitas per kloter: <strong>50 video per eksekusi</strong> (Kloter 1 dimulai segera).</li>
+                  <li><strong>Auto-Chaining Berantai:</strong> Setelah 50 video selesai, worker otomatis melanjutkan ke 50 video berikutnya tanpa klik ulang.</li>
+                  <li><strong>Anti-Spam Throttling:</strong> Jeda aman 2 hingga 4 detik di antara setiap video untuk mencegah deteksi bot YouTube.</li>
+                  <li><strong>Upload Serial:</strong> Thumbnail diunggah satu per satu secara berurutan (bukan paralel).</li>
+                  <li><strong>Batas Kuota YouTube 70/24 Jam:</strong> Jika kuota mendekati batas, sisa video dialihkan ke 'Menunggu Kuota Besok' untuk mencegah error 403.</li>
+                  <li>Verifikasi read-after-write dan pencatatan snapshot otomatis untuk rollback darurat.</li>
                 </ul>
               </div>
 
@@ -929,7 +929,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   onClick={() => setShowConfirmModal(false)}
                   className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-semibold"
                 >
-                  Cancel
+                  Batal
                 </button>
                 <button
                   type="button"
@@ -937,7 +937,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   disabled={isExecuting || includedItems.length === 0}
                   className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shadow-lg shadow-red-900/30"
                 >
-                  {isExecuting ? 'Launching...' : `Yes, Start Automation (${includedItems.length})`}
+                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${includedItems.length} Video) - Kloter per 50`}
                 </button>
               </div>
             </div>

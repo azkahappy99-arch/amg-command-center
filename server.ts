@@ -2999,44 +2999,13 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       });
     }
 
-    // 2. If executionPlan is provided (e.g. 3 videos from candidate inclusion preview):
+    // 2. If executionPlan is provided (e.g. videos from candidate inclusion preview):
     if (Array.isArray(executionPlan) && executionPlan.length > 0) {
-      let planToExecute = executionPlan;
-      if (planToExecute.length > remainingCapacity) {
-        console.log(
-          `[handleStartBatchAutomation] Clamping execution plan from ${planToExecute.length} to ${remainingCapacity} items based on 24h capacity.`
-        );
-        planToExecute = planToExecute.slice(0, remainingCapacity);
-      }
-
-      batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
-      const batch: AutomationBatch = {
-        id: batchId,
-        batchNumber: batchId,
-        channelId: channel.id,
-        channelTitle: channel.title,
-        profileId: profileId || channel.contentProfileId || 'profile-default',
-        profileName: 'Standard AMG Schedule',
-        isDryRun: false,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        lastHeartbeatAt: new Date().toISOString(),
-        detectedCount: planToExecute.length,
-        processedCount: 0,
-        scheduledCount: 0,
-        completedCount: 0,
-        failedCount: 0,
-      };
-
-      dbStore.automationBatches.set(batchId, batch);
-
-      // Upsert videos in dbStore and construct Phase 3 jobs
-      const phase3Jobs = [];
-      for (let idx = 0; idx < planToExecute.length; idx++) {
-        const item = planToExecute[idx];
+      // Step A: Daftarkan seluruh video dalam executionPlan ke dbStore.videos dengan judul & thumbnail terpilih
+      for (let idx = 0; idx < executionPlan.length; idx++) {
+        const item = executionPlan[idx];
         let video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
         if (!video) {
-          // If video was discovered by frontend YouTube Data API v3 integration, register it into dbStore
           const ytId = item.videoId.startsWith('yt-vid-') ? item.videoId.replace('yt-vid-', '') : item.videoId;
           video = {
             id: item.videoId,
@@ -3062,7 +3031,54 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
             updatedAt: new Date().toISOString(),
           };
           dbStore.videos.set(video.id, video);
+        } else {
+          video.titleAssigned = item.title;
+          video.thumbnailAssigned = item.thumbnailUrl;
+          video.managementScope = 'REGULAR';
+          video.isAmgEligible = true;
+          video.isEnrolled = true;
+          video.managementStatus = 'READY';
+          video.privacyStatus = 'private';
+          video.channelId = channel.id;
+          dbStore.videos.set(video.id, video);
         }
+      }
+
+      // Step B: Dynamic Batch Chaining (Requirement 1): Kapasitas 1 kloter = 50 video per eksekusi
+      const BATCH_CHUNK_SIZE = 50;
+      const kloter1Limit = Math.min(BATCH_CHUNK_SIZE, remainingCapacity);
+      const planToExecute = executionPlan.slice(0, kloter1Limit);
+
+      console.log(
+        `[handleStartBatchAutomation] Menjalankan Kloter 1 sebanyak ${planToExecute.length} video (dari total ${executionPlan.length} video). Sisa ${Math.max(0, executionPlan.length - planToExecute.length)} video akan ditarik otomatis oleh worker secara berantai.`
+      );
+
+      batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
+      const batch: AutomationBatch = {
+        id: batchId,
+        batchNumber: batchId,
+        channelId: channel.id,
+        channelTitle: channel.title,
+        profileId: profileId || channel.contentProfileId || 'profile-default',
+        profileName: 'Standard AMG Schedule (Kloter 1)',
+        isDryRun: false,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        detectedCount: planToExecute.length,
+        processedCount: 0,
+        scheduledCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+      };
+
+      dbStore.automationBatches.set(batchId, batch);
+
+      // Upsert videos in dbStore and construct Phase 3 jobs for Kloter 1
+      const phase3Jobs = [];
+      for (let idx = 0; idx < planToExecute.length; idx++) {
+        const item = planToExecute[idx];
+        const video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId)!;
 
         video.managementScope = 'REGULAR';
         video.isAmgEligible = true;
@@ -3070,9 +3086,10 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         video.managementStatus = 'READY';
         video.privacyStatus = 'private';
         video.channelId = channel.id;
+        video.automationBatchId = batchId;
         dbStore.videos.set(video.id, video);
 
-        // Calculate continuous schedule slot: starting from 2026-10-04 16:00 WIB (09:00 UTC)
+        // Calculate continuous schedule slot
         let isoPublishAt = item.scheduledPublishAt;
         if (!isoPublishAt) {
           if (item.publishDate && item.publishTime) {
@@ -3081,7 +3098,6 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
             const slotDate = new Date(Date.UTC(y, m - 1, d, Number(hours) - 7, Number(minutes), 0));
             isoPublishAt = slotDate.toISOString();
           } else {
-            // Consecutive daily slots starting 2026-10-04 16:00 WIB (09:00 UTC)
             const baseDate = new Date(Date.UTC(2026, 9, 4 + idx, 9, 0, 0));
             isoPublishAt = baseDate.toISOString();
           }
@@ -3106,7 +3122,9 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         success: true,
         batchId: batch.id,
         batch,
-        message: `Batch ${batch.batchNumber} launched into Phase 3 Worker Queue with ${phase3Jobs.length} videos.`,
+        totalEnrolled: executionPlan.length,
+        kloterSize: planToExecute.length,
+        message: `Kloter 1 (${planToExecute.length} video) berhasil dimasukkan ke antrean Phase 3 Worker. Pemrosesan berantai aktif untuk total ${executionPlan.length} video (Kloter per 50 video).`,
       });
     }
 

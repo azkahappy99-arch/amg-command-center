@@ -10,6 +10,8 @@ import {
   Activity,
   ArrowRight,
   ShieldCheck,
+  Calendar,
+  Lock,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -20,7 +22,7 @@ interface QueueMonitorProps {
 
 export const QueueMonitor: React.FC<QueueMonitorProps> = ({
   onNavigateToAutomation,
-  refreshIntervalMs = 4000,
+  refreshIntervalMs = 2500,
 }) => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -31,7 +33,13 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
     completed: number;
     failed: number;
     retrying: number;
+    remainingInQueue: number;
+    waitingQuotaBesokCount: number;
+    channelRemainingRawCount: number;
+    quotaUsed24h: number;
+    quotaLimit: number;
     jobs: any[];
+    isProcessing?: boolean;
   }>({
     total: 0,
     pending: 0,
@@ -39,6 +47,11 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
     completed: 0,
     failed: 0,
     retrying: 0,
+    remainingInQueue: 0,
+    waitingQuotaBesokCount: 0,
+    channelRemainingRawCount: 0,
+    quotaUsed24h: 0,
+    quotaLimit: 70,
     jobs: [],
   });
 
@@ -46,24 +59,34 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
     try {
       const res = await api.getPhase3QueueStatus();
       if (res && res.success) {
+        const pending = res.pending ?? 0;
+        const processing = res.processing ?? 0;
+        const retrying = res.retrying ?? 0;
+        const remaining = res.remainingInQueue ?? (pending + retrying);
+
         setQueueData({
           total: res.total ?? 0,
-          pending: res.pending ?? 0,
-          processing: res.processing ?? 0,
+          pending,
+          processing,
           completed: res.completed ?? 0,
           failed: res.failed ?? 0,
-          retrying: res.retrying ?? 0,
+          retrying,
+          remainingInQueue: remaining,
+          waitingQuotaBesokCount: res.waitingQuotaBesokCount ?? 0,
+          channelRemainingRawCount: res.channelRemainingRawCount ?? 0,
+          quotaUsed24h: res.quotaUsed24h ?? 0,
+          quotaLimit: res.quotaLimit ?? 70,
           jobs: res.jobs || [],
+          isProcessing: res.isProcessing ?? false,
         });
         setErrorMsg(null);
 
         // Serverless compatibility: Proactively tick worker if jobs are waiting but idle
-        if ((res.pending ?? 0) > 0 && (res.processing ?? 0) === 0) {
+        if (pending > 0 && processing === 0) {
           api.workerTickPhase3().catch(() => {});
         }
       }
     } catch (err: any) {
-      // Gracefully handle transient network glitch or server reboot without crashing
       setErrorMsg(err.message || 'Koneksi antrean sedang memulihkan diri...');
     }
   }, []);
@@ -85,7 +108,7 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
   return (
     <div className="rounded-2xl bg-neutral-900/90 border border-neutral-800 shadow-xl overflow-hidden backdrop-blur-md">
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-3 bg-neutral-950/60 border-b border-neutral-800/80 max-w-full">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-3 bg-neutral-950/70 border-b border-neutral-800/80 max-w-full">
         <div className="flex items-center gap-2 min-w-0">
           <div className="relative flex items-center justify-center shrink-0">
             <span
@@ -103,8 +126,11 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
             <Layers className="w-4 h-4 text-red-500 shrink-0" />
             <span className="truncate">Pemantau Antrean Worker Phase 3</span>
           </span>
+          <span className="hidden sm:inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-neutral-800 text-neutral-300 border border-neutral-700 shrink-0">
+            Auto-Chaining (50/Kloter)
+          </span>
           <span className="hidden md:inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-neutral-800 text-neutral-300 border border-neutral-700 shrink-0">
-            Perlindungan Batas Kecepatan (2s)
+            Anti-Spam Throttling (2-4s)
           </span>
         </div>
 
@@ -134,54 +160,26 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
         </div>
       </div>
 
-      {/* Grid of Status Cards */}
+      {/* Grid of Status Cards (Memproses, Selesai, Sisa Antrean Realtime) */}
       <div className="grid grid-cols-2 sm:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-neutral-800/80 border-b border-neutral-800/60">
-        {/* Processing */}
+        {/* 1. Memproses */}
         <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-blue-950/20 to-transparent">
           <div className="flex items-center justify-between text-blue-400 text-xs font-semibold mb-1">
             <span className="flex items-center gap-1">
-              <Zap className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+              <Zap className={`w-3.5 h-3.5 text-blue-400 ${queueData.processing > 0 ? 'animate-pulse' : ''}`} />
               Memproses
             </span>
-            <span className="text-[10px] text-blue-400/80 font-mono">aktif</span>
+            <span className="text-[10px] text-blue-400/80 font-mono">
+              {queueData.processing > 0 ? 'aktif' : 'siaga'}
+            </span>
           </div>
           <div className="text-xl font-bold font-mono text-neutral-100">
             {queueData.processing}
           </div>
-          <div className="text-[10px] text-neutral-400 mt-1">Penerapan metadata & thumbnail</div>
+          <div className="text-[10px] text-neutral-400 mt-1">Upload serial (2-4s delay)</div>
         </div>
 
-        {/* Pending */}
-        <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-amber-950/20 to-transparent">
-          <div className="flex items-center justify-between text-amber-400 text-xs font-semibold mb-1">
-            <span className="flex items-center gap-1">
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
-              Menunggu
-            </span>
-            <span className="text-[10px] text-amber-400/80 font-mono">antrean</span>
-          </div>
-          <div className="text-xl font-bold font-mono text-neutral-100">
-            {queueData.pending}
-          </div>
-          <div className="text-[10px] text-neutral-400 mt-1">Menanti slot pekerja</div>
-        </div>
-
-        {/* Retrying */}
-        <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-purple-950/20 to-transparent">
-          <div className="flex items-center justify-between text-purple-400 text-xs font-semibold mb-1">
-            <span className="flex items-center gap-1">
-              <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
-              Mencoba Ulang
-            </span>
-            <span className="text-[10px] text-purple-400/80 font-mono">jeda</span>
-          </div>
-          <div className="text-xl font-bold font-mono text-neutral-100">
-            {queueData.retrying}
-          </div>
-          <div className="text-[10px] text-neutral-400 mt-1">Jeda 1m / 5m / 15m</div>
-        </div>
-
-        {/* Completed */}
+        {/* 2. Selesai */}
         <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-emerald-950/20 to-transparent">
           <div className="flex items-center justify-between text-emerald-400 text-xs font-semibold mb-1">
             <span className="flex items-center gap-1">
@@ -193,22 +191,62 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
           <div className="text-xl font-bold font-mono text-emerald-300">
             {queueData.completed}
           </div>
-          <div className="text-[10px] text-neutral-400 mt-1">Mutasi berhasil</div>
+          <div className="text-[10px] text-neutral-400 mt-1">Mutasi YouTube sukses</div>
         </div>
 
-        {/* Failed */}
+        {/* 3. Sisa Antrean */}
+        <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-amber-950/20 to-transparent">
+          <div className="flex items-center justify-between text-amber-400 text-xs font-semibold mb-1">
+            <span className="flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5 text-amber-400" />
+              Sisa Antrean
+            </span>
+            <span className="text-[10px] text-amber-400/80 font-mono">kloter berjalan</span>
+          </div>
+          <div className="text-xl font-bold font-mono text-neutral-100">
+            {queueData.remainingInQueue}
+          </div>
+          <div className="text-[10px] text-neutral-400 mt-1">
+            {queueData.channelRemainingRawCount > 0
+              ? `+${queueData.channelRemainingRawCount} video mentah siap auto-chain`
+              : 'Menanti giliran pekerja'}
+          </div>
+        </div>
+
+        {/* 4. Menunggu Kuota Besok / Batas 24 Jam */}
+        <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-purple-950/20 to-transparent">
+          <div className="flex items-center justify-between text-purple-400 text-xs font-semibold mb-1">
+            <span className="flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-purple-400" />
+              Kuota Besok
+            </span>
+            <span className="text-[10px] text-purple-400/80 font-mono">jeda 24h</span>
+          </div>
+          <div className={`text-xl font-bold font-mono ${queueData.waitingQuotaBesokCount > 0 ? 'text-amber-300' : 'text-neutral-300'}`}>
+            {queueData.waitingQuotaBesokCount}
+          </div>
+          <div className="text-[10px] text-neutral-400 mt-1">
+            {queueData.waitingQuotaBesokCount > 0
+              ? 'Aman dari error 403 (uploadLimit)'
+              : 'Tidak ada video tertahan'}
+          </div>
+        </div>
+
+        {/* 5. Kuota YouTube Hari Ini */}
         <div className="p-3.5 flex flex-col justify-between bg-gradient-to-b from-rose-950/20 to-transparent">
           <div className="flex items-center justify-between text-rose-400 text-xs font-semibold mb-1">
             <span className="flex items-center gap-1">
-              <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
-              Gagal
+              <ShieldCheck className="w-3.5 h-3.5 text-rose-400" />
+              Batas 24 Jam
             </span>
-            <span className="text-[10px] text-rose-400/80 font-mono">tertahan</span>
+            <span className="text-[10px] text-rose-400/80 font-mono">
+              {queueData.quotaUsed24h >= 70 ? 'BATAS PENUH' : 'AMAN'}
+            </span>
           </div>
-          <div className={`text-xl font-bold font-mono ${queueData.failed > 0 ? 'text-rose-400' : 'text-neutral-400'}`}>
-            {queueData.failed}
+          <div className={`text-xl font-bold font-mono ${queueData.quotaUsed24h >= 70 ? 'text-rose-400' : 'text-neutral-200'}`}>
+            {queueData.quotaUsed24h} <span className="text-xs font-normal text-neutral-400">/ {queueData.quotaLimit || 70}</span>
           </div>
-          <div className="text-[10px] text-neutral-400 mt-1">Gerbang proteksi atau batas habis</div>
+          <div className="text-[10px] text-neutral-400 mt-1">Batas thumbnail aman 70-90</div>
         </div>
       </div>
 
@@ -218,15 +256,17 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
           <div className="flex items-center justify-between py-1 text-neutral-500">
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-500/80" />
-              <span>Antrean pekerja siaga. Semua proses latar belakang telah mutakhir.</span>
+              <span>
+                Antrean pekerja siaga. Pemrosesan kloter per 50 video & auto-chaining siap dieksekusi.
+              </span>
             </div>
-            <span className="text-[11px] font-mono text-neutral-600">0 tugas aktif</span>
+            <span className="text-[11px] font-mono text-neutral-500">0 tugas aktif</span>
           </div>
         ) : (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-[11px] font-bold text-neutral-400 uppercase tracking-wider">
-              <span>Tugas Pekerja Aktif (Terbaru {Math.min(queueData.jobs.length, 3)})</span>
-              <span className="font-mono text-neutral-400">Total: {queueData.total}</span>
+              <span>Aktivitas Kloter Pekerja (Menampilkan {Math.min(queueData.jobs.length, 3)} Tugas Terbaru)</span>
+              <span className="font-mono text-neutral-400">Total Antrean: {queueData.total}</span>
             </div>
             <div className="divide-y divide-neutral-800/40">
               {queueData.jobs.slice(0, 3).map((job) => (
@@ -240,12 +280,14 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
                           ? 'bg-blue-950 text-blue-300 border border-blue-800/60 animate-pulse'
                           : job.status === 'RETRYING'
                           ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
+                          : job.status === 'RATE_LIMITED'
+                          ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
                           : job.status === 'FAILED'
                           ? 'bg-rose-950 text-rose-300 border border-rose-800/60'
-                          : 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                          : 'bg-neutral-800 text-neutral-300 border border-neutral-700/60'
                       }`}
                     >
-                      {job.status}
+                      {job.status === 'RATE_LIMITED' ? 'MENUNGGU KUOTA' : job.status}
                     </span>
                     <span className="text-neutral-200 truncate max-w-xs sm:max-w-md font-medium">
                       {job.payload?.title || job.videoId}

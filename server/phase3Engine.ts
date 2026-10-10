@@ -2,7 +2,7 @@ import { dbStore } from './db.js';
 import { eligibilityService } from './eligibilityService.js';
 import { youtubeService } from './youtubeService.js';
 import { youtubeDataService } from './youtubeDataService.js';
-import { Phase3AutomationJob, MetadataSnapshot, AutomationJob } from '../src/types/index.js';
+import { Phase3AutomationJob, MetadataSnapshot, AutomationJob, AutomationBatch } from '../src/types/index.js';
 
 export class Phase3Engine {
   private queue: Phase3AutomationJob[] = [];
@@ -10,6 +10,7 @@ export class Phase3Engine {
   private snapshots: Map<string, MetadataSnapshot[]> = new Map();
   private lastHeartbeatAt: number = Date.now();
   private retryTimer: NodeJS.Timeout | null = null;
+  private lastActiveChannelId?: string;
 
   public async enqueueBatchJobs(
     batchId: string,
@@ -131,6 +132,14 @@ export class Phase3Engine {
           `[Phase3Engine Worker] Processing job ${job.id} | Batch: ${job.batchId} | Video: ${job.videoId} | Attempt: ${job.retryCount + 1}`
         );
 
+        this.lastActiveChannelId = job.channelId;
+
+        // Safety Delay & Throttling (Anti-Spam / Anti-Blokir YouTube)
+        // Jeda acak 2 hingga 4 detik di antara setiap pemrosesan video
+        const safetyDelayMs = Math.floor(Math.random() * 2001) + 2000; // 2000 - 4000 ms (2-4 detik)
+        console.log(`[Phase3Engine Worker] Safety throttle: jeda ${safetyDelayMs}ms sebelum memproses video ${job.videoId}...`);
+        await new Promise((res) => setTimeout(res, safetyDelayMs));
+
         try {
           const validation = eligibilityService.validateBeforeMutation(job.videoId, job.channelId);
           if (!validation.isValid) {
@@ -148,15 +157,15 @@ export class Phase3Engine {
             throw new Error(metaRes.error || 'Failed to update video metadata in YouTube API');
           }
 
-          // 2. YouTube Thumbnail Upload Mutation & Rate-Limit Gate (Fix #1)
+          // 2. YouTube Thumbnail Upload Mutation & Rate-Limit Gate (Fix #1 & Batas Aman 70-90 / 24 Jam)
           let thumbSuccess = true;
           let thumbSkippedDueToRateLimit = false;
 
           if (job.payload.thumbnailUrl) {
             const rlCheck = dbStore.isChannelThumbnailRateLimited(job.channelId);
-            if (rlCheck.isLimited) {
+            if (rlCheck.isLimited || rlCheck.usedLast24h >= 70) {
               console.warn(
-                `[Phase3Engine Worker] Thumbnail rate limited for channel ${job.channelId}: ${rlCheck.reason}`
+                `[Phase3Engine Worker] Thumbnail rate limited (70/24h) for channel ${job.channelId}: ${rlCheck.reason || 'Batas harian 70 video tercapai'}`
               );
               thumbSkippedDueToRateLimit = true;
               thumbSuccess = false;
@@ -166,11 +175,18 @@ export class Phase3Engine {
                 action: 'THUMBNAIL_SET',
                 timestamp: new Date().toISOString(),
                 status: 'RATE_LIMITED',
-                error: rlCheck.reason || 'Channel rolling 24h capacity reached or YouTube rate limited',
+                error: rlCheck.reason || 'Batas aman harian 70 thumbnail dalam 24 jam tercapai',
                 batchId: job.batchId,
                 jobId: job.id,
               });
-              throw new Error(`THUMBNAIL_RATE_LIMITED: ${rlCheck.reason}`);
+
+              // Ubah status sisa video menjadi 'Menunggu Kuota Besok' (jeda 24 jam)
+              this.markRemainingVideosWaitingQuota(
+                job.channelId,
+                'Menunggu Kuota Besok (Batas harian 70 video/24 jam tercapai. Jeda 24 jam aman dari error 403 uploadLimitExceeded).'
+              );
+
+              throw new Error(`THUMBNAIL_RATE_LIMITED: ${rlCheck.reason || 'Batas aman 70/24 jam tercapai'}`);
             }
 
             await new Promise((res) => setTimeout(res, 800));
@@ -196,13 +212,19 @@ export class Phase3Engine {
                 errMsg.toLowerCase().includes('quota') ||
                 errMsg.toLowerCase().includes('rate limit') ||
                 errMsg.toLowerCase().includes('limit') ||
-                errMsg.toLowerCase().includes('exceeded')
+                errMsg.toLowerCase().includes('exceeded') ||
+                errMsg.toLowerCase().includes('uploadlimitexceeded') ||
+                errMsg.includes('403')
               ) {
                 const chan = dbStore.channels.get(job.channelId);
                 if (chan) {
                   chan.thumbnailRateLimitReachedAt = new Date().toISOString();
                   dbStore.channels.set(chan.id, chan);
                 }
+                this.markRemainingVideosWaitingQuota(
+                  job.channelId,
+                  'Menunggu Kuota Besok (YouTube 403 uploadLimitExceeded terdeteksi. Jeda 24 jam aman aktif).'
+                );
               }
 
               dbStore.logThumbnailAction({
@@ -273,6 +295,13 @@ export class Phase3Engine {
             if (batch.completedCount + batch.failedCount >= batch.detectedCount) {
               batch.status = batch.failedCount === 0 ? 'completed' : 'failed';
               batch.completedAt = new Date().toISOString();
+              dbStore.automationBatches.set(batch.id, batch);
+
+              // Dynamic Batch Chaining (Requirement 1):
+              // Lanjut otomatis ke kloter berikutnya per 50 video tanpa klik konfirmasi ulang
+              this.checkAndChainNextBatch(job.channelId, batch.id).catch((chainErr) => {
+                console.error('[Phase3Engine] Error auto-chaining next batch:', chainErr);
+              });
             }
             dbStore.automationBatches.set(batch.id, batch);
           }
@@ -377,6 +406,16 @@ export class Phase3Engine {
       this.isProcessing = false;
       this.lastHeartbeatAt = Date.now();
       dbStore.saveToDisk();
+
+      // Dynamic Batch Chaining: If queue is now empty, check if active channel has remaining raw videos
+      if (
+        this.lastActiveChannelId &&
+        !this.queue.some((j) => (j.status === 'PENDING' || j.status === 'RETRYING') && j.nextRunAt <= Date.now())
+      ) {
+        this.checkAndChainNextBatch(this.lastActiveChannelId).catch((err) => {
+          console.error('[Phase3Engine] Error in finally auto-chaining check:', err);
+        });
+      }
 
       // Check if retries remain and schedule timer
       const nextPendingRetry = this.queue.find((j) => j.status === 'RETRYING');
@@ -611,6 +650,198 @@ export class Phase3Engine {
     };
   }
 
+  /**
+   * Mark remaining raw videos as 'Menunggu Kuota Besok' when YouTube 24h thumbnail quota is reached.
+   */
+  public markRemainingVideosWaitingQuota(channelId: string, reason?: string): number {
+    const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
+    const cId = channel ? channel.id : channelId;
+    const yId = channel?.youtubeChannelId;
+    let count = 0;
+
+    const waitReason =
+      reason ||
+      'Menunggu Kuota Besok (Batas aman harian 70-90 video/24 jam YouTube tercapai. Jeda 24 jam aktif).';
+
+    for (const v of dbStore.videos.values()) {
+      const belongs = v.channelId === cId || (yId && (v.channelId === yId || v.channelId === `chan-${yId}`));
+      if (
+        belongs &&
+        v.managementScope === 'REGULAR' &&
+        v.isAmgEligible &&
+        !v.isManaged &&
+        v.managementStatus !== 'COMPLETED'
+      ) {
+        v.managementStatus = 'RETRY_PENDING';
+        v.exclusionReason = waitReason;
+        v.updatedAt = new Date().toISOString();
+        dbStore.videos.set(v.id, v);
+        count++;
+      }
+    }
+
+    // Update in-memory queue jobs for this channel to prevent hammering YouTube API
+    for (const job of this.queue) {
+      if ((job.channelId === cId || (yId && job.channelId === yId)) && (job.status === 'PENDING' || job.status === 'RETRYING')) {
+        job.status = 'RATE_LIMITED';
+        job.lastError = waitReason;
+        job.nextRunAt = Date.now() + 24 * 60 * 60 * 1000;
+        job.updatedAt = new Date().toISOString();
+        const pJob = dbStore.automationJobs.get(job.id);
+        if (pJob) {
+          pJob.status = 'retry_pending';
+          pJob.lastError = waitReason;
+          dbStore.automationJobs.set(job.id, pJob);
+        }
+      }
+    }
+
+    if (count > 0) {
+      dbStore.saveToDisk();
+      console.log(`[Phase3Engine] Ditandai ${count} video sisa sebagai "${waitReason}" untuk channel ${cId}.`);
+    }
+    return count;
+  }
+
+  /**
+   * Dynamic Batch Chaining (Requirement 1 & 3):
+   * Otomatis lanjut kloter berikutnya (chunk per 50 video) tanpa mengharuskan pengguna klik tombol konfirmasi ulang,
+   * sampai semua video habis atau menyentuh batas aman kuota 70-90 / 24 jam.
+   */
+  public async checkAndChainNextBatch(
+    channelId: string,
+    finishedBatchId?: string
+  ): Promise<{ chained: boolean; batchId?: string; videoCount?: number }> {
+    const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
+    if (!channel) return { chained: false };
+
+    // 1. Quota Gate: Batas aman 70-90 / 24 Jam (Requirement 3)
+    const targetQuota = Math.min(channel.dailyCapacityTarget || 70, 90);
+    const usedLast24h = dbStore.getSuccessfulThumbnailCountLast24h(channel.id);
+    const rlCheck = dbStore.isChannelThumbnailRateLimited(channel.id);
+
+    if (usedLast24h >= 70 || rlCheck.isLimited) {
+      console.warn(
+        `[Phase3Engine Auto-Chain] Kuota harian channel "${channel.title}" tercapai (${usedLast24h}/${targetQuota} video dlm 24 jam). Menghentikan auto-chain secara elegan (Menunggu Kuota Besok).`
+      );
+      this.markRemainingVideosWaitingQuota(
+        channel.id,
+        `Menunggu Kuota Besok (Batas harian ${usedLast24h}/${targetQuota} video tercapai. Jeda 24 jam aman dari error 403 uploadLimitExceeded).`
+      );
+      return { chained: false };
+    }
+
+    // 2. Cari video mentah berstatus INCLUDED / REGULAR yang belum dikelola pada channel ini
+    const cId = channel.id;
+    const yId = channel.youtubeChannelId;
+    const remainingVideos: any[] = [];
+
+    for (const v of dbStore.videos.values()) {
+      const belongs = v.channelId === cId || (yId && (v.channelId === yId || v.channelId === `chan-${yId}`));
+      if (
+        belongs &&
+        v.managementScope === 'REGULAR' &&
+        v.isAmgEligible &&
+        !v.isManaged &&
+        v.managementStatus !== 'COMPLETED' &&
+        v.managementStatus !== 'PROCESSING' &&
+        (v.privacyStatus || '').toLowerCase() === 'private' &&
+        !v.publishAt
+      ) {
+        // Pastikan belum ada di queue aktif in-memory
+        const inQueue = this.queue.some(
+          (j) => j.videoId === v.id && (j.status === 'PENDING' || j.status === 'PROCESSING')
+        );
+        if (!inQueue) {
+          remainingVideos.push(v);
+        }
+      }
+    }
+
+    if (remainingVideos.length === 0) {
+      console.log(
+        `[Phase3Engine Auto-Chain] Semua video INCLUDED pada channel "${channel.title}" telah selesai diproses! Auto-chaining selesai sempurna.`
+      );
+      return { chained: false };
+    }
+
+    // 3. Ambil kloter berikutnya per 50 video (kapasitas 1 kloter = 50 video, Requirement 1)
+    const quotaLeft = Math.max(0, Math.min(70, targetQuota) - usedLast24h);
+    const chunkSize = Math.min(50, quotaLeft);
+
+    if (chunkSize <= 0) {
+      this.markRemainingVideosWaitingQuota(channel.id);
+      return { chained: false };
+    }
+
+    const nextChunk = remainingVideos.slice(0, chunkSize);
+    const nextBatchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
+
+    console.log(
+      `[Phase3Engine Auto-Chain] Memulai Kloter Berikutnya [${nextBatchId}]: Menarik ${nextChunk.length} video berikutnya secara otomatis tanpa konfirmasi ulang...`
+    );
+
+    // Daftarkan batch kloter berikutnya
+    const nextBatch: AutomationBatch = {
+      id: nextBatchId,
+      batchNumber: nextBatchId,
+      channelId: channel.id,
+      channelTitle: channel.title,
+      profileId: channel.contentProfileId || 'profile-default',
+      profileName: 'Standard AMG Schedule (Kloter Berantai)',
+      isDryRun: false,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      detectedCount: nextChunk.length,
+      processedCount: 0,
+      scheduledCount: 0,
+      completedCount: 0,
+      failedCount: 0,
+    };
+    dbStore.automationBatches.set(nextBatchId, nextBatch);
+
+    // Penjadwalan kontinu deterministik dari jangkar kursor terakhir
+    let anchorPublishAt = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+    let anchorTime = anchorPublishAt ? new Date(anchorPublishAt).getTime() : Date.now();
+    if (isNaN(anchorTime) || anchorTime <= Date.now()) {
+      anchorTime = Date.now() + 24 * 60 * 60 * 1000;
+    }
+
+    const jobs = [];
+    for (let idx = 0; idx < nextChunk.length; idx++) {
+      const v = nextChunk[idx];
+      v.managementStatus = 'READY';
+      v.isEnrolled = true;
+      v.automationBatchId = nextBatchId;
+
+      const title = v.titleAssigned || v.titleBefore || 'Video YouTube';
+      const thumb = v.thumbnailAssigned || v.thumbnailBefore || '';
+
+      // Slot berurutan kontinu harian
+      const nextSlotDate = new Date(anchorTime + (idx + 1) * 24 * 60 * 60 * 1000);
+      const isoSlot = v.scheduledPublishAt || nextSlotDate.toISOString();
+
+      jobs.push({
+        videoId: v.id,
+        payload: {
+          title,
+          description: 'Continuous relaxing ambience published by AMG.',
+          tags: ['ambience', 'relaxing', 'sleep', 'music'],
+          scheduledPublishAt: isoSlot,
+          thumbnailUrl: thumb,
+        },
+      });
+
+      dbStore.videos.set(v.id, v);
+    }
+
+    await this.enqueueBatchJobs(nextBatchId, channel.id, jobs);
+    dbStore.saveToDisk();
+
+    return { chained: true, batchId: nextBatchId, videoCount: jobs.length };
+  }
+
   public getQueueStatus(batchId?: string): {
     total: number;
     pending: number;
@@ -618,17 +849,65 @@ export class Phase3Engine {
     completed: number;
     failed: number;
     retrying: number;
+    remainingInQueue: number;
     jobs: Phase3AutomationJob[];
+    isProcessing: boolean;
+    activeChannelId?: string;
+    waitingQuotaBesokCount: number;
+    channelRemainingRawCount: number;
+    quotaUsed24h: number;
+    quotaLimit: number;
   } {
     const filtered = batchId ? this.queue.filter((j) => j.batchId === batchId) : this.queue;
+    let waitingQuotaBesok = 0;
+    let totalUnmanagedRaw = 0;
+
+    for (const v of dbStore.videos.values()) {
+      if (
+        v.managementStatus === 'RETRY_PENDING' ||
+        v.exclusionReason?.includes('Menunggu Kuota Besok')
+      ) {
+        waitingQuotaBesok++;
+      } else if (
+        v.managementScope === 'REGULAR' &&
+        v.isAmgEligible &&
+        !v.isManaged &&
+        v.managementStatus !== 'COMPLETED' &&
+        !v.publishAt
+      ) {
+        totalUnmanagedRaw++;
+      }
+    }
+
+    const channelId = this.lastActiveChannelId;
+    let quotaUsed24h = 0;
+    let quotaLimit = 70;
+    if (channelId) {
+      const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
+      if (channel) {
+        quotaUsed24h = dbStore.getSuccessfulThumbnailCountLast24h(channel.id);
+        quotaLimit = Math.min(channel.dailyCapacityTarget || 70, 90);
+      }
+    }
+
+    const pending = filtered.filter((j) => j.status === 'PENDING').length;
+    const retrying = filtered.filter((j) => j.status === 'RETRYING').length;
+
     return {
       total: filtered.length,
-      pending: filtered.filter((j) => j.status === 'PENDING').length,
+      pending,
       processing: filtered.filter((j) => j.status === 'PROCESSING').length,
       completed: filtered.filter((j) => j.status === 'COMPLETED').length,
       failed: filtered.filter((j) => j.status === 'FAILED').length,
-      retrying: filtered.filter((j) => j.status === 'RETRYING').length,
+      retrying,
+      remainingInQueue: pending + retrying,
       jobs: filtered,
+      isProcessing: this.isProcessing,
+      activeChannelId: this.lastActiveChannelId,
+      waitingQuotaBesokCount: waitingQuotaBesok,
+      channelRemainingRawCount: totalUnmanagedRaw,
+      quotaUsed24h,
+      quotaLimit,
     };
   }
 
