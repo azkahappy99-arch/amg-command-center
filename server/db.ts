@@ -18,6 +18,7 @@ import {
   ActivityLog,
   NotificationItem,
   SystemSettings,
+  ThumbnailActionLog,
 } from '../src/types/index.js';
 
 export interface UserRecord {
@@ -78,6 +79,7 @@ class DatabaseStore {
   public automationJobs: Map<string, AutomationJob> = new Map();
   public errorLogs: Map<string, ErrorLog> = new Map();
   public activityLogs: ActivityLog[] = [];
+  public thumbnailActionLogs: ThumbnailActionLog[] = [];
   public notifications: Map<string, NotificationItem> = new Map();
   public users: Map<string, UserRecord> = new Map();
   public workspaces: Map<string, WorkspaceRecord> = new Map();
@@ -287,6 +289,9 @@ class DatabaseStore {
         if (data.activityLogs && Array.isArray(data.activityLogs)) {
           this.activityLogs = data.activityLogs;
         }
+        if (data.thumbnailActionLogs && Array.isArray(data.thumbnailActionLogs)) {
+          this.thumbnailActionLogs = data.thumbnailActionLogs;
+        }
         if (data.notifications && Array.isArray(data.notifications)) {
           this.notifications = new Map(data.notifications);
         }
@@ -440,6 +445,7 @@ class DatabaseStore {
         automationJobs: Array.from(this.automationJobs.entries()),
         errorLogs: Array.from(this.errorLogs.entries()),
         activityLogs: this.activityLogs.slice(0, 500),
+        thumbnailActionLogs: this.thumbnailActionLogs.slice(-5000),
         notifications: Array.from(this.notifications.entries()),
         users: Array.from(this.users.entries()),
         workspaces: Array.from(this.workspaces.entries()),
@@ -458,12 +464,17 @@ class DatabaseStore {
 
   public upsertChannel(channel: Channel): Channel {
     const existing = this.getChannelByYoutubeId(channel.youtubeChannelId) || this.channels.get(channel.id);
+    const dailyCapacity = Math.min(channel.dailyCapacityTarget || existing?.dailyCapacityTarget || 70, 90);
+    const maxCapacity = 90;
+
     if (existing) {
       const updated: Channel = {
         ...existing,
         ...channel,
         id: existing.id,
         youtubeChannelId: channel.youtubeChannelId || existing.youtubeChannelId,
+        dailyCapacityTarget: dailyCapacity,
+        maxDailyCapacity: maxCapacity,
         connectedAt: existing.connectedAt || channel.connectedAt || new Date().toISOString(),
         createdAt: existing.createdAt,
         updatedAt: new Date().toISOString(),
@@ -477,6 +488,8 @@ class DatabaseStore {
 
     const newChan: Channel = {
       ...channel,
+      dailyCapacityTarget: dailyCapacity,
+      maxDailyCapacity: maxCapacity,
       status: channel.status || 'CONNECTED',
       connectedAt: channel.connectedAt || new Date().toISOString(),
       createdAt: channel.createdAt || new Date().toISOString(),
@@ -486,6 +499,133 @@ class DatabaseStore {
     this.channels.set(newChan.id, newChan);
     this.saveToDisk();
     return newChan;
+  }
+
+  /**
+   * Records a thumbnail action event for rolling 24-hour rate limit tracking
+   */
+  public logThumbnailAction(item: Omit<ThumbnailActionLog, 'id'>): ThumbnailActionLog {
+    const log: ThumbnailActionLog = {
+      id: `thumb-act-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      ...item,
+    };
+    this.thumbnailActionLogs.push(log);
+    if (this.thumbnailActionLogs.length > 10000) {
+      this.thumbnailActionLogs.splice(0, this.thumbnailActionLogs.length - 10000);
+    }
+    this.saveToDisk();
+    return log;
+  }
+
+  /**
+   * Returns all thumbnail actions for a channel within a rolling time window (default 24h)
+   */
+  public getThumbnailActionsInWindow(channelId: string, windowMs: number = 24 * 60 * 60 * 1000): ThumbnailActionLog[] {
+    const cutoff = Date.now() - windowMs;
+    const norm = channelId.trim().toLowerCase();
+    return this.thumbnailActionLogs.filter((l) => {
+      const match =
+        l.channelId.toLowerCase() === norm ||
+        l.channelId.toLowerCase() === `chan-${norm}` ||
+        `chan-${l.channelId.toLowerCase()}` === norm;
+      return match && new Date(l.timestamp).getTime() >= cutoff;
+    });
+  }
+
+  /**
+   * Returns count of successful thumbnail mutations in the rolling 24-hour window
+   */
+  public getSuccessfulThumbnailCountLast24h(channelId: string): number {
+    const actions = this.getThumbnailActionsInWindow(channelId, 24 * 60 * 60 * 1000);
+    return actions.filter((a) => a.status === 'SUCCESS').length;
+  }
+
+  /**
+   * Checks whether thumbnail upload should be throttled based on rolling 24h capacity or active YouTube limit
+   */
+  public isChannelThumbnailRateLimited(channelId: string): {
+    isLimited: boolean;
+    reason?: string;
+    usedLast24h: number;
+    targetCapacity: number;
+    resetInMs?: number;
+  } {
+    const channel = this.getChannelByIdOrTitle(channelId) || this.getChannelByYoutubeId(channelId);
+    const targetCapacity = Math.min(channel?.dailyCapacityTarget || 70, 90);
+    const usedLast24h = this.getSuccessfulThumbnailCountLast24h(channel?.id || channelId);
+
+    // 1. Check AMG rolling 24h configured limit
+    if (usedLast24h >= targetCapacity) {
+      const logs = this.getThumbnailActionsInWindow(channel?.id || channelId, 24 * 60 * 60 * 1000).filter(
+        (l) => l.status === 'SUCCESS'
+      );
+      const oldestTimestamp = logs.length > 0 ? new Date(logs[0].timestamp).getTime() : Date.now();
+      const resetInMs = Math.max(0, oldestTimestamp + 24 * 60 * 60 * 1000 - Date.now());
+      return {
+        isLimited: true,
+        reason: `AMG CAPACITY LIMIT: Rolling 24-hour target reached (${usedLast24h}/${targetCapacity} thumbnails) for channel "${channel?.title || channelId}".`,
+        usedLast24h,
+        targetCapacity,
+        resetInMs,
+      };
+    }
+
+    // 2. Check if YouTube returned a hard quota or custom thumbnail limit
+    if (channel?.thumbnailRateLimitReachedAt) {
+      const limitAge = Date.now() - new Date(channel.thumbnailRateLimitReachedAt).getTime();
+      const FOUR_HOURS = 4 * 60 * 60 * 1000;
+      if (limitAge < FOUR_HOURS) {
+        return {
+          isLimited: true,
+          reason: `YOUTUBE RATE LIMIT ACTIVE: YouTube reported custom thumbnail limit reached at ${channel.thumbnailRateLimitReachedAt}. Throttling thumbnail mutations.`,
+          usedLast24h,
+          targetCapacity,
+          resetInMs: Math.max(0, FOUR_HOURS - limitAge),
+        };
+      } else {
+        // Window expired, clear the lock
+        channel.thumbnailRateLimitReachedAt = undefined;
+        this.saveToDisk();
+      }
+    }
+
+    return {
+      isLimited: false,
+      usedLast24h,
+      targetCapacity,
+    };
+  }
+
+  /**
+   * Returns capacity and throttling telemetry for a channel
+   */
+  public getChannelCapacityStatus(channelId: string): {
+    channelId: string;
+    channelTitle: string;
+    dailyCapacityTarget: number;
+    maxDailyCapacity: number;
+    thumbnailActionsLast24h: number;
+    remainingDailyCapacity: number;
+    isRateLimited: boolean;
+    rateLimitReason?: string;
+    resetInMinutes?: number;
+  } {
+    const channel = this.getChannelByIdOrTitle(channelId) || this.getChannelByYoutubeId(channelId);
+    const target = Math.min(channel?.dailyCapacityTarget || 70, 90);
+    const check = this.isChannelThumbnailRateLimited(channel?.id || channelId);
+    const remaining = Math.max(0, target - check.usedLast24h);
+
+    return {
+      channelId: channel?.id || channelId,
+      channelTitle: channel?.title || 'Unknown Channel',
+      dailyCapacityTarget: target,
+      maxDailyCapacity: 90,
+      thumbnailActionsLast24h: check.usedLast24h,
+      remainingDailyCapacity: check.isLimited ? 0 : remaining,
+      isRateLimited: check.isLimited,
+      rateLimitReason: check.reason,
+      resetInMinutes: check.resetInMs ? Math.ceil(check.resetInMs / 60000) : undefined,
+    };
   }
 
   public getChannelByYoutubeId(youtubeChannelId: string): Channel | undefined {

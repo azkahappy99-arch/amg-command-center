@@ -148,14 +148,76 @@ export class Phase3Engine {
             throw new Error(metaRes.error || 'Failed to update video metadata in YouTube API');
           }
 
-          // 2. YouTube Thumbnail Upload Mutation
+          // 2. YouTube Thumbnail Upload Mutation & Rate-Limit Gate (Fix #1)
+          let thumbSuccess = true;
+          let thumbSkippedDueToRateLimit = false;
+
           if (job.payload.thumbnailUrl) {
+            const rlCheck = dbStore.isChannelThumbnailRateLimited(job.channelId);
+            if (rlCheck.isLimited) {
+              console.warn(
+                `[Phase3Engine Worker] Thumbnail rate limited for channel ${job.channelId}: ${rlCheck.reason}`
+              );
+              thumbSkippedDueToRateLimit = true;
+              thumbSuccess = false;
+              dbStore.logThumbnailAction({
+                channelId: job.channelId,
+                videoId: job.videoId,
+                action: 'THUMBNAIL_SET',
+                timestamp: new Date().toISOString(),
+                status: 'RATE_LIMITED',
+                error: rlCheck.reason || 'Channel rolling 24h capacity reached or YouTube rate limited',
+                batchId: job.batchId,
+                jobId: job.id,
+              });
+              throw new Error(`THUMBNAIL_RATE_LIMITED: ${rlCheck.reason}`);
+            }
+
             await new Promise((res) => setTimeout(res, 800));
             const thumbRes = await youtubeService.setThumbnail(job.videoId, job.payload.thumbnailUrl);
-            if (!thumbRes.success) {
-              console.warn(
-                `[Phase3Engine Worker] Thumbnail upload warning for video ${job.videoId}: ${thumbRes.error}`
-              );
+
+            if (thumbRes.success) {
+              dbStore.logThumbnailAction({
+                channelId: job.channelId,
+                videoId: job.videoId,
+                action: 'THUMBNAIL_SET',
+                timestamp: new Date().toISOString(),
+                status: 'SUCCESS',
+                response: 'OK',
+                batchId: job.batchId,
+                jobId: job.id,
+              });
+            } else {
+              thumbSuccess = false;
+              const errMsg = thumbRes.error || 'Failed to upload thumbnail to YouTube API';
+
+              // If YouTube API indicates quota or rate limit, record it on the channel
+              if (
+                errMsg.toLowerCase().includes('quota') ||
+                errMsg.toLowerCase().includes('rate limit') ||
+                errMsg.toLowerCase().includes('limit') ||
+                errMsg.toLowerCase().includes('exceeded')
+              ) {
+                const chan = dbStore.channels.get(job.channelId);
+                if (chan) {
+                  chan.thumbnailRateLimitReachedAt = new Date().toISOString();
+                  dbStore.channels.set(chan.id, chan);
+                }
+              }
+
+              dbStore.logThumbnailAction({
+                channelId: job.channelId,
+                videoId: job.videoId,
+                action: 'THUMBNAIL_SET',
+                timestamp: new Date().toISOString(),
+                status: 'FAILED',
+                error: errMsg,
+                batchId: job.batchId,
+                jobId: job.id,
+              });
+
+              // CRITICAL NO FAKE SUCCESS: Do not swallow thumbnail failure!
+              throw new Error(`Thumbnail upload failed: ${errMsg}`);
             }
           }
 
@@ -185,6 +247,11 @@ export class Phase3Engine {
             video.isAmgManaged = true;
             video.automationBatchId = job.batchId;
             video.scheduledPublishAt = job.payload.scheduledPublishAt;
+            video.taskStatus = {
+              title: 'SUCCESS',
+              schedule: 'SUCCESS',
+              thumbnail: job.payload.thumbnailUrl ? (thumbSuccess ? 'SUCCESS' : 'FAILED') : 'SKIPPED',
+            };
             video.updatedAt = new Date().toISOString();
             dbStore.videos.set(video.id, video);
           }
@@ -227,11 +294,31 @@ export class Phase3Engine {
           job.retryCount += 1;
           this.lastHeartbeatAt = Date.now();
 
+          const isRateLimitErr = errorMessage.includes('THUMBNAIL_RATE_LIMITED');
+
           console.warn(
             `[Phase3Engine Worker] WARNING: Job ${job.id} failed (attempt ${job.retryCount}): ${errorMessage}`
           );
 
-          if (job.retryCount <= job.maxRetries) {
+          if (isRateLimitErr) {
+            // Keep job for when rolling 24h or YouTube limit clears; don't burn retries rapidly
+            job.status = 'RATE_LIMITED';
+            job.nextRunAt = Date.now() + 60 * 60 * 1000; // recheck in 1 hour
+            if (pJob) {
+              pJob.status = 'retry_pending';
+              pJob.lastError = errorMessage;
+              dbStore.automationJobs.set(job.id, pJob);
+            }
+            const video = dbStore.getVideoById(job.videoId) || dbStore.videos.get(job.videoId);
+            if (video) {
+              video.taskStatus = {
+                title: 'SUCCESS',
+                schedule: 'SUCCESS',
+                thumbnail: 'RATE_LIMITED',
+              };
+              dbStore.videos.set(video.id, video);
+            }
+          } else if (job.retryCount <= job.maxRetries) {
             job.status = 'RETRYING';
             const backoffTimesMs = [0, 5_000, 15_000, 30_000];
             job.nextRunAt = Date.now() + (backoffTimesMs[job.retryCount] || 30_000);
@@ -249,6 +336,16 @@ export class Phase3Engine {
               pJob.lastError = errorMessage;
               pJob.completedAt = new Date().toISOString();
               dbStore.automationJobs.set(job.id, pJob);
+            }
+
+            const video = dbStore.getVideoById(job.videoId) || dbStore.videos.get(job.videoId);
+            if (video) {
+              video.taskStatus = {
+                title: 'SUCCESS',
+                schedule: 'SUCCESS',
+                thumbnail: 'FAILED',
+              };
+              dbStore.videos.set(video.id, video);
             }
 
             const batch = dbStore.automationBatches.get(job.batchId);

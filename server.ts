@@ -2897,8 +2897,17 @@ app.post('/api/automation/dry-run', async (req: Request, res: Response) => {
 const handleStartBatchAutomation = async (req: Request, res: Response) => {
   let batchId = '';
   try {
+    const ctx = getRequestContext(req);
     const { channelId, profileId, videoIds, executionPlan, channelTitle, videos } = req.body || {};
     if (!channelId) return res.status(400).json({ error: 'channelId is required.' });
+
+    // Enforce channel workspace access if user is logged in
+    if (ctx.isAuthenticated && ctx.role === 'USER') {
+      const ch = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
+      if (ch && ch.workspaceId && ch.workspaceId !== ctx.workspaceId) {
+        return res.status(403).json({ error: 'Akses ditolak: Channel berada di luar workspace Anda.' });
+      }
+    }
 
     // Sync any candidate videos provided directly from authentic YouTube Data API scan
     if (Array.isArray(videos)) {
@@ -2952,8 +2961,28 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       });
     }
 
+    // FIX #2: ENFORCE DAILY CAPACITY TARGET (DEFAULT 70, MAX 90) ROLLING 24 HOURS
+    const targetCapacity = Math.min(channel.dailyCapacityTarget || 70, 90);
+    const usedLast24h = dbStore.getSuccessfulThumbnailCountLast24h(channel.id);
+    const remainingCapacity = Math.max(0, targetCapacity - usedLast24h);
+
+    if (remainingCapacity <= 0) {
+      return res.status(429).json({
+        error: `Daily automation capacity reached for channel "${channel.title}" (${usedLast24h}/${targetCapacity} in rolling 24h). Automation throttled to protect YouTube quotas.`,
+        capacity: dbStore.getChannelCapacityStatus(channel.id),
+      });
+    }
+
     // 2. If executionPlan is provided (e.g. 3 videos from candidate inclusion preview):
     if (Array.isArray(executionPlan) && executionPlan.length > 0) {
+      let planToExecute = executionPlan;
+      if (planToExecute.length > remainingCapacity) {
+        console.log(
+          `[handleStartBatchAutomation] Clamping execution plan from ${planToExecute.length} to ${remainingCapacity} items based on 24h capacity.`
+        );
+        planToExecute = planToExecute.slice(0, remainingCapacity);
+      }
+
       batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
       const batch: AutomationBatch = {
         id: batchId,
@@ -2966,7 +2995,7 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         status: 'running',
         startedAt: new Date().toISOString(),
         lastHeartbeatAt: new Date().toISOString(),
-        detectedCount: executionPlan.length,
+        detectedCount: planToExecute.length,
         processedCount: 0,
         scheduledCount: 0,
         completedCount: 0,
@@ -2977,8 +3006,8 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
 
       // Upsert videos in dbStore and construct Phase 3 jobs
       const phase3Jobs = [];
-      for (let idx = 0; idx < executionPlan.length; idx++) {
-        const item = executionPlan[idx];
+      for (let idx = 0; idx < planToExecute.length; idx++) {
+        const item = planToExecute[idx];
         let video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
         if (!video) {
           // If video was discovered by frontend YouTube Data API v3 integration, register it into dbStore
@@ -3080,13 +3109,13 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
   }
 };
 
-app.post('/api/automation/start', handleStartBatchAutomation);
-app.post('/api/automation/batch', handleStartBatchAutomation);
-app.post('/api/automation/batches', handleStartBatchAutomation);
-app.post('/api/automation/batch/start', handleStartBatchAutomation);
-app.post('/api/batch/execute', handleStartBatchAutomation);
-app.post('/api/automation/execute', handleStartBatchAutomation);
-app.post('/api/automation/batch/execute', handleStartBatchAutomation);
+app.post('/api/automation/start', requireAuth, handleStartBatchAutomation);
+app.post('/api/automation/batch', requireAuth, handleStartBatchAutomation);
+app.post('/api/automation/batches', requireAuth, handleStartBatchAutomation);
+app.post('/api/automation/batch/start', requireAuth, handleStartBatchAutomation);
+app.post('/api/batch/execute', requireAuth, handleStartBatchAutomation);
+app.post('/api/automation/execute', requireAuth, handleStartBatchAutomation);
+app.post('/api/automation/batch/execute', requireAuth, handleStartBatchAutomation);
 
 app.get('/api/automation/batches', (req: Request, res: Response) => {
   const batches = Array.from(dbStore.automationBatches.values()).reverse();

@@ -579,6 +579,28 @@ export class AutomationEngine {
 
     const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId) || dbStore.channels.get(channelId)!;
     const profile = dbStore.profiles.get(profileId || channel.contentProfileId || '');
+
+    // FIX #2: ENFORCE DAILY CAPACITY TARGET (DEFAULT 70, MAX 90) ROLLING 24 HOURS
+    const targetCapacity = Math.min(channel.dailyCapacityTarget || 70, 90);
+    const usedLast24h = dbStore.getSuccessfulThumbnailCountLast24h(channel.id);
+    const remainingCapacity = Math.max(0, targetCapacity - usedLast24h);
+
+    if (remainingCapacity <= 0) {
+      return {
+        success: false,
+        error: `Daily automation capacity reached for channel "${channel.title}" (${usedLast24h}/${targetCapacity} in rolling 24h). Automation throttled to protect YouTube quotas.`,
+      };
+    }
+
+    // Process only up to remaining rolling capacity, preserving all other candidates for next dispatch
+    const totalEnrolled = enrolledItems.length;
+    if (enrolledItems.length > remainingCapacity) {
+      console.log(
+        `[AutomationEngine] Clamping batch from ${enrolledItems.length} to ${remainingCapacity} items based on 24h rolling capacity (${usedLast24h}/${targetCapacity} used).`
+      );
+      enrolledItems = enrolledItems.slice(0, remainingCapacity);
+    }
+
     const batchId = `AMG-BATCH-${String(batchSequence++).padStart(4, '0')}`;
 
     const batch: AutomationBatch = {

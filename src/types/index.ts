@@ -139,6 +139,11 @@ export interface Channel {
   ownerId?: string;
   workspaceId?: string;
   channelUrl?: string;
+  dailyCapacityTarget?: number; // Target harian AMG (default: 70, max configurable: 90)
+  maxDailyCapacity?: number; // Batas maksimum konfigurasi AMG (90)
+  thumbnailRateLimitReachedAt?: string; // Timestamp saat YouTube API melaporkan quota/rate limit
+  thumbnailActionsLast24h?: number; // Jumlah aksi thumbnail berhasil dalam rolling 24 jam
+  remainingDailyCapacity?: number; // Sisa kuota AMG rolling 24 jam
   createdAt: string;
   updatedAt: string;
 }
@@ -237,6 +242,11 @@ export interface ManagedVideo {
   lastError?: string;
   duration?: string;
   definition?: 'hd' | 'sd';
+  taskStatus?: {
+    title?: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'PENDING';
+    thumbnail?: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'RATE_LIMITED' | 'PENDING';
+    schedule?: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'PENDING';
+  };
   isSeeded?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -388,7 +398,28 @@ export interface MetadataSnapshot {
   batchId: string;
 }
 
-export type JobStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'RETRYING';
+export type JobStatus =
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'RETRYING'
+  | 'RATE_LIMITED'
+  | 'WAITING_FOR_QUOTA'
+  | 'PARTIAL_FAILED';
+
+export interface ThumbnailActionLog {
+  id: string;
+  channelId: string;
+  videoId: string;
+  action: 'THUMBNAIL_SET';
+  timestamp: string; // ISO
+  status: 'SUCCESS' | 'FAILED' | 'RATE_LIMITED';
+  response?: string;
+  error?: string;
+  batchId?: string;
+  jobId?: string;
+}
 
 export interface Phase3AutomationJob {
   id: string;
@@ -404,6 +435,11 @@ export interface Phase3AutomationJob {
   };
   snapshot: MetadataSnapshot;
   status: JobStatus;
+  taskStatus?: {
+    title?: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'PENDING';
+    thumbnail?: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'RATE_LIMITED' | 'PENDING';
+    schedule?: 'SUCCESS' | 'FAILED' | 'SKIPPED' | 'PENDING';
+  };
   retryCount: number;
   maxRetries: number;
   nextRunAt: number;
