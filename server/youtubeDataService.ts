@@ -170,11 +170,14 @@ export class YouTubeDataService {
     }
 
     const videoIds: string[] = [];
-    let pageToken: string | undefined = undefined;
-    let pagesFetched = 0;
-    const MAX_PAGES = Math.ceil(maxResults / 50);
+    const SAFE_MAX_VIDEOS = Math.min(Math.max(maxResults, 200), 500); // Batas aman 200-500 video
+    const MAX_PAGES = Math.ceil(SAFE_MAX_VIDEOS / 50);
 
     try {
+      // 1. Full pagination scan on Uploads playlist (UU...)
+      let pageToken: string | undefined = undefined;
+      let pagesFetched = 0;
+
       do {
         let url = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,status,contentDetails&playlistId=${encodeURIComponent(
           uploadPlaylistId
@@ -189,8 +192,7 @@ export class YouTubeDataService {
 
         const res = await fetch(url, { headers });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          return { success: false, error: err.error?.message || `YouTube API error (${res.status})` };
+          break;
         }
 
         const json = await res.json();
@@ -204,13 +206,87 @@ export class YouTubeDataService {
 
         pageToken = json.nextPageToken;
         pagesFetched++;
-      } while (pageToken && pagesFetched < MAX_PAGES && videoIds.length < maxResults);
+      } while (pageToken && pagesFetched < MAX_PAGES && videoIds.length < SAFE_MAX_VIDEOS);
+
+      // 2. Scan Shorts playlist (UUSH...) if uploads playlist starts with UU
+      if (uploadPlaylistId.startsWith('UU') && videoIds.length < SAFE_MAX_VIDEOS) {
+        const shortsPlaylistId = 'UUSH' + uploadPlaylistId.slice(2);
+        let shortsPageToken: string | undefined = undefined;
+        let shortsPages = 0;
+        try {
+          do {
+            let sUrl = `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,status,contentDetails&playlistId=${encodeURIComponent(
+              shortsPlaylistId
+            )}&maxResults=50`;
+            if (shortsPageToken) sUrl += `&pageToken=${encodeURIComponent(shortsPageToken)}`;
+            if (!accessToken && this.apiKey) sUrl += `&key=${this.apiKey}`;
+
+            const sRes = await fetch(sUrl, { headers });
+            if (!sRes.ok) break;
+
+            const sJson = await sRes.json();
+            const sItems = sJson.items || [];
+            for (const it of sItems) {
+              const vidId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
+              if (vidId && !videoIds.includes(vidId)) {
+                videoIds.push(vidId);
+              }
+            }
+
+            shortsPageToken = sJson.nextPageToken;
+            shortsPages++;
+          } while (shortsPageToken && shortsPages < MAX_PAGES && videoIds.length < SAFE_MAX_VIDEOS);
+        } catch {
+          // Shorts playlist optional
+        }
+      }
+
+      // 3. Scan search.list with loop pagination (forMine=true captures private raw uploads)
+      if (videoIds.length < SAFE_MAX_VIDEOS) {
+        let searchPageToken: string | undefined = undefined;
+        let searchPages = 0;
+        try {
+          do {
+            let searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=50`;
+            if (accessToken) {
+              searchUrl += `&forMine=true`;
+            } else {
+              const rawChanId = channelId.replace(/^chan-/, '');
+              searchUrl += `&channelId=${encodeURIComponent(rawChanId)}`;
+            }
+
+            if (searchPageToken) {
+              searchUrl += `&pageToken=${encodeURIComponent(searchPageToken)}`;
+            }
+            if (!accessToken && this.apiKey) {
+              searchUrl += `&key=${this.apiKey}`;
+            }
+
+            const searchRes = await fetch(searchUrl, { headers });
+            if (!searchRes.ok) break;
+
+            const searchJson = await searchRes.json();
+            const searchItems = searchJson.items || [];
+            for (const it of searchItems) {
+              const vidId = it.id?.videoId || it.snippet?.resourceId?.videoId;
+              if (vidId && !videoIds.includes(vidId)) {
+                videoIds.push(vidId);
+              }
+            }
+
+            searchPageToken = searchJson.nextPageToken;
+            searchPages++;
+          } while (searchPageToken && searchPages < MAX_PAGES && videoIds.length < SAFE_MAX_VIDEOS);
+        } catch (sErr) {
+          console.warn('[youtubeDataService] search.list fallback warning:', sErr);
+        }
+      }
 
       if (videoIds.length === 0) {
         return { success: true, data: [] };
       }
 
-      // Fetch full video details in chunks of 50
+      // Fetch full video details in batches of 50
       return await this.getVideoDetailsBatch(channelId, videoIds);
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to fetch playlist items' };
@@ -244,9 +320,7 @@ export class YouTubeDataService {
       // Chunk into batches of 50
       for (let i = 0; i < videoIds.length; i += 50) {
         const chunk = videoIds.slice(i, i + 50);
-        let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status,processingDetails,contentDetails&id=${encodeURIComponent(
-          chunk.join(',')
-        )}`;
+        let url = `https://www.googleapis.com/youtube/v3/videos?part=snippet,status,processingDetails,contentDetails&id=${chunk.join(',')}`;
 
         if (!accessToken && this.apiKey) {
           url += `&key=${this.apiKey}`;
@@ -254,8 +328,8 @@ export class YouTubeDataService {
 
         const res = await fetch(url, { headers });
         if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          return { success: false, error: err.error?.message || `YouTube API error (${res.status})` };
+          console.warn(`[youtubeDataService] Video chunk batch fetch failed (${res.status}) for chunk ${i / 50 + 1}`);
+          continue;
         }
 
         const json = await res.json();
@@ -264,7 +338,7 @@ export class YouTubeDataService {
           title: v.snippet?.title || '',
           description: v.snippet?.description || '',
           publishedAt: v.snippet?.publishedAt || '',
-          thumbnailUrl: v.snippet?.thumbnails?.medium?.url || v.snippet?.thumbnails?.default?.url || '',
+          thumbnailUrl: v.snippet?.thumbnails?.maxres?.url || v.snippet?.thumbnails?.high?.url || v.snippet?.thumbnails?.medium?.url || v.snippet?.thumbnails?.default?.url || '',
           privacyStatus: v.status?.privacyStatus || 'public',
           uploadStatus: v.status?.uploadStatus || 'processed',
           publishAt: v.status?.publishAt || null,

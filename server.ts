@@ -1150,6 +1150,11 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
       }
     }
 
+    if (!uploadsPlaylistId && channel.youtubeChannelId?.startsWith('UC')) {
+      uploadsPlaylistId = 'UU' + channel.youtubeChannelId.slice(2);
+      channel.uploadPlaylistId = uploadsPlaylistId;
+    }
+
     if (!uploadsPlaylistId) {
       return res.status(400).json({
         success: false,
@@ -1157,7 +1162,7 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
       });
     }
 
-    const uploadsResult = await youtubeDataService.getChannelUploads(channel.id, uploadsPlaylistId, 2500);
+    const uploadsResult = await youtubeDataService.getChannelUploads(channel.id, uploadsPlaylistId, 500);
     if (!uploadsResult.success || !uploadsResult.data) {
       return res.status(502).json({
         success: false,
@@ -1184,8 +1189,8 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
 
       let isManaged = existing ? existing.isManaged : false;
       let managementStatus = existing ? existing.managementStatus : 'DISCOVERED';
-      let managementScope = existing ? (existing.managementScope || 'UNCLASSIFIED') : 'UNCLASSIFIED';
-      let isAmgEligible = existing ? !!existing.isAmgEligible : false;
+      let managementScope = existing ? (existing.managementScope || 'REGULAR') : 'REGULAR';
+      let isAmgEligible = existing ? !!existing.isAmgEligible : true;
       let exclusionReason: string | undefined = existing?.exclusionReason;
 
       if (!isPrivate) {
@@ -1202,12 +1207,18 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
         isManaged = true;
         managementStatus = 'SCHEDULED';
         exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari video terdeteksi/antrean baru.`;
-      } else if (!existing || !existing.isManaged) {
-        // Video private mentah TANPA jadwal publikasi
+      } else {
+        // Video berstatus Private tanpa jadwal (privacyStatus === 'private' dan tidak ada publishAt)
+        // Langsung masuk ke kategori AMG Reguler / INCLUDED
+        const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED';
         managementScope = 'REGULAR';
         isAmgEligible = true;
-        isManaged = false;
-        managementStatus = 'DISCOVERED';
+        isManaged = isAlreadyCompleted ? true : false;
+        managementStatus = isAlreadyCompleted
+          ? 'COMPLETED'
+          : (existing?.managementStatus === 'PROCESSING' || existing?.managementStatus === 'ENROLLED'
+            ? existing.managementStatus
+            : 'DISCOVERED');
         exclusionReason = undefined;
       }
 
@@ -2137,6 +2148,21 @@ app.post('/api/videos/batch-sync', (req: Request, res: Response) => {
       createdAt: existing?.createdAt || v.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    const isPriv = (vidRecord.privacyStatus || 'private').toLowerCase() === 'private';
+    const isSched = Boolean(vidRecord.publishAt || vidRecord.scheduledPublishAt);
+    if (isPriv && !isSched) {
+      const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED' || v.managementStatus === 'COMPLETED';
+      vidRecord.managementScope = 'REGULAR';
+      vidRecord.isAmgEligible = true;
+      vidRecord.isManaged = isAlreadyCompleted ? true : false;
+      vidRecord.managementStatus = isAlreadyCompleted
+        ? 'COMPLETED'
+        : (vidRecord.managementStatus === 'PROCESSING' || vidRecord.managementStatus === 'ENROLLED'
+          ? vidRecord.managementStatus
+          : 'DISCOVERED');
+      vidRecord.exclusionReason = undefined;
+    }
 
     dbStore.videos.set(vidRecord.id, vidRecord);
     upsertedCount++;

@@ -503,8 +503,45 @@ export async function fetchChannelVideosFromYouTube(
       }
     }
 
-    // Fallback: If playlist was empty or unavailable, try search with pagination
-    if (videoIds.length === 0) {
+    // Also check Shorts playlist if uploadPlaylistId starts with UU
+    if (uploadsPlaylistId && uploadsPlaylistId.startsWith('UU') && videoIds.length < 500) {
+      const shortsPlaylistId = 'UUSH' + uploadsPlaylistId.slice(2);
+      let shortsPageToken: string | undefined = undefined;
+      let shortsPages = 0;
+      try {
+        do {
+          const pageParam: string = shortsPageToken ? `&pageToken=${encodeURIComponent(shortsPageToken)}` : '';
+          const sPlRes: Response = await fetch(
+            `https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails,status&playlistId=${encodeURIComponent(
+              shortsPlaylistId
+            )}&maxResults=50${pageParam}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+              },
+            }
+          );
+          if (!sPlRes.ok) break;
+          const sPlData: any = await sPlRes.json();
+          if (Array.isArray(sPlData.items)) {
+            for (const it of sPlData.items) {
+              const vidId = it.contentDetails?.videoId || it.snippet?.resourceId?.videoId;
+              if (vidId && !videoIds.includes(vidId)) {
+                videoIds.push(vidId);
+              }
+            }
+          }
+          shortsPageToken = sPlData.nextPageToken;
+          shortsPages++;
+        } while (shortsPageToken && shortsPages < 10 && videoIds.length < 500);
+      } catch {
+        // Shorts playlist optional
+      }
+    }
+
+    // Comprehensive scan: query search.list with pagination to discover all remaining private/raw uploads
+    if (videoIds.length < 500) {
       try {
         let searchPageToken: string | undefined = undefined;
         let searchPages = 0;
@@ -523,7 +560,7 @@ export async function fetchChannelVideosFromYouTube(
           const searchData: any = await searchRes.json();
           if (Array.isArray(searchData.items)) {
             for (const it of searchData.items) {
-              const vidId = it.id?.videoId;
+              const vidId = it.id?.videoId || it.snippet?.resourceId?.videoId;
               if (vidId && !videoIds.includes(vidId)) {
                 videoIds.push(vidId);
               }
@@ -531,7 +568,7 @@ export async function fetchChannelVideosFromYouTube(
           }
           searchPageToken = searchData.nextPageToken;
           searchPages++;
-        } while (searchPageToken && searchPages < 60);
+        } while (searchPageToken && searchPages < 10 && videoIds.length < 500);
       } catch (sErr) {
         console.warn('Search fallback notice:', sErr);
       }
@@ -601,10 +638,10 @@ export async function fetchChannelVideosFromYouTube(
       const isPrivate = privacy === 'private';
       const isScheduled = Boolean(publishAt);
 
-      let managementScope: ManagementScope = existing?.managementScope || 'REGULAR';
-      let isAmgEligible = existing?.isAmgEligible ?? false;
-      let isManaged = existing?.isManaged ?? false;
-      let managementStatus: VideoManagementStatus = existing?.managementStatus || 'DISCOVERED';
+      let managementScope: ManagementScope = existing ? (existing.managementScope || 'REGULAR') : 'REGULAR';
+      let isAmgEligible = existing ? !!existing.isAmgEligible : true;
+      let isManaged = existing ? existing.isManaged : false;
+      let managementStatus: VideoManagementStatus = existing ? existing.managementStatus : 'DISCOVERED';
       let exclusionReason: string | undefined = existing?.exclusionReason;
 
       // STRICT PRIVACY FILTER:
@@ -623,12 +660,18 @@ export async function fetchChannelVideosFromYouTube(
         isManaged = true; // Dikecualikan karena sudah terjadwal di YouTube
         managementStatus = 'SCHEDULED';
         exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari video terdeteksi/antrean baru.`;
-      } else if (!existing || !existing.isManaged) {
+      } else {
         // Raw private video mentah TANPA jadwal publikasi (privacyStatus === 'private' && !publishAt)
-        managementScope = existing?.managementScope || 'REGULAR';
+        // Langsung masuk ke kategori AMG Reguler / INCLUDED
+        const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED';
+        managementScope = 'REGULAR';
         isAmgEligible = true;
-        isManaged = false;
-        managementStatus = existing?.managementStatus || 'DISCOVERED';
+        isManaged = isAlreadyCompleted ? true : false;
+        managementStatus = isAlreadyCompleted
+          ? 'COMPLETED'
+          : (existing?.managementStatus === 'PROCESSING' || existing?.managementStatus === 'ENROLLED'
+            ? existing.managementStatus
+            : 'DISCOVERED');
         exclusionReason = undefined;
       }
 
