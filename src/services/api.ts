@@ -1807,21 +1807,25 @@ export const api = {
       throw new Error(`Master Thumbnail belum tersedia pada blok "${targetBlock.name}". Otomasi dicegah untuk menghindari cross-niche.`);
     }
 
-    // Filter candidate videos strictly matching all 8 criteria
+    // Filter candidate videos strictly matching all criteria (all unmanaged eligible candidates)
     const candidateVideos = channelVideos.filter((v) => {
+      if (v.isManaged || v.managementStatus === 'COMPLETED') return false;
+      if (v.managementScope === 'EXCLUDED') return false;
+      if ((v.managementScope === 'REGULAR' && v.isAmgEligible) || v.isEnrolled) return true;
       const evalRes = evaluateVideoEligibilityWithBlock(v, channel, targetBlock);
-      return evalRes.isEligible && evalRes.category === 'NEW_PRIVATE_CANDIDATE';
+      return evalRes.isEligible || evalRes.category === 'NEW_PRIVATE_CANDIDATE';
     });
 
-    const preview: AutomationPreviewItem[] = candidateVideos.slice(0, 10).map((v, i) => {
+    // Map ALL candidate videos (without capping or slicing at 10)
+    const preview: AutomationPreviewItem[] = candidateVideos.map((v, i) => {
       const assignedT = titles[i % titles.length].text;
       const assignedThumb = thumbnails[i % thumbnails.length].url;
       return {
         sequence: i + 1,
         videoId: v.id,
-        originalTitle: v.titleBefore,
+        originalTitle: v.titleBefore || v.titleAssigned || 'Video YouTube',
         assignedTitle: assignedT,
-        originalThumbnail: v.thumbnailBefore,
+        originalThumbnail: v.thumbnailBefore || v.thumbnailAssigned || '',
         assignedThumbnail: assignedThumb,
         publishDate: new Date(Date.now() + (i + 1) * 86400000).toISOString().split('T')[0],
         publishTime: targetBlock.scheduleConfig?.times?.[0] || '16:00',
@@ -1846,6 +1850,7 @@ export const api = {
         excludedCount: channelVideos.length - candidateVideos.length,
         needsScopeAssignmentCount: 0,
         eligibleCount: candidateVideos.length,
+        newCandidatesCount: candidateVideos.length,
       } as AutomationScopeSummary,
     };
   },

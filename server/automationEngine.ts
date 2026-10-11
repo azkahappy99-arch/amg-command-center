@@ -150,7 +150,6 @@ export class AutomationEngine {
         video.isEnrolled = true;
         video.managementStatus = video.processingStatus === 'processed' ? 'READY' : 'DISCOVERED';
         enrolledRegularVideos.push(video);
-        candidateVideos.push(video);
       } else if (evalRes.category === 'PROTECTED_OLD') {
         protectedOldVideos.push(video);
       } else if (evalRes.category === 'PROTECTED_BY_CUTOFF') {

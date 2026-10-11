@@ -20,6 +20,8 @@ import {
   Check,
   RotateCcw,
   Trash2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Channel, ContentProfile, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
 import { api } from '../services/api.ts';
@@ -58,6 +60,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [previewFilter, setPreviewFilter] = useState<'ALL' | 'INCLUDED' | 'UNCLASSIFIED' | 'EXCLUDED'>('ALL');
+  const [pageSize, setPageSize] = useState<number>(50); // 50 (Kloter) or 0 (Semua)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
   const [showAcceptanceModal, setShowAcceptanceModal] = useState(false);
   const [showCandidateModal, setShowCandidateModal] = useState(false);
   const [showEligibilityModal, setShowEligibilityModal] = useState(false);
@@ -111,7 +116,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       fetchPreview(selectedChannelId);
     }
     fetchBatches();
-  }, [selectedChannelId]);
+    setCurrentPage(1);
+    setIsTableExpanded(false);
+  }, [selectedChannelId, previewFilter]);
 
   const includedItems = previewItems.filter(p => p.managementScope === 'REGULAR' && p.isAmgEligible);
   const unclassifiedItems = previewItems.filter(p => p.managementScope === 'UNCLASSIFIED');
@@ -123,6 +130,22 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     if (previewFilter === 'EXCLUDED') return item.managementScope === 'EXCLUDED';
     return true;
   });
+
+  const totalPages = pageSize > 0 ? Math.ceil(visiblePreviewItems.length / pageSize) : 1;
+  const effectivePage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
+
+  // Semua video dalam kloter aktif (hingga 50 video sesuai kapasitas kloter)
+  const currentKloterItems = pageSize > 0
+    ? visiblePreviewItems.slice((effectivePage - 1) * pageSize, effectivePage * pageSize)
+    : visiblePreviewItems;
+
+  // UI Ringkas: Secara default tampilkan hanya 10 video pertama, buka semua kloter jika diperluas (isTableExpanded)
+  const displayPreviewItems = isTableExpanded
+    ? currentKloterItems
+    : currentKloterItems.slice(0, 10);
+
+  // Jumlah video di Kloter 1 (maks 50 video)
+  const kloter1Count = Math.min(50, includedItems.length);
 
   const handleRunDryRun = async () => {
     setIsDryRunning(true);
@@ -562,10 +585,10 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           <div>
             <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
               <Eye className="w-4 h-4 text-red-500" />
-              Pratinjau Otomasi Pra-Eksekusi ({visiblePreviewItems.length} Video Ditampilkan)
+              Pratinjau Otomasi Pra-Eksekusi (Kloter {effectivePage}: {currentKloterItems.length} Video)
             </h3>
             <p className="text-xs text-neutral-400 mt-0.5">
-              Tinjau penentuan judul deterministik, thumbnail, dan tanggal jadwal. Hanya video TERMASUK yang akan dimodifikasi.
+              Tinjau penentuan judul deterministik, thumbnail, dan tanggal jadwal. Menampilkan {displayPreviewItems.length} dari {currentKloterItems.length} video kloter ini (Total Semua: {includedItems.length} Video Layak).
             </p>
           </div>
 
@@ -585,13 +608,19 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-red-900/30 transition active:scale-95 cursor-pointer"
             >
               <PlayCircle className="w-4 h-4" />
-              <span>Konfirmasi & Mulai Otomasi (Semua: {includedItems.length} Video) - Kloter per 50</span>
+              <span>Konfirmasi & Mulai Otomasi (Semua: {includedItems.length} Video) - Kloter 1 ({kloter1Count} Video)</span>
             </button>
           </div>
         </div>
 
-        {/* Table */}
-        <div className="overflow-x-auto">
+        {/* Table Container with max-height & smooth mobile swipe/scroll */}
+        <div
+          className={`overflow-x-auto rounded-xl border border-neutral-800/80 transition-all duration-300 ${
+            isTableExpanded
+              ? 'max-h-[500px] sm:max-h-[560px] overflow-y-auto scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-neutral-950'
+              : ''
+          }`}
+        >
           <table className="w-full text-left text-xs text-neutral-300 divide-y divide-neutral-800">
             <thead className="bg-neutral-950/80 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
               <tr>
@@ -613,14 +642,14 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     Menghitung pratinjau deterministik & memverifikasi proteksi lingkup...
                   </td>
                 </tr>
-              ) : visiblePreviewItems.length === 0 ? (
+              ) : displayPreviewItems.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-neutral-500">
                     Tidak ada video yang cocok dalam filter ini.
                   </td>
                 </tr>
               ) : (
-                visiblePreviewItems.map((item) => (
+                displayPreviewItems.map((item) => (
                   <tr key={item.videoId} className="hover:bg-neutral-800/30 transition">
                     <td className="py-3 px-3 font-mono font-bold text-neutral-400">
                       {item.sequence}
@@ -724,6 +753,117 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Toggle Expand / Collapse (Lihat Semua Video Kloter Ini / Tampilkan Lebih Sedikit) */}
+        {currentKloterItems.length > 10 && (
+          <div className="pt-0.5">
+            <button
+              type="button"
+              onClick={() => setIsTableExpanded(!isTableExpanded)}
+              className="w-full py-2.5 px-4 rounded-xl bg-neutral-950/80 hover:bg-neutral-800/80 border border-neutral-800 hover:border-neutral-700 text-neutral-300 hover:text-white text-xs font-semibold flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer group shadow-sm"
+            >
+              {isTableExpanded ? (
+                <>
+                  <span>Tampilkan Lebih Sedikit ↑</span>
+                  <ChevronUp className="w-4 h-4 text-red-400 group-hover:-translate-y-0.5 transition-transform" />
+                </>
+              ) : (
+                <>
+                  <span>Lihat Semua Video Kloter Ini ({currentKloterItems.length} Video) ↓</span>
+                  <ChevronDown className="w-4 h-4 text-red-400 group-hover:translate-y-0.5 transition-transform" />
+                </>
+              )}
+            </button>
+          </div>
+        )}
+
+        {/* Pagination & Kloter Navigation */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-neutral-800 text-xs text-neutral-400">
+          <div className="flex flex-wrap items-center gap-2">
+            <span>
+              Menampilkan <strong className="text-neutral-200">{displayPreviewItems.length}</strong> dari{' '}
+              <strong className="text-neutral-200">{currentKloterItems.length}</strong> video kloter ini
+              {includedItems.length > currentKloterItems.length && (
+                <span> (Total Semua Kloter: <strong className="text-emerald-400">{includedItems.length}</strong> Video)</span>
+              )}
+            </span>
+            <span className="text-neutral-600 hidden sm:inline">•</span>
+            <div className="flex items-center gap-1 bg-neutral-950/80 p-0.5 rounded-lg border border-neutral-800">
+              <button
+                type="button"
+                onClick={() => { setPageSize(50); setCurrentPage(1); setIsTableExpanded(false); }}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                  pageSize === 50
+                    ? 'bg-neutral-800 text-white font-bold border border-neutral-700 shadow-sm'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                Kloter per 50
+              </button>
+              <button
+                type="button"
+                onClick={() => { setPageSize(0); setCurrentPage(1); setIsTableExpanded(true); }}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer ${
+                  pageSize === 0
+                    ? 'bg-neutral-800 text-white font-bold border border-neutral-700 shadow-sm'
+                    : 'text-neutral-400 hover:text-neutral-200'
+                }`}
+              >
+                Tampilkan Semua ({visiblePreviewItems.length})
+              </button>
+            </div>
+          </div>
+
+          {pageSize > 0 && totalPages > 1 && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentPage((p) => Math.max(1, p - 1));
+                  setIsTableExpanded(false);
+                }}
+                disabled={effectivePage === 1}
+                className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-neutral-200 text-xs font-semibold cursor-pointer"
+              >
+                Sebelumnya
+              </button>
+
+              {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((pageNum) => {
+                const startNum = (pageNum - 1) * pageSize + 1;
+                const endNum = Math.min(pageNum * pageSize, visiblePreviewItems.length);
+                return (
+                  <button
+                    key={pageNum}
+                    type="button"
+                    onClick={() => {
+                      setCurrentPage(pageNum);
+                      setIsTableExpanded(false);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                      effectivePage === pageNum
+                        ? 'bg-red-600 text-white font-bold shadow-md shadow-red-900/40'
+                        : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300'
+                    }`}
+                  >
+                    Kloter {pageNum} ({startNum}–{endNum})
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCurrentPage((p) => Math.min(totalPages, p + 1));
+                  setIsTableExpanded(false);
+                }}
+                disabled={effectivePage === totalPages}
+                className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-neutral-200 text-xs font-semibold cursor-pointer"
+              >
+                Berikutnya
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -935,9 +1075,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   type="button"
                   onClick={handleStartAutomation}
                   disabled={isExecuting || includedItems.length === 0}
-                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shadow-lg shadow-red-900/30"
+                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shadow-lg shadow-red-900/30 cursor-pointer disabled:opacity-50"
                 >
-                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${includedItems.length} Video) - Kloter per 50`}
+                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${includedItems.length} Video) - Kloter 1 (${kloter1Count} Video)`}
                 </button>
               </div>
             </div>
