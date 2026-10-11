@@ -2924,7 +2924,7 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
   let batchId = '';
   try {
     const ctx = getRequestContext(req);
-    const { channelId, profileId, videoIds, executionPlan, channelTitle, videos } = req.body || {};
+    const { channelId, profileId, videoIds, executionPlan, channelTitle, videos, batchSize = 50 } = req.body || {};
     if (!channelId) return res.status(400).json({ error: 'channelId is required.' });
 
     // Enforce channel workspace access if user is logged in
@@ -2999,87 +2999,174 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       });
     }
 
-    // 2. If executionPlan is provided (e.g. videos from candidate inclusion preview):
-    if (Array.isArray(executionPlan) && executionPlan.length > 0) {
-      // Step A: Daftarkan seluruh video dalam executionPlan ke dbStore.videos dengan judul & thumbnail terpilih
-      for (let idx = 0; idx < executionPlan.length; idx++) {
-        const item = executionPlan[idx];
-        let video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
-        if (!video) {
-          const ytId = item.videoId.startsWith('yt-vid-') ? item.videoId.replace('yt-vid-', '') : item.videoId;
-          video = {
-            id: item.videoId,
-            youtubeVideoId: ytId,
-            channelId: channel.id,
-            channelTitle: channel.title,
-            titleBefore: item.originalTitle || item.title || 'Video YouTube',
-            titleAssigned: item.title,
-            thumbnailBefore: item.originalThumbnail || item.thumbnailUrl || '',
-            thumbnailAssigned: item.thumbnailUrl || '',
-            originalUploadAt: new Date().toISOString(),
-            uploadedAt: new Date().toISOString(),
-            processingStatus: 'processed',
-            privacyStatus: 'private',
-            managementStatus: 'READY',
-            managementScope: 'REGULAR',
-            isAmgEligible: true,
-            isManaged: false,
-            isEnrolled: true,
-            retryCount: 0,
-            isSeeded: false,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-          dbStore.videos.set(video.id, video);
-        } else {
-          video.titleAssigned = item.title;
-          video.thumbnailAssigned = item.thumbnailUrl;
-          video.managementScope = 'REGULAR';
-          video.isAmgEligible = true;
-          video.isEnrolled = true;
-          video.managementStatus = 'READY';
-          video.privacyStatus = 'private';
-          video.channelId = channel.id;
-          dbStore.videos.set(video.id, video);
+    // 2. Ambil langsung daftar video kandidat dari dbStore internal di sisi server
+    const cId = channel.id;
+    const yId = channel.youtubeChannelId;
+    const isChannelMatch = (v: ManagedVideo) => {
+      return (
+        v.channelId === cId ||
+        (yId && (v.channelId === yId || v.channelId === `chan-${yId}`)) ||
+        (cId.startsWith('chan-') && v.channelId === cId.replace('chan-', '')) ||
+        (channelId && v.channelId === channelId)
+      );
+    };
+
+    // Pastikan seluruh video mentah kandidat di dbStore terdaftar dan ditandai REGULAR / READY
+    for (const v of dbStore.videos.values()) {
+      if (isChannelMatch(v)) {
+        if (!v.isManaged && v.managementStatus !== 'COMPLETED' && v.managementScope !== 'EXCLUDED') {
+          const isPriv = (v.privacyStatus || 'private').toLowerCase() === 'private';
+          if (isPriv && !v.publishAt) {
+            v.managementScope = 'REGULAR';
+            v.isAmgEligible = true;
+            v.isEnrolled = true;
+            if (v.managementStatus !== 'PROCESSING') {
+              v.managementStatus = 'READY';
+            }
+          }
         }
       }
+    }
 
-      // Step B: Dynamic Batch Chaining (Requirement 1): Kapasitas 1 kloter = 50 video per eksekusi
-      const BATCH_CHUNK_SIZE = 50;
-      const kloter1Limit = Math.min(BATCH_CHUNK_SIZE, remainingCapacity);
-      const planToExecute = executionPlan.slice(0, kloter1Limit);
+    // Resolusikan content profile untuk penugasan rotasi & jadwal
+    const effectiveProfileId = profileId || channel.contentProfileId || '';
+    const prof =
+      dbStore.profiles.get(effectiveProfileId) ||
+      Array.from(dbStore.profiles.values()).find(
+        (p) => (p.channelIds && p.channelIds.includes(channel.id)) || (p.blockId && p.blockId === channel.blockId)
+      ) ||
+      Array.from(dbStore.profiles.values())[0];
 
-      console.log(
-        `[handleStartBatchAutomation] Menjalankan Kloter 1 sebanyak ${planToExecute.length} video (dari total ${executionPlan.length} video). Sisa ${Math.max(0, executionPlan.length - planToExecute.length)} video akan ditarik otomatis oleh worker secara berantai.`
-      );
+    // Dapatkan daftar kandidat video internal di sisi server
+    let allCandidates: any[] = [];
 
-      batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
-      const batch: AutomationBatch = {
-        id: batchId,
-        batchNumber: batchId,
-        channelId: channel.id,
-        channelTitle: channel.title,
-        profileId: profileId || channel.contentProfileId || 'profile-default',
-        profileName: 'Standard AMG Schedule (Kloter 1)',
-        isDryRun: false,
-        status: 'running',
-        startedAt: new Date().toISOString(),
-        lastHeartbeatAt: new Date().toISOString(),
-        detectedCount: planToExecute.length,
-        processedCount: 0,
-        scheduledCount: 0,
-        completedCount: 0,
-        failedCount: 0,
-      };
+    // Jika executionPlan sempat dikirim dari pemanggil eksternal dan bukan kosong, gunakan itu
+    if (Array.isArray(executionPlan) && executionPlan.length > 0) {
+      allCandidates = executionPlan;
+    } else {
+      // Jalankan preview engine internal server untuk mendapatkan penugasan rotasi judul, thumbnail, dan jadwal
+      const previewResult = automationEngine.generatePreview(channel.id, effectiveProfileId);
+      if (previewResult.success && Array.isArray(previewResult.preview)) {
+        allCandidates = previewResult.preview.filter(
+          (p) =>
+            (p.managementScope === 'REGULAR' && p.isAmgEligible) ||
+            p.safetyCategory === 'NEW_PRIVATE_CANDIDATE' ||
+            p.safetyCategory === 'ELIGIBLE' ||
+            p.status === 'READY' ||
+            p.status === 'CANDIDATE'
+        );
+      }
 
-      dbStore.automationBatches.set(batchId, batch);
+      // Fallback cadangan jika preview belum memuat data: ekstrak langsung dari dbStore.videos
+      if (allCandidates.length === 0) {
+        const rawCandidates = Array.from(dbStore.videos.values()).filter(
+          (v) =>
+            isChannelMatch(v) &&
+            !v.isManaged &&
+            v.managementStatus !== 'COMPLETED' &&
+            v.managementScope !== 'EXCLUDED' &&
+            (v.privacyStatus || '').toLowerCase() === 'private' &&
+            !v.publishAt
+        );
+        rawCandidates.sort(
+          (a, b) =>
+            new Date(a.originalUploadAt || a.uploadedAt || 0).getTime() -
+            new Date(b.originalUploadAt || b.uploadedAt || 0).getTime()
+        );
 
-      // Upsert videos in dbStore and construct Phase 3 jobs for Kloter 1
-      const phase3Jobs = [];
-      for (let idx = 0; idx < planToExecute.length; idx++) {
-        const item = planToExecute[idx];
-        const video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId)!;
+        const blockId = prof?.blockId || channel.blockId;
+        const titles = Array.from(dbStore.masterTitles.values()).filter((t) => !blockId || t.blockId === blockId);
+        const thumbs = Array.from(dbStore.masterThumbnails.values()).filter((t) => !blockId || t.blockId === blockId);
 
+        allCandidates = rawCandidates.map((v, idx) => {
+          const assignedTitle = titles.length > 0 ? titles[idx % titles.length].text : (v.titleAssigned || v.titleBefore || 'Video YouTube');
+          const assignedThumbnail = thumbs.length > 0 ? thumbs[idx % thumbs.length].url : (v.thumbnailAssigned || v.thumbnailBefore || '');
+          const baseDate = new Date(Date.now() + (idx + 1) * 24 * 60 * 60 * 1000);
+          return {
+            videoId: v.id,
+            assignedTitle,
+            assignedThumbnail,
+            publishDate: baseDate.toISOString().split('T')[0],
+            publishTime: '16:00 WIB',
+            scheduledPublishAt: baseDate.toISOString(),
+            managementScope: 'REGULAR',
+            isAmgEligible: true,
+          };
+        });
+      }
+    }
+
+    if (allCandidates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Tidak ada video kandidat siap kelola pada channel "${channel.title}". Pastikan channel memiliki video berstatus unmanaged private.`,
+      });
+    }
+
+    // Step B: Dynamic Batch Chaining (Requirement 1 & 2): Kapasitas 1 kloter = 50 video per eksekusi
+    const BATCH_CHUNK_SIZE = Number(batchSize) || 50;
+    const kloter1Limit = Math.min(BATCH_CHUNK_SIZE, remainingCapacity, allCandidates.length);
+    const planToExecute = allCandidates.slice(0, kloter1Limit);
+
+    console.log(
+      `[handleStartBatchAutomation] Menjalankan Kloter 1 sebanyak ${planToExecute.length} video (dari total ${allCandidates.length} video kandidat di dbStore internal). Sisa ${Math.max(0, allCandidates.length - planToExecute.length)} video akan ditarik otomatis oleh Phase 3 Worker secara berantai.`
+    );
+
+    batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
+    const batch: AutomationBatch = {
+      id: batchId,
+      batchNumber: batchId,
+      channelId: channel.id,
+      channelTitle: channel.title,
+      profileId: prof?.id || channel.contentProfileId || 'profile-default',
+      profileName: prof?.name || 'Standard AMG Schedule (Kloter 1)',
+      isDryRun: false,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      detectedCount: planToExecute.length,
+      processedCount: 0,
+      scheduledCount: 0,
+      completedCount: 0,
+      failedCount: 0,
+    };
+
+    dbStore.automationBatches.set(batchId, batch);
+
+    // Daftarkan video di dbStore dan bangun Phase 3 jobs untuk Kloter 1
+    const phase3Jobs = [];
+    for (let idx = 0; idx < planToExecute.length; idx++) {
+      const item = planToExecute[idx];
+      let video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
+      if (!video) {
+        const ytId = item.videoId.startsWith('yt-vid-') ? item.videoId.replace('yt-vid-', '') : item.videoId;
+        video = {
+          id: item.videoId,
+          youtubeVideoId: ytId,
+          channelId: channel.id,
+          channelTitle: channel.title,
+          titleBefore: item.originalTitle || item.title || 'Video YouTube',
+          titleAssigned: item.assignedTitle || item.title || '',
+          thumbnailBefore: item.originalThumbnail || item.thumbnailUrl || '',
+          thumbnailAssigned: item.assignedThumbnail || item.thumbnailUrl || '',
+          originalUploadAt: new Date().toISOString(),
+          uploadedAt: new Date().toISOString(),
+          processingStatus: 'processed',
+          privacyStatus: 'private',
+          managementStatus: 'READY',
+          managementScope: 'REGULAR',
+          isAmgEligible: true,
+          isManaged: false,
+          isEnrolled: true,
+          retryCount: 0,
+          isSeeded: false,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        dbStore.videos.set(video.id, video);
+      } else {
+        if (item.assignedTitle || item.title) video.titleAssigned = item.assignedTitle || item.title;
+        if (item.assignedThumbnail || item.thumbnailUrl) video.thumbnailAssigned = item.assignedThumbnail || item.thumbnailUrl;
         video.managementScope = 'REGULAR';
         video.isAmgEligible = true;
         video.isEnrolled = true;
@@ -3088,57 +3175,44 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         video.channelId = channel.id;
         video.automationBatchId = batchId;
         dbStore.videos.set(video.id, video);
-
-        // Calculate continuous schedule slot
-        let isoPublishAt = item.scheduledPublishAt;
-        if (!isoPublishAt) {
-          if (item.publishDate && item.publishTime) {
-            let [hours, minutes] = item.publishTime.split(' ')[0].split(':');
-            let [y, m, d] = item.publishDate.split('-').map(Number);
-            const slotDate = new Date(Date.UTC(y, m - 1, d, Number(hours) - 7, Number(minutes), 0));
-            isoPublishAt = slotDate.toISOString();
-          } else {
-            const baseDate = new Date(Date.UTC(2026, 9, 4 + idx, 9, 0, 0));
-            isoPublishAt = baseDate.toISOString();
-          }
-        }
-
-        phase3Jobs.push({
-          videoId: video.id,
-          payload: {
-            title: item.title || item.assignedTitle || video.titleBefore,
-            description: item.description || 'Continuous relaxing ambience published by AMG.',
-            tags: item.tags || ['ambience', 'relaxing', 'sleep', 'music'],
-            scheduledPublishAt: isoPublishAt,
-            thumbnailUrl: item.thumbnailUrl || item.assignedThumbnail,
-          },
-        });
       }
 
-      await phase3Engine.enqueueBatchJobs(batchId, channel.id, phase3Jobs);
-      dbStore.saveToDisk();
+      // Hitung jadwal kontinu slot publikasi
+      let isoPublishAt = item.scheduledPublishAt;
+      if (!isoPublishAt) {
+        if (item.publishDate && item.publishTime) {
+          let [hours, minutes] = item.publishTime.split(' ')[0].split(':');
+          let [y, m, d] = item.publishDate.split('-').map(Number);
+          const slotDate = new Date(Date.UTC(y, m - 1, d, Number(hours) - 7, Number(minutes), 0));
+          isoPublishAt = slotDate.toISOString();
+        } else {
+          const baseDate = new Date(Date.now() + (idx + 1) * 24 * 60 * 60 * 1000);
+          isoPublishAt = baseDate.toISOString();
+        }
+      }
 
-      return res.status(200).json({
-        success: true,
-        batchId: batch.id,
-        batch,
-        totalEnrolled: executionPlan.length,
-        kloterSize: planToExecute.length,
-        message: `Kloter 1 (${planToExecute.length} video) berhasil dimasukkan ke antrean Phase 3 Worker. Pemrosesan berantai aktif untuk total ${executionPlan.length} video (Kloter per 50 video).`,
+      phase3Jobs.push({
+        videoId: video.id,
+        payload: {
+          title: item.assignedTitle || item.title || video.titleAssigned || video.titleBefore || 'Video YouTube',
+          description: prof?.description || 'Continuous relaxing ambience published by AMG.',
+          tags: item.tags || ['ambience', 'relaxing', 'sleep', 'music'],
+          scheduledPublishAt: isoPublishAt,
+          thumbnailUrl: item.assignedThumbnail || item.thumbnailUrl || video.thumbnailAssigned || '',
+        },
       });
     }
 
-    // 3. Standard flow via automationEngine
-    const result = await automationEngine.startBatchAutomation(channel.id, profileId);
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
-    }
+    await phase3Engine.enqueueBatchJobs(batchId, channel.id, phase3Jobs);
+    dbStore.saveToDisk();
 
     return res.status(200).json({
       success: true,
-      batchId: result.batch?.id,
-      batch: result.batch,
-      message: 'Batch automation started successfully',
+      batchId: batch.id,
+      batch,
+      totalEnrolled: allCandidates.length,
+      kloterSize: planToExecute.length,
+      message: `Kloter 1 (${planToExecute.length} video) berhasil dimasukkan ke antrean Phase 3 Worker. Pemrosesan berantai aktif untuk total ${allCandidates.length} video (Kloter per ${BATCH_CHUNK_SIZE} video).`,
     });
   } catch (err: any) {
     console.error('[API Batch Start Error]', err);

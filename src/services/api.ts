@@ -1896,26 +1896,16 @@ export const api = {
     channelId: string,
     profileId?: string,
     payloadOptions?: {
-      videoIds?: string[];
-      executionPlan?: any[];
+      batchSize?: number;
       channelTitle?: string;
     }
   ) => {
-    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(isRealVideo);
-    const channelVideos = rawVideos.filter(
-      (v) =>
-        v.channelId === channelId ||
-        v.channelId === `chan-${channelId}` ||
-        (channelId.startsWith('chan-') && v.channelId === channelId.replace('chan-', ''))
-    );
-
+    // Only send lightweight payload (<100 bytes) - never send large video arrays or base64 thumbnail strings
     const payload = {
       channelId,
       profileId,
-      videoIds: payloadOptions?.videoIds,
-      executionPlan: payloadOptions?.executionPlan,
+      batchSize: payloadOptions?.batchSize || 50,
       channelTitle: payloadOptions?.channelTitle,
-      videos: channelVideos,
     };
 
     const endpoints = [
@@ -1948,7 +1938,7 @@ export const api = {
               channelId,
               channelTitle: payloadOptions?.channelTitle || 'Channel',
               status: 'running',
-              detectedCount: payloadOptions?.videoIds?.length || 8,
+              detectedCount: json.kloterSize || json.totalEnrolled || 50,
               processedCount: 0,
               scheduledCount: 0,
               completedCount: 0,
@@ -1958,7 +1948,14 @@ export const api = {
             const filtered = batches.filter((b) => b.id !== batch.id);
             filtered.unshift(batch);
             setStorageItem(KEYS.BATCHES, filtered);
-            return { success: true, batchId: json.batchId || batch.id, batch };
+            return {
+              success: true,
+              batchId: json.batchId || batch.id,
+              batch,
+              totalEnrolled: json.totalEnrolled,
+              kloterSize: json.kloterSize,
+              message: json.message,
+            };
           }
           if (json.error) {
             throw new Error(json.error);

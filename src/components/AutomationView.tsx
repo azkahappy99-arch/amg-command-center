@@ -167,31 +167,23 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsExecuting(true);
     setShowConfirmModal(false);
     try {
-      const videoIds = includedItems.map((item) => item.videoId);
-      const executionPlan = includedItems.map((item) => ({
-        videoId: item.videoId,
-        title: item.assignedTitle,
-        thumbnailUrl: item.assignedThumbnail,
-        publishDate: item.publishDate,
-        publishTime: item.publishTime,
-        managementScope: item.managementScope,
-      }));
-
+      // Hanya kirim payload ringan { batchSize: 50, channelTitle } - backend mengambil video kandidat langsung dari dbStore internal
       const res = await api.startBatchAutomation(selectedChannelId, selectedProfile?.id, {
-        videoIds,
-        executionPlan,
+        batchSize: 50,
         channelTitle: selectedChannel?.title,
       });
       if (res.success) {
         const batchNum = res.batch?.batchNumber || res.batchId || 'AMG-BATCH';
+        const totalCount = res.totalEnrolled || includedItems.length;
+        const kloterCount = res.kloterSize || Math.min(50, totalCount);
         setExecutionMessage(
-          `Batch ${batchNum} successfully launched into Phase 3 Worker Queue (${includedItems.length} videos)! Pre-mutation snapshots created.`
+          `Batch ${batchNum} (Kloter 1: ${kloterCount} video) berhasil diluncurkan ke antrean Phase 3 Worker untuk total ${totalCount} video! Pemrosesan berantai (auto-chaining) aktif.`
         );
         onAutomationTriggered();
         fetchBatches();
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to launch automation batch');
+      alert(err.message || 'Gagal memulai otomasi batch');
     } finally {
       setIsExecuting(false);
     }
