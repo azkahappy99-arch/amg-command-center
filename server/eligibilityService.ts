@@ -369,7 +369,7 @@ export function detectChannelCandidates(
     throw new Error(`Channel not found: ${channelId}`);
   }
 
-  const profile = channel.contentProfileId ? dbStore.profiles.get(channel.contentProfileId) : null;
+  const profile = dbStore.resolveProfileForChannel(channel);
   const config = resolveEligibilityConfig(channel, profile);
 
   const channelVideos = Array.from(dbStore.videos.values()).filter((v) => v.channelId === channelId);

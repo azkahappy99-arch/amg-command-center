@@ -991,7 +991,7 @@ app.put('/api/channels/:id/schedule-config', (req: Request, res: Response) => {
   channel.updatedAt = new Date().toISOString();
   dbStore.channels.set(channel.id, channel);
 
-  const profile = channel.contentProfileId ? dbStore.profiles.get(channel.contentProfileId) : null;
+  const profile = dbStore.resolveProfileForChannel(channel);
   const resolved = resolveScheduleConfig(channel, profile);
 
   dbStore.logActivity({
@@ -1026,9 +1026,7 @@ app.post('/api/schedule/preview', (req: Request, res: Response) => {
 
   if (channelId) {
     const channel = dbStore.channels.get(channelId);
-    const profile = (profileId || channel?.contentProfileId)
-      ? dbStore.profiles.get(profileId || channel?.contentProfileId || '')
-      : null;
+    const profile = channel ? dbStore.resolveProfileForChannel(channel, profileId) : null;
 
     if (!targetConfig) {
       targetConfig = resolveScheduleConfig(channel, profile);
@@ -3028,14 +3026,11 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       }
     }
 
-    // Resolusikan content profile untuk penugasan rotasi & jadwal
-    const effectiveProfileId = profileId || channel.contentProfileId || '';
-    const prof =
-      dbStore.profiles.get(effectiveProfileId) ||
-      Array.from(dbStore.profiles.values()).find(
-        (p) => (p.channelIds && p.channelIds.includes(channel.id)) || (p.blockId && p.blockId === channel.blockId)
-      ) ||
-      Array.from(dbStore.profiles.values())[0];
+    // Resolusikan content profile untuk penugasan rotasi & jadwal (fallback otomatis jika ID tidak cocok persis)
+    const prof = dbStore.resolveProfileForChannel(channel, profileId);
+    if (!channel.contentProfileId || channel.contentProfileId !== prof.id) {
+      channel.contentProfileId = prof.id;
+    }
 
     // Dapatkan daftar kandidat video internal di sisi server
     let allCandidates: any[] = [];
@@ -3045,7 +3040,7 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       allCandidates = executionPlan;
     } else {
       // Jalankan preview engine internal server untuk mendapatkan penugasan rotasi judul, thumbnail, dan jadwal
-      const previewResult = automationEngine.generatePreview(channel.id, effectiveProfileId);
+      const previewResult = automationEngine.generatePreview(channel.id, prof.id);
       if (previewResult.success && Array.isArray(previewResult.preview)) {
         allCandidates = previewResult.preview.filter(
           (p) =>

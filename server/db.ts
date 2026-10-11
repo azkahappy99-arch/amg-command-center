@@ -662,6 +662,100 @@ class DatabaseStore {
     return undefined;
   }
 
+  public resolveProfileForChannel(channelOrId?: Channel | string, preferredProfileId?: string): ContentProfile {
+    let channel: Channel | undefined;
+    if (typeof channelOrId === 'string') {
+      channel = this.getChannelByIdOrTitle(channelOrId) || this.getChannelByYoutubeId(channelOrId);
+    } else {
+      channel = channelOrId;
+    }
+
+    // 1. Cek preferredProfileId jika ditentukan
+    if (preferredProfileId) {
+      const p = this.profiles.get(preferredProfileId);
+      if (p) return p;
+    }
+
+    // 2. Cek channel.contentProfileId
+    if (channel && channel.contentProfileId) {
+      const p = this.profiles.get(channel.contentProfileId);
+      if (p) return p;
+    }
+
+    // 3. Cek activeProfileId atau blockId pada channel
+    if (channel && (channel as any).activeProfileId) {
+      const p = this.profiles.get((channel as any).activeProfileId);
+      if (p) return p;
+    }
+    if (channel && channel.blockId) {
+      const p = this.profiles.get(channel.blockId);
+      if (p) return p;
+    }
+
+    // 4. Cari profil yang memiliki afiliasi dengan channelId / youtubeChannelId
+    if (channel) {
+      const cId = channel.id;
+      const yId = channel.youtubeChannelId;
+      for (const p of this.profiles.values()) {
+        const isMatch =
+          (p.channelIds && (p.channelIds.includes(cId) || (yId && p.channelIds.includes(yId)))) ||
+          (p as any).channelId === cId ||
+          (yId && (p as any).channelId === yId) ||
+          (channel.blockId && p.blockId === channel.blockId);
+        if (isMatch) return p;
+      }
+    }
+
+    // 5. Pencocokan parsial nama atau ID profil
+    if (preferredProfileId) {
+      const norm = preferredProfileId.toLowerCase();
+      for (const p of this.profiles.values()) {
+        if (p.id.toLowerCase().includes(norm) || p.name.toLowerCase().includes(norm)) {
+          return p;
+        }
+      }
+    }
+
+    // 6. Fallback ke profil aktif standar di database
+    for (const id of ['profile-relaksasi', 'profile-ayam-warna', 'profile-asmr', 'profile-murottal']) {
+      const p = this.profiles.get(id);
+      if (p) return p;
+    }
+
+    const first = Array.from(this.profiles.values())[0];
+    if (first) return first;
+
+    // 7. Jika seluruh profil kosong, buat dan simpan profil default AMG Reguler
+    const defaultProfile: ContentProfile = {
+      id: 'profile-amg-reguler',
+      blockId: 'profile-amg-reguler',
+      name: 'AMG Reguler (General)',
+      description: 'Master profile standar untuk penerbitan suasana relaksasi AMG.',
+      nicheCategory: 'General',
+      nicheBadge: 'emerald',
+      publishFrequency: '1/day',
+      publishTime: '16:00',
+      timezone: 'Asia/Jakarta',
+      scheduleConfig: {
+        mode: 'DAILY',
+        videosPerDay: 1,
+        times: ['16:00'],
+        timezone: 'Asia/Jakarta',
+        startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+      },
+      masterTitleIds: [],
+      masterThumbnailIds: [],
+      assignedChannelCount: channel ? 1 : 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.profiles.set(defaultProfile.id, defaultProfile);
+    if (channel) {
+      channel.contentProfileId = defaultProfile.id;
+    }
+    return defaultProfile;
+  }
+
   public getVideoById(id: string): ManagedVideo | undefined {
     if (!id) return undefined;
     const direct = this.videos.get(id);

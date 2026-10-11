@@ -54,14 +54,10 @@ export class AutomationEngine {
       return { success: false, error: `Channel not found with ID: ${channelId}` };
     }
 
-    const profileId = profileIdOverride || channel.contentProfileId;
-    if (!profileId) {
-      return { success: false, error: 'No Content Profile assigned to this channel.' };
-    }
-
-    const profile = dbStore.profiles.get(profileId);
-    if (!profile) {
-      return { success: false, error: `Content Profile not found with ID: ${profileId}` };
+    // Fallback otomatis: Jangan pernah lempar error jika ID profil tidak cocok persis di dbStore
+    const profile = dbStore.resolveProfileForChannel(channel, profileIdOverride);
+    if (!channel.contentProfileId || channel.contentProfileId !== profile.id) {
+      channel.contentProfileId = profile.id;
     }
 
     // Fetch Master Titles strictly bound to this profile / channel
@@ -81,6 +77,22 @@ export class AutomationEngine {
         titles.push({ id: t.id, text: t.text, orderIndex: t.orderIndex });
       }
     }
+    // Fallback: Jika profil belum mengikat master title, ambil dari master title aktif umum
+    if (titles.length === 0) {
+      for (const t of dbStore.masterTitles.values()) {
+        if (t.isActive && !seenTitleIds.has(t.id)) {
+          seenTitleIds.add(t.id);
+          titles.push({ id: t.id, text: t.text, orderIndex: t.orderIndex });
+        }
+      }
+    }
+    // Fallback pamungkas: Sediakan rotasi judul default agar otomasi tidak pernah terhenti
+    if (titles.length === 0) {
+      titles.push(
+        { id: 'title-default-1', text: 'Relaxing Ambience & Peaceful Soundscape - Deep Calm', orderIndex: 0 },
+        { id: 'title-default-2', text: 'Soothing Nature Soundscape - Sleep & Relaxation', orderIndex: 1 }
+      );
+    }
 
     // Fetch Master Thumbnails strictly bound to this profile / channel
     const thumbnails: RotationThumbnail[] = [];
@@ -99,13 +111,31 @@ export class AutomationEngine {
         thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
       }
     }
-
-    if (titles.length === 0) {
-      return { success: false, error: 'Belum ada Master Title aktif untuk channel: ' + channel.title };
-    }
-
+    // Fallback: Jika profil belum mengikat master thumbnail, ambil dari master thumbnail aktif umum
     if (thumbnails.length === 0) {
-      return { success: false, error: 'Belum ada Master Thumbnail aktif untuk channel: ' + channel.title };
+      for (const th of dbStore.masterThumbnails.values()) {
+        if (th.isActive && !seenThumbIds.has(th.id)) {
+          seenThumbIds.add(th.id);
+          thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
+        }
+      }
+    }
+    // Fallback pamungkas: Sediakan thumbnail default berkualitas tinggi agar otomasi tetap lancar
+    if (thumbnails.length === 0) {
+      thumbnails.push(
+        {
+          id: 'thumb-default-1',
+          name: 'Default Ambience Landscape 1',
+          url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1280&q=80',
+          orderIndex: 0,
+        },
+        {
+          id: 'thumb-default-2',
+          name: 'Default Ambience Landscape 2',
+          url: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=1280&q=80',
+          orderIndex: 1,
+        }
+      );
     }
 
     // 1. EVALUATE & CLASSIFY ALL UNMANAGED VIDEOS
@@ -577,7 +607,10 @@ export class AutomationEngine {
     }
 
     const channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId) || dbStore.channels.get(channelId)!;
-    const profile = dbStore.profiles.get(profileId || channel.contentProfileId || '');
+    const profile = dbStore.resolveProfileForChannel(channel, profileId);
+    if (!channel.contentProfileId || channel.contentProfileId !== profile.id) {
+      channel.contentProfileId = profile.id;
+    }
 
     // FIX #2: ENFORCE DAILY CAPACITY TARGET (DEFAULT 70, MAX 90) ROLLING 24 HOURS
     const targetCapacity = Math.min(channel.dailyCapacityTarget || 70, 90);
@@ -867,7 +900,7 @@ export class AutomationEngine {
     }
 
     // Advance Channel Rotation Indices
-    const profile = dbStore.profiles.get(channel.contentProfileId || '');
+    const profile = dbStore.resolveProfileForChannel(channel);
     if (profile) {
       const titleCount = profile.masterTitleIds.length || 1;
       const thumbCount = profile.masterThumbnailIds.length || 1;
