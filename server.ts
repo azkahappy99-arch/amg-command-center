@@ -41,6 +41,16 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 // Helper to extract authenticated user & session from Authorization header
 function extractAuthSession(req: Request) {
   const authHeader = req.headers.authorization;
@@ -3710,7 +3720,12 @@ async function startServer() {
   });
 }
 
-startServer().catch(err => {
-  console.error('[AMG] Failed to start server:', err);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  startServer().catch(err => {
+    console.error('[AMG] Failed to start server:', err);
+    process.exit(1);
+  });
+}
+
+export { app };
+export default app;
