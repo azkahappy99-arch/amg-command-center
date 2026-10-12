@@ -6,7 +6,7 @@ import { Phase3AutomationJob, MetadataSnapshot, AutomationJob, AutomationBatch, 
 
 export class Phase3Engine {
   private queue: Phase3AutomationJob[] = [];
-  private isProcessing: boolean = false;
+  public isProcessing: boolean = false;
   private snapshots: Map<string, MetadataSnapshot[]> = new Map();
   private lastHeartbeatAt: number = Date.now();
   private retryTimer: NodeJS.Timeout | null = null;
@@ -524,18 +524,50 @@ export class Phase3Engine {
   }
 
   /**
+   * Clears all jobs from queue and halts worker
+   */
+  public clearAllJobs(): void {
+    this.queue = [];
+    this.isProcessing = false;
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  /**
+   * Cancels all jobs for a specific batch
+   */
+  public cancelBatchJobs(batchId: string): void {
+    this.queue = this.queue.filter((j) => j.batchId !== batchId);
+  }
+
+  /**
    * Emergency Rollback: restores mutated videos and cleanly cancels batch (Requirements 12 & 13)
    */
   public async emergencyRollbackBatch(
     batchId: string
   ): Promise<{ restoredCount: number; message: string; success: boolean }> {
-    let snapshots = this.snapshots.get(batchId) || [];
+    let batch = dbStore.automationBatches.get(batchId);
+    if (!batch) {
+      for (const b of dbStore.automationBatches.values()) {
+        if (b.batchNumber === batchId || b.id === batchId) {
+          batch = b;
+          break;
+        }
+      }
+    }
+
+    const targetBatchId = batch ? batch.id : batchId;
+    const targetBatchNum = batch ? batch.batchNumber : batchId;
+
+    let snapshots = this.snapshots.get(targetBatchId) || this.snapshots.get(targetBatchNum) || [];
     let count = 0;
 
     // Fallback: If snapshots map is empty in memory, reconstruct from videos associated with batch
     if (snapshots.length === 0) {
       for (const v of dbStore.videos.values()) {
-        if (v.automationBatchId === batchId) {
+        if (v.automationBatchId === targetBatchId || v.automationBatchId === targetBatchNum) {
           snapshots.push({
             videoId: v.id,
             youtubeVideoId: v.youtubeVideoId,
@@ -543,7 +575,7 @@ export class Phase3Engine {
             thumbnailBefore: v.thumbnailBefore || '',
             privacyStatusBefore: v.privacyStatus || 'private',
             capturedAt: new Date().toISOString(),
-            batchId: batchId,
+            batchId: targetBatchId,
           });
         }
       }
@@ -552,8 +584,8 @@ export class Phase3Engine {
     // Cancel pending / processing jobs in queue for this batch immediately
     for (const job of this.queue) {
       if (
-        job.batchId === batchId &&
-        (job.status === 'PENDING' || job.status === 'RETRYING' || job.status === 'PROCESSING')
+        job.batchId === targetBatchId ||
+        job.batchId === targetBatchNum
       ) {
         job.status = 'FAILED';
         job.lastError = 'Emergency rollback initiated by user.';
@@ -562,7 +594,10 @@ export class Phase3Engine {
     }
 
     for (const j of dbStore.automationJobs.values()) {
-      if (j.batchId === batchId && (j.status === 'pending' || j.status === 'processing')) {
+      if (
+        (j.batchId === targetBatchId || j.batchId === targetBatchNum) &&
+        (j.status === 'pending' || j.status === 'processing')
+      ) {
         j.status = 'failed';
         j.lastError = 'Emergency rollback initiated by user.';
       }
@@ -597,7 +632,7 @@ export class Phase3Engine {
 
     // Release any videos tied to this batch that had no snapshot
     for (const v of dbStore.videos.values()) {
-      if (v.automationBatchId === batchId) {
+      if (v.automationBatchId === targetBatchId || v.automationBatchId === targetBatchNum) {
         v.managementStatus = 'READY';
         v.amgStatus = 'ENROLLED';
         v.isManaged = false;
@@ -606,17 +641,6 @@ export class Phase3Engine {
         v.scheduledPublishAt = undefined;
         v.updatedAt = new Date().toISOString();
         dbStore.videos.set(v.id, v);
-      }
-    }
-
-    // Update batch record to terminal ROLLED_BACK / failed status
-    let batch = dbStore.automationBatches.get(batchId);
-    if (!batch) {
-      for (const b of dbStore.automationBatches.values()) {
-        if (b.batchNumber === batchId) {
-          batch = b;
-          break;
-        }
       }
     }
 

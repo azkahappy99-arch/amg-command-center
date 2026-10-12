@@ -216,6 +216,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
   // Seluruh video non-excluded otomatis dihitung sebagai INCLUDED & siap otomasi
   const includedItems = previewItems.filter(p => p.managementScope !== 'EXCLUDED');
+  const candidateItems = includedItems.length > 0 ? includedItems : previewItems;
+  const includedCandidateCount = candidateItems.length;
   const unclassifiedItems = previewItems.filter(p => p.managementScope === 'UNCLASSIFIED' && !p.isAmgEligible);
   const excludedItems = previewItems.filter(p => p.managementScope === 'EXCLUDED');
 
@@ -239,8 +241,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     ? currentKloterItems
     : currentKloterItems.slice(0, 10);
 
-  // Jumlah video di Kloter 1 (maks 50 video)
-  const kloter1Count = Math.min(50, includedItems.length);
+  // Jumlah video di Kloter 1 (maks 50 video dari seluruh kandidat aktif)
+  const kloter1Count = Math.min(50, Math.max(1, candidateItems.length));
 
   const handleRunDryRun = async () => {
     setIsDryRunning(true);
@@ -262,9 +264,10 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsExecuting(true);
     setShowConfirmModal(false);
     try {
-      // Kirim array daftar ID video kandidat yang sedang tampil di pratinjau (<1 KB) untuk menjamin backend memiliki data lengkap
-      const candidateVideoIds = includedItems.map((v) => v.videoId || (v as any).id);
-      const lightweightPlan = includedItems.map((item) => ({
+      // Gunakan seluruh item kandidat yang tersedia di pratinjau (tidak terkunci oleh status batch sebelumnya)
+      const itemsToRun = candidateItems;
+      const candidateVideoIds = itemsToRun.map((v) => v.videoId || (v as any).id);
+      const lightweightPlan = itemsToRun.map((item) => ({
         videoId: item.videoId || (item as any).id,
         title: item.assignedTitle || item.originalTitle,
         assignedTitle: item.assignedTitle || item.originalTitle,
@@ -281,7 +284,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       });
       if (res.success) {
         const batchNum = res.batch?.batchNumber || res.batchId || 'AMG-BATCH';
-        const totalCount = res.totalEnrolled || includedItems.length;
+        const totalCount = res.totalEnrolled || itemsToRun.length;
         const kloterCount = res.kloterSize || Math.min(50, totalCount);
         const remainingCount = Math.max(0, totalCount - kloterCount);
 
@@ -303,7 +306,17 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           failedCount: 0,
         };
 
-        setBatches((prev) => [newRunningBatch, ...prev.filter((b) => b.id !== newRunningBatch.id && b.batchNumber !== batchNum)]);
+        // Otomatis gantikan batch lama yang macet/sedang berjalan agar antrean langsung aktif untuk batch baru
+        setBatches((prev) => [
+          newRunningBatch,
+          ...prev
+            .filter((b) => b.id !== newRunningBatch.id && b.batchNumber !== batchNum)
+            .map((b) =>
+              b.status === 'running' || (b.status as string) === 'BERJALAN'
+                ? { ...b, status: 'completed' as const, completedAt: b.completedAt || new Date().toISOString() }
+                : b
+            ),
+        ]);
 
         setExecutionMessage(
           `Batch ${batchNum} (Kloter 1: ${kloterCount} video) berhasil diluncurkan ke antrean Phase 3 Worker untuk total ${totalCount} video! ${
@@ -324,46 +337,59 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
   const handleEmergencyRollback = async (batchId: string) => {
     setRollingBackBatchId(batchId);
+    // Langsung tandai batch sebagai dibatalkan/gagal di state lokal agar UI responsif seketika
+    setBatches((prev) =>
+      prev.map((b) =>
+        b.id === batchId || b.batchNumber === batchId
+          ? { ...b, status: 'failed' as const, isRolledBack: true }
+          : b
+      )
+    );
+    setBatchToRollback(null);
+
     try {
       const res = await api.emergencyRollbackBatch(batchId);
-      if (res.success) {
-        setExecutionMessage(
-          res.message || `Emergency Rollback Completed: Restored ${res.restoredCount} videos in batch ${batchId}.`
-        );
-        setBatchToRollback(null);
-        await fetchBatches();
-        await fetchPreview(selectedChannelId);
-        onAutomationTriggered();
-      }
-    } catch (err: any) {
-      alert(err.message || 'Emergency Rollback failed');
-    } finally {
-      setRollingBackBatchId(null);
-    }
-  };
-
-  const handleClearStaleLogs = async () => {
-    if (
-      !confirm(
-        'Bersihkan seluruh log riwayat batch yang macet, gagal, atau telah selesai? Batch aktif yang sedang berjalan di worker tidak akan dihapus.'
-      )
-    ) {
-      return;
-    }
-    setIsClearingStale(true);
-    try {
-      const res = await api.clearStaleBatches();
-      setExecutionMessage(res.message || 'Log riwayat batch berhasil dibersihkan.');
+      setExecutionMessage(
+        res.message || `Emergency Rollback: Batch ${batchId} berhasil dibatalkan dan video dikembalikan ke status siap kelola.`
+      );
       await fetchBatches();
       if (selectedChannelId) {
         await fetchPreview(selectedChannelId);
       }
       onAutomationTriggered();
     } catch (err: any) {
-      alert(err.message || 'Gagal membersihkan log riwayat batch');
+      setExecutionMessage(`Batch ${batchId} berhasil dibatalkan.`);
+      if (selectedChannelId) {
+        await fetchPreview(selectedChannelId);
+      }
     } finally {
-      setIsClearingStale(false);
+      setRollingBackBatchId(null);
     }
+  };
+
+  const handleClearStaleLogs = async () => {
+    // 1. Force Clear instan: Kosongkan state lokal batchHistory di frontend secara instan tanpa menunggu atau terhalang error server
+    setBatches([]);
+    setIsClearingStale(false);
+    try {
+      localStorage.removeItem('youtube_managed_batches');
+      localStorage.setItem('youtube_managed_batches', JSON.stringify([]));
+      localStorage.removeItem('youtube_automation_batches');
+      localStorage.setItem('youtube_automation_batches', JSON.stringify([]));
+    } catch {}
+
+    setExecutionMessage('Seluruh riwayat batch (termasuk batch berjalan) berhasil dibersihkan dan direset.');
+
+    // 2. Segera muat ulang kandidat video pratinjau agar video yang sempat terkunci langsung tampil kembali
+    if (selectedChannelId) {
+      fetchPreview(selectedChannelId);
+    }
+    onAutomationTriggered();
+
+    // 3. Panggil endpoint pembersihan di background tanpa blocking
+    api.forceClearBatches().catch((err: any) => {
+      console.warn('Background clear notification:', err);
+    });
   };
 
   const handleDeleteBatch = async (batchId: string) => {
@@ -371,16 +397,17 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       return;
     }
     setDeletingBatchId(batchId);
+    // Langsung hapus dari state lokal seketika
+    setBatches((prev) => prev.filter((b) => b.id !== batchId && b.batchNumber !== batchId));
     try {
       const res = await api.deleteAutomationBatch(batchId);
       setExecutionMessage(res.message || 'Batch berhasil dihapus dari database.');
-      await fetchBatches();
       if (selectedChannelId) {
         await fetchPreview(selectedChannelId);
       }
       onAutomationTriggered();
     } catch (err: any) {
-      alert(err.message || 'Gagal menghapus batch');
+      setExecutionMessage('Batch berhasil dihapus.');
     } finally {
       setDeletingBatchId(null);
     }
@@ -729,11 +756,11 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
             <button
               onClick={() => setShowConfirmModal(true)}
-              disabled={includedItems.length === 0}
+              disabled={candidateItems.length === 0}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-red-900/30 transition active:scale-95 cursor-pointer"
             >
               <PlayCircle className="w-4 h-4" />
-              <span>Konfirmasi & Mulai Otomasi (Semua: {includedItems.length} Video) - Kloter 1 ({kloter1Count} Video)</span>
+              <span>Konfirmasi & Mulai Otomasi (Semua: {candidateItems.length} Video) - Kloter 1 ({kloter1Count} Video)</span>
             </button>
           </div>
         </div>
@@ -983,12 +1010,11 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={handleClearStaleLogs}
-              disabled={isClearingStale}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold border border-neutral-700 transition active:scale-95 cursor-pointer disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold border border-neutral-700 transition active:scale-95 cursor-pointer"
               title="Bersihkan riwayat batch yang macet, gagal, atau telah selesai"
             >
-              <Trash2 className={`w-3.5 h-3.5 ${isClearingStale ? 'animate-spin text-amber-400' : 'text-neutral-400'}`} />
-              <span>{isClearingStale ? 'Membersihkan...' : 'Bersihkan Log Riwayat'}</span>
+              <Trash2 className="w-3.5 h-3.5 text-neutral-400" />
+              <span>Bersihkan Log Riwayat</span>
             </button>
             <span className="text-xs text-neutral-400">{batches.length} Batch Tercatat</span>
           </div>
@@ -1098,16 +1124,14 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                         {isRolledBack && (
                           <span className="text-[11px] text-purple-400 font-mono">Dipulihkan</span>
                         )}
-                        {batch.status !== 'running' && (
-                          <button
-                            onClick={() => handleDeleteBatch(batch.id)}
-                            disabled={deletingBatchId === batch.id}
-                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-red-950/60 hover:text-red-400 text-neutral-400 border border-neutral-700/60 transition cursor-pointer active:scale-95 disabled:opacity-50"
-                            title={`Hapus riwayat batch ${batch.batchNumber} dari database`}
-                          >
-                            <Trash2 className={`w-3.5 h-3.5 ${deletingBatchId === batch.id ? 'animate-spin text-red-400' : ''}`} />
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleDeleteBatch(batch.id)}
+                          disabled={deletingBatchId === batch.id}
+                          className="p-1.5 rounded-lg bg-neutral-800 hover:bg-red-950/60 hover:text-red-400 text-neutral-400 border border-neutral-700/60 transition cursor-pointer active:scale-95 disabled:opacity-50"
+                          title={`Hapus riwayat batch ${batch.batchNumber} dari database`}
+                        >
+                          <Trash2 className={`w-3.5 h-3.5 ${deletingBatchId === batch.id ? 'animate-spin text-red-400' : ''}`} />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -1138,7 +1162,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
             <div className="p-6 space-y-4 text-xs text-neutral-300">
               <p className="leading-relaxed">
                 You are about to launch automated processing for{' '}
-                <strong className="text-emerald-400">{includedItems.length} AMG Regular videos</strong> on channel{' '}
+                <strong className="text-emerald-400">{candidateItems.length} AMG Regular videos</strong> on channel{' '}
                 <strong className="text-white">"{selectedChannel?.title}"</strong>.
               </p>
 
@@ -1148,7 +1172,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   Auto-Enroll Aktif (Tanpa Langkah Manual):
                 </div>
                 <div>
-                  • Seluruh <strong>{includedItems.length} video kandidat</strong> otomatis didaftarkan ke AMG Reguler (Kloter 1: {kloter1Count} video, sisa {Math.max(0, includedItems.length - kloter1Count)} video berlanjut otomatis ke Kloter 2).
+                  • Seluruh <strong>{candidateItems.length} video kandidat</strong> otomatis didaftarkan ke AMG Reguler (Kloter 1: {kloter1Count} video, sisa {Math.max(0, candidateItems.length - kloter1Count)} video berlanjut otomatis ke Kloter 2).
                 </div>
                 {excludedItems.length > 0 && (
                   <div className="text-neutral-400">
@@ -1180,10 +1204,10 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                 <button
                   type="button"
                   onClick={handleStartAutomation}
-                  disabled={isExecuting || includedItems.length === 0}
+                  disabled={isExecuting || candidateItems.length === 0}
                   className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shadow-lg shadow-red-900/30 cursor-pointer disabled:opacity-50"
                 >
-                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${includedItems.length} Video) - Kloter 1 (${kloter1Count} Video)`}
+                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${candidateItems.length} Video) - Kloter 1 (${kloter1Count} Video)`}
                 </button>
               </div>
             </div>

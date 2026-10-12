@@ -156,13 +156,14 @@ export class AutomationEngine {
         (channelId && video.channelId === channelId);
       if (!isChannelMatch) continue;
 
-      if (video.isManaged || video.managementStatus === 'COMPLETED' || video.managementStatus === 'SCHEDULED') {
+      const isAlreadyDone = video.managementStatus === 'COMPLETED' && video.taskStatus?.title === 'SUCCESS';
+      if (isAlreadyDone) {
         alreadyManagedCount++;
         continue;
       }
 
       // If video is already explicitly enrolled and ready as REGULAR
-      if (video.isEnrolled && video.managementScope === 'REGULAR' && video.isAmgEligible) {
+      if (video.isEnrolled && video.managementScope === 'REGULAR' && video.isAmgEligible && !isAlreadyDone) {
         enrolledRegularVideos.push(video);
         continue;
       }
@@ -174,12 +175,10 @@ export class AutomationEngine {
       video.matchedTitlePattern = evalRes.matchedTitlePattern;
       video.isProtected = evalRes.isProtected;
 
-      // Auto-Enroll Tanpa Syarat Manual: Seluruh video privat mentah tanpa jadwal tayang yang tidak dikecualikan
+      // Auto-Enroll Tanpa Syarat Manual: Seluruh video privat mentah yang tidak dikecualikan
       // otomatis didaftarkan (auto-enroll) sebagai REGULAR yang siap otomasi untuk Kloter 1 dan Kloter 2.
       const isPrivateRawCandidate =
         (video.privacyStatus || 'private').toLowerCase() === 'private' &&
-        !video.publishAt &&
-        !video.scheduledPublishAt &&
         video.managementScope !== 'EXCLUDED';
 
       if (isPrivateRawCandidate || evalRes.category === 'NEW_PRIVATE_CANDIDATE' || evalRes.category === 'ELIGIBLE') {

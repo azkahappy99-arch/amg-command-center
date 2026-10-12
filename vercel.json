@@ -10,6 +10,18 @@
     { "source": "/api/batch/execute", "destination": "/api/batch/execute" },
     { "source": "/api/automation/execute", "destination": "/api/automation/execute" },
     { "source": "/api/automation/batch/execute", "destination": "/api/automation/batch/execute" },
+    { "source": "/api/automation/clear-history", "destination": "/api/automation/clear-history" },
+    { "source": "/api/automation/batches/clear", "destination": "/api/automation/clear-history" },
+    { "source": "/api/automation/batches/clear-stale", "destination": "/api/automation/clear-history" },
+    { "source": "/api/automation/clear", "destination": "/api/automation/clear-history" },
+    { "source": "/api/automation/process-next", "destination": "/api/automation/process-next" },
+    { "source": "/api/phase3/process-next", "destination": "/api/automation/process-next" },
+    { "source": "/api/phase3/rollback/:batchId*", "destination": "/api/phase3/rollback" },
+    { "source": "/api/phase3/rollback", "destination": "/api/phase3/rollback" },
+    { "source": "/api/automation/batches/:id*/rollback", "destination": "/api/phase3/rollback" },
+    { "source": "/api/automation/rollback/:batchId*", "destination": "/api/phase3/rollback" },
+    { "source": "/api/automation/rollback", "destination": "/api/phase3/rollback" },
+    { "source": "/api/phase3/queue-status", "destination": "/api/phase3/queue-status" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]

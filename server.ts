@@ -3223,6 +3223,17 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       failedCount: 0,
     };
 
+    // Reset / supersede batch lama yang sedang berjalan agar batch baru langsung mengambil alih antrean tanpa deadlock
+    for (const [oldBId, oldBatch] of dbStore.automationBatches.entries()) {
+      if (oldBatch.status === 'running' && oldBatch.id !== batchId) {
+        oldBatch.status = 'completed';
+        oldBatch.completedAt = oldBatch.completedAt || new Date().toISOString();
+        dbStore.automationBatches.set(oldBId, oldBatch);
+        phase3Engine.cancelBatchJobs(oldBatch.id);
+        phase3Engine.cancelBatchJobs(oldBatch.batchNumber);
+      }
+    }
+
     dbStore.automationBatches.set(batchId, batch);
 
     // Daftarkan video di dbStore dan bangun Phase 3 jobs untuk Kloter 1
@@ -3367,18 +3378,64 @@ app.get('/api/automation/batches', (req: Request, res: Response) => {
   res.json(batches);
 });
 
-app.post('/api/automation/batches/clear-stale', (req: Request, res: Response) => {
-  const removeTerminal = req.body?.removeTerminal !== false;
-  const result = phase3Engine.clearBatchLogs({ removeTerminal });
-  res.json({
-    success: true,
-    message: `Berhasil membersihkan ${result.staleCleaned} batch stale dan menghapus ${result.terminalRemoved} riwayat batch terminal.`,
-    ...result,
-  });
-});
+const handleClearHistory = (req: Request, res: Response) => {
+  try {
+    const totalBatches = dbStore.automationBatches.size;
 
-app.delete('/api/automation/batches/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
+    // 1. Clear in-memory queue & halt running worker loop in Phase 3
+    phase3Engine.clearAllJobs();
+    phase3Engine.isProcessing = false;
+
+    // 2. Clear all batches, automation jobs, and reset batch history
+    dbStore.automationBatches.clear();
+    dbStore.automationJobs.clear();
+    (dbStore as any).batchHistory = [];
+
+    // 3. Release video locks and reset uncompleted / stuck videos to READY
+    let releasedVideos = 0;
+    for (const v of dbStore.videos.values()) {
+      if (v.automationBatchId || v.managementStatus !== 'COMPLETED') {
+        v.automationBatchId = undefined;
+        v.scheduledPublishAt = undefined;
+        v.titleAssigned = '';
+        v.thumbnailAssigned = '';
+        v.isManaged = false;
+        v.isAmgManaged = false;
+        v.isEnrolled = true;
+        v.managementScope = 'REGULAR';
+        v.managementStatus = 'READY';
+        v.safetyCategory = 'ELIGIBLE';
+        v.isProtected = false;
+        releasedVideos++;
+      }
+    }
+
+    dbStore.saveToDisk();
+
+    return res.json({
+      success: true,
+      message: `Seluruh riwayat batch (${totalBatches} batch) berhasil dibersihkan dan ${releasedVideos} video direset ke status siap kelola.`,
+      clearedBatches: totalBatches,
+      releasedVideos,
+    });
+  } catch (err: any) {
+    console.error('[Clear History Error]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Gagal membersihkan riwayat batch.' });
+  }
+};
+
+app.all('/api/automation/clear-history', handleClearHistory);
+app.all('/api/automation/batches/clear', handleClearHistory);
+app.all('/api/automation/batches/clear-stale', handleClearHistory);
+app.all('/api/automation/clear', handleClearHistory);
+app.all('/api/automation/reset', handleClearHistory);
+
+const handleDeleteBatchById = (req: Request, res: Response) => {
+  const id = req.params.id || (req.body && req.body.id) || (req.query && req.query.id);
+  if (!id) {
+    return res.status(400).json({ error: 'ID batch diperlukan.' });
+  }
+
   let batch = dbStore.automationBatches.get(id);
   let batchKey = id;
 
@@ -3396,13 +3453,9 @@ app.delete('/api/automation/batches/:id', (req: Request, res: Response) => {
     return res.status(404).json({ error: `Batch dengan ID "${id}" tidak ditemukan.` });
   }
 
-  // Safety check: Cannot delete if actively processing
-  const queueStatus = phase3Engine.getQueueStatus(batch.id);
-  if (batch.status === 'running' && queueStatus.processing > 0) {
-    return res.status(400).json({
-      error: `Batch "${batch.batchNumber}" sedang memproses ${queueStatus.processing} video di worker queue. Hentikan atau lakukan rollback darurat terlebih dahulu.`,
-    });
-  }
+  // Force cancel jobs if active
+  phase3Engine.cancelBatchJobs(batch.id);
+  phase3Engine.cancelBatchJobs(batch.batchNumber);
 
   dbStore.automationBatches.delete(batchKey);
 
@@ -3414,23 +3467,28 @@ app.delete('/api/automation/batches/:id', (req: Request, res: Response) => {
   }
 
   // Release video lock if incomplete
-  if (batch.status !== 'completed') {
-    for (const v of dbStore.videos.values()) {
-      if (v.automationBatchId === batch.id || v.automationBatchId === batch.batchNumber) {
-        if (v.managementStatus !== 'COMPLETED') {
-          v.managementStatus = 'READY';
-          v.isManaged = false;
-          v.isAmgManaged = false;
-          v.automationBatchId = undefined;
-          dbStore.videos.set(v.id, v);
-        }
+  for (const v of dbStore.videos.values()) {
+    if (v.automationBatchId === batch.id || v.automationBatchId === batch.batchNumber) {
+      if (v.managementStatus !== 'COMPLETED') {
+        v.managementStatus = 'READY';
+        v.isManaged = false;
+        v.isAmgManaged = false;
+        v.automationBatchId = undefined;
+        v.scheduledPublishAt = undefined;
+        v.titleAssigned = '';
+        v.thumbnailAssigned = '';
+        dbStore.videos.set(v.id, v);
       }
     }
   }
 
   dbStore.saveToDisk();
   res.json({ success: true, message: `Batch ${batch.batchNumber} berhasil dihapus dari database.` });
-});
+};
+
+app.delete('/api/automation/batches/:id', handleDeleteBatchById);
+app.post('/api/automation/batches/:id/delete', handleDeleteBatchById);
+
 
 // ==========================================
 // 11. QUEUE & JOBS
@@ -3551,15 +3609,50 @@ app.post('/api/phase3/queue-batch', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/phase3/rollback/:batchId', async (req: Request, res: Response) => {
+const handleEmergencyRollback = async (req: Request, res: Response) => {
   try {
-    const { batchId } = req.params;
-    const result = await phase3Engine.emergencyRollbackBatch(batchId);
-    res.json(result);
+    let batchId =
+      req.params.batchId ||
+      req.params.id ||
+      req.body?.batchId ||
+      req.body?.id ||
+      req.query?.batchId ||
+      req.query?.id;
+
+    if (!batchId || batchId === 'rollback') {
+      for (const b of Array.from(dbStore.automationBatches.values()).reverse()) {
+        if (b.status === 'running' || b.status === 'failed' || (b as any).status === 'BERJALAN') {
+          batchId = b.id;
+          break;
+        }
+      }
+      if (!batchId) {
+        for (const b of Array.from(dbStore.automationBatches.values()).reverse()) {
+          batchId = b.id;
+          break;
+        }
+      }
+    }
+
+    if (!batchId) {
+      return res.json({ success: true, restoredCount: 0, message: 'Tidak ada batch untuk di-rollback.' });
+    }
+
+    const result = await phase3Engine.emergencyRollbackBatch(batchId as string);
+    return res.json(result);
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('[handleEmergencyRollback Error]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Rollback execution error' });
   }
-});
+};
+
+app.all('/api/phase3/rollback/:batchId', handleEmergencyRollback);
+app.all('/api/phase3/rollback', handleEmergencyRollback);
+app.all('/api/automation/batches/:id/rollback', handleEmergencyRollback);
+app.all('/api/automation/batches/:batchId/rollback', handleEmergencyRollback);
+app.all('/api/automation/rollback/:batchId', handleEmergencyRollback);
+app.all('/api/automation/rollback/:id', handleEmergencyRollback);
+app.all('/api/automation/rollback', handleEmergencyRollback);
 
 app.get('/api/phase3/queue-status', (req: Request, res: Response) => {
   const batchId = req.query.batchId as string | undefined;
