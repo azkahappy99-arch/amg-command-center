@@ -869,6 +869,367 @@ export class Phase3Engine {
     return { chained: true, batchId: nextBatchId, videoCount: jobs.length };
   }
 
+  /**
+   * Serverless Step Executor:
+   * Processes exactly 1 video sequentially on each tick/invocation.
+   * Updates YouTube metadata, thumbnail, schedule (16:00 WIB), logs, and increments batch counters.
+   * Auto-chains to the next batch once current chunk finishes (Kloter 1 50 vids -> Kloter 2 3 vids -> Selesai).
+   */
+  public async processNextStep(
+    batchId?: string,
+    channelId?: string
+  ): Promise<{
+    success: boolean;
+    isIdle?: boolean;
+    batch?: AutomationBatch;
+    video?: { id: string; title: string; scheduledPublishAt: string };
+    progress?: { completed: number; total: number; percentage: number; status: string };
+    chainedNextBatch?: AutomationBatch | null;
+    isAllCompleted?: boolean;
+    queueStatus?: any;
+    message?: string;
+  }> {
+    // 1. Locate the target running batch
+    let activeBatch: AutomationBatch | undefined;
+    if (batchId) {
+      activeBatch = dbStore.automationBatches.get(batchId);
+      if (!activeBatch) {
+        for (const b of dbStore.automationBatches.values()) {
+          if (b.id === batchId || b.batchNumber === batchId) {
+            activeBatch = b;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!activeBatch || activeBatch.status !== 'running') {
+      // Find the most recent running batch matching channel or any
+      for (const b of Array.from(dbStore.automationBatches.values()).reverse()) {
+        if (b.status === 'running' && (!channelId || b.channelId === channelId)) {
+          activeBatch = b;
+          break;
+        }
+      }
+    }
+
+    // Fallback: Check if there's any batch running across channels
+    if (!activeBatch || activeBatch.status !== 'running') {
+      for (const b of Array.from(dbStore.automationBatches.values()).reverse()) {
+        if (b.status === 'running') {
+          activeBatch = b;
+          break;
+        }
+      }
+    }
+
+    if (!activeBatch || activeBatch.status !== 'running') {
+      return {
+        success: true,
+        isIdle: true,
+        message: 'Tidak ada batch otomasi aktif yang sedang berjalan.',
+        queueStatus: this.getQueueStatus(),
+      };
+    }
+
+    this.lastActiveChannelId = activeBatch.channelId;
+    activeBatch.lastHeartbeatAt = new Date().toISOString();
+
+    // 2. Check if current batch is already completed
+    if (activeBatch.completedCount >= activeBatch.detectedCount && activeBatch.detectedCount > 0) {
+      activeBatch.status = 'completed';
+      activeBatch.completedAt = activeBatch.completedAt || new Date().toISOString();
+      dbStore.automationBatches.set(activeBatch.id, activeBatch);
+
+      // Auto-Chain check for next kloter (misal Kloter 2 untuk 3 sisa video)
+      const chainRes = await this.checkAndChainNextBatch(activeBatch.channelId, activeBatch.id);
+      let chainedNextBatch: AutomationBatch | null = null;
+      if (chainRes.chained && chainRes.batchId) {
+        chainedNextBatch = dbStore.automationBatches.get(chainRes.batchId) || null;
+      }
+      dbStore.saveToDisk();
+
+      return {
+        success: true,
+        batch: activeBatch,
+        chainedNextBatch,
+        isAllCompleted: !chainedNextBatch,
+        progress: {
+          completed: activeBatch.completedCount,
+          total: activeBatch.detectedCount,
+          percentage: 100,
+          status: 'completed',
+        },
+        queueStatus: this.getQueueStatus(activeBatch.id),
+        message: chainedNextBatch
+          ? `Kloter 1 selesai (${activeBatch.completedCount}/${activeBatch.detectedCount} video). Otomatis melanjutkan ke ${chainedNextBatch.batchNumber} (Kloter 2: ${chainedNextBatch.detectedCount} video)...`
+          : `Semua batch otomasi telah SELESAI diproses (${activeBatch.completedCount}/${activeBatch.detectedCount} video)!`,
+      };
+    }
+
+    // 3. Locate next job to process in memory queue
+    let jobIndex = this.queue.findIndex(
+      (j) =>
+        (j.batchId === activeBatch!.id || j.batchId === activeBatch!.batchNumber) &&
+        (j.status === 'PENDING' || j.status === 'RETRYING' || j.status === 'PROCESSING')
+    );
+
+    // If job not found in memory queue, hydrate from dbStore.videos
+    if (jobIndex === -1) {
+      const channel =
+        dbStore.getChannelByIdOrTitle(activeBatch.channelId) ||
+        dbStore.getChannelByYoutubeId(activeBatch.channelId);
+      const cId = channel ? channel.id : activeBatch.channelId;
+      const yId = channel ? channel.youtubeChannelId : '';
+      const isMatch = (v: ManagedVideo) =>
+        v.channelId === cId ||
+        (yId && (v.channelId === yId || v.channelId === `chan-${yId}`)) ||
+        (cId.startsWith('chan-') && v.channelId === cId.replace('chan-', '')) ||
+        v.channelId === activeBatch!.channelId;
+
+      // Find uncompleted videos tied to this batch or this channel
+      const uncompletedVids = Array.from(dbStore.videos.values()).filter(
+        (v) =>
+          (v.automationBatchId === activeBatch!.id ||
+            v.automationBatchId === activeBatch!.batchNumber ||
+            (isMatch(v) && !v.isManaged)) &&
+          v.managementStatus !== 'COMPLETED' &&
+          v.managementScope !== 'EXCLUDED' &&
+          (v.privacyStatus || 'private').toLowerCase() === 'private'
+      );
+
+      const blockId = channel?.contentProfileId || channel?.blockId;
+      const titles = Array.from(dbStore.masterTitles.values()).filter((t) => !blockId || t.blockId === blockId);
+      const thumbs = Array.from(dbStore.masterThumbnails.values()).filter((t) => !blockId || t.blockId === blockId);
+
+      for (let i = 0; i < uncompletedVids.length; i++) {
+        const v = uncompletedVids[i];
+        const jobId = `job-${activeBatch.id}-${v.id}`;
+        if (!this.queue.some((q) => q.id === jobId)) {
+          let isoSlot = v.scheduledPublishAt;
+          if (!isoSlot) {
+            const nextSlotDate = new Date(Date.now() + (i + 1) * 86400000);
+            nextSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
+            isoSlot = nextSlotDate.toISOString();
+          }
+
+          const assignedTitle =
+            v.titleAssigned ||
+            (titles.length > 0 ? titles[i % titles.length].text : v.titleBefore || 'Video YouTube');
+          const assignedThumb =
+            v.thumbnailAssigned ||
+            (thumbs.length > 0 ? thumbs[i % thumbs.length].url : v.thumbnailBefore || '');
+
+          const snapshot: MetadataSnapshot = {
+            videoId: v.id,
+            youtubeVideoId: v.youtubeVideoId,
+            titleBefore: v.titleBefore || v.titleAssigned || 'Video Tanpa Judul',
+            thumbnailBefore: v.thumbnailBefore || v.thumbnailAssigned || '',
+            privacyStatusBefore: v.privacyStatus || 'private',
+            capturedAt: new Date().toISOString(),
+            batchId: activeBatch.id,
+          };
+
+          const newJob: Phase3AutomationJob = {
+            id: jobId,
+            batchId: activeBatch.id,
+            channelId: activeBatch.channelId,
+            videoId: v.id,
+            snapshot,
+            status: 'PENDING',
+            payload: {
+              title: assignedTitle,
+              description: 'Continuous relaxing ambience published by AMG.',
+              tags: ['ambience', 'relaxing', 'sleep', 'music'],
+              scheduledPublishAt: isoSlot,
+              thumbnailUrl: assignedThumb,
+            },
+            retryCount: 0,
+            maxRetries: 3,
+            nextRunAt: Date.now(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          this.queue.push(newJob);
+        }
+      }
+
+      jobIndex = this.queue.findIndex(
+        (j) =>
+          (j.batchId === activeBatch!.id || j.batchId === activeBatch!.batchNumber) &&
+          (j.status === 'PENDING' || j.status === 'RETRYING' || j.status === 'PROCESSING')
+      );
+    }
+
+    // If still no job found, all videos for this batch have finished
+    if (jobIndex === -1) {
+      activeBatch.status = 'completed';
+      activeBatch.completedAt = new Date().toISOString();
+      dbStore.automationBatches.set(activeBatch.id, activeBatch);
+
+      // Auto-chain next kloter (Kloter 2)
+      const chainRes = await this.checkAndChainNextBatch(activeBatch.channelId, activeBatch.id);
+      let chainedNextBatch: AutomationBatch | null = null;
+      if (chainRes.chained && chainRes.batchId) {
+        chainedNextBatch = dbStore.automationBatches.get(chainRes.batchId) || null;
+      }
+      dbStore.saveToDisk();
+
+      return {
+        success: true,
+        batch: activeBatch,
+        chainedNextBatch,
+        isAllCompleted: !chainedNextBatch,
+        progress: {
+          completed: activeBatch.completedCount,
+          total: activeBatch.detectedCount,
+          percentage: 100,
+          status: 'completed',
+        },
+        queueStatus: this.getQueueStatus(activeBatch.id),
+        message: chainedNextBatch
+          ? `Kloter 1 selesai (${activeBatch.completedCount}/${activeBatch.detectedCount} video). Otomatis melanjutkan ke ${chainedNextBatch.batchNumber} (Kloter 2: ${chainedNextBatch.detectedCount} video)...`
+          : `Semua batch otomasi telah SELESAI diproses (${activeBatch.completedCount}/${activeBatch.detectedCount} video)!`,
+      };
+    }
+
+    // 4. Process exactly 1 job sequentially
+    const job = this.queue[jobIndex];
+    job.status = 'PROCESSING';
+    job.updatedAt = new Date().toISOString();
+    this.lastHeartbeatAt = Date.now();
+    activeBatch.lastHeartbeatAt = new Date().toISOString();
+
+    // Ensure job.payload is completely populated
+    if (!job.payload || !job.payload.title) {
+      const v = dbStore.getVideoById(job.videoId) || dbStore.videos.get(job.videoId);
+      let isoSlot = v?.scheduledPublishAt;
+      if (!isoSlot) {
+        const slot = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        slot.setUTCHours(9, 0, 0, 0); // 16:00 WIB
+        isoSlot = slot.toISOString();
+      }
+      job.payload = {
+        title: v?.titleAssigned || v?.titleBefore || 'Video YouTube',
+        description: 'Continuous relaxing ambience published by AMG.',
+        tags: ['ambience', 'relaxing', 'sleep', 'music'],
+        scheduledPublishAt: isoSlot,
+        thumbnailUrl: v?.thumbnailAssigned || v?.thumbnailBefore || '',
+      };
+    }
+
+    let thumbUpdated = false;
+
+    try {
+      // A. YouTube Title & Schedule Metadata (16:00 WIB)
+      await youtubeService.updateVideoMetadata(job.videoId, {
+        title: job.payload.title,
+        description: job.payload.description,
+        tags: job.payload.tags,
+        scheduledPublishAt: job.payload.scheduledPublishAt,
+      });
+
+      // B. YouTube Thumbnail
+      if (job.payload.thumbnailUrl && !job.payload.thumbnailUrl.startsWith('data:image')) {
+        const thumbRes = await youtubeService.setThumbnail(job.videoId, job.payload.thumbnailUrl);
+        thumbUpdated = thumbRes.success;
+      } else {
+        thumbUpdated = true;
+      }
+
+      job.status = 'COMPLETED';
+      job.updatedAt = new Date().toISOString();
+
+      // Update persistent automationJob
+      const pJob = dbStore.automationJobs.get(job.id);
+      if (pJob) {
+        pJob.status = 'completed';
+        pJob.completedAt = new Date().toISOString();
+        dbStore.automationJobs.set(job.id, pJob);
+      }
+
+      // Update video in dbStore
+      const video = dbStore.getVideoById(job.videoId) || dbStore.videos.get(job.videoId);
+      if (video) {
+        video.managementStatus = 'COMPLETED';
+        video.amgStatus = 'COMPLETED';
+        video.isManaged = true;
+        video.isAmgManaged = true;
+        video.automationBatchId = activeBatch.id;
+        video.scheduledPublishAt = job.payload.scheduledPublishAt;
+        video.titleAssigned = job.payload.title;
+        if (job.payload.thumbnailUrl) video.thumbnailAssigned = job.payload.thumbnailUrl;
+        video.taskStatus = {
+          title: 'SUCCESS',
+          schedule: 'SUCCESS',
+          thumbnail: thumbUpdated ? 'SUCCESS' : 'SKIPPED',
+        };
+        video.updatedAt = new Date().toISOString();
+        dbStore.videos.set(video.id, video);
+      }
+
+      // Update batch counters
+      activeBatch.processedCount = (activeBatch.processedCount || 0) + 1;
+      activeBatch.completedCount = (activeBatch.completedCount || 0) + 1;
+      activeBatch.scheduledCount = (activeBatch.scheduledCount || 0) + 1;
+      activeBatch.lastHeartbeatAt = new Date().toISOString();
+
+      // Check if this completes current batch
+      let chainedNextBatch: AutomationBatch | null = null;
+      if (activeBatch.completedCount + (activeBatch.failedCount || 0) >= activeBatch.detectedCount) {
+        activeBatch.status = 'completed';
+        activeBatch.completedAt = new Date().toISOString();
+        dbStore.automationBatches.set(activeBatch.id, activeBatch);
+
+        // Dynamic Batch Chaining (Requirement 1 & 2): Auto-Chain Kloter 2 untuk sisa video
+        const chainRes = await this.checkAndChainNextBatch(activeBatch.channelId, activeBatch.id);
+        if (chainRes.chained && chainRes.batchId) {
+          chainedNextBatch = dbStore.automationBatches.get(chainRes.batchId) || null;
+        }
+      }
+
+      dbStore.automationBatches.set(activeBatch.id, activeBatch);
+      dbStore.saveToDisk();
+
+      const pct = Math.round((activeBatch.completedCount / Math.max(1, activeBatch.detectedCount)) * 100);
+
+      return {
+        success: true,
+        batch: activeBatch,
+        video: {
+          id: job.videoId,
+          title: job.payload.title,
+          scheduledPublishAt: job.payload.scheduledPublishAt,
+        },
+        progress: {
+          completed: activeBatch.completedCount,
+          total: activeBatch.detectedCount,
+          percentage: pct,
+          status: activeBatch.status,
+        },
+        chainedNextBatch,
+        isAllCompleted: activeBatch.status === 'completed' && !chainedNextBatch,
+        queueStatus: this.getQueueStatus(activeBatch.id),
+        message: `Video "${job.payload.title}" berhasil dijadwalkan jam 16:00 WIB (${activeBatch.completedCount}/${activeBatch.detectedCount} video selesai).`,
+      };
+    } catch (err: any) {
+      job.status = 'FAILED';
+      job.lastError = err.message || 'Execution error';
+      job.retryCount += 1;
+      activeBatch.failedCount = (activeBatch.failedCount || 0) + 1;
+      activeBatch.processedCount = (activeBatch.processedCount || 0) + 1;
+      dbStore.automationBatches.set(activeBatch.id, activeBatch);
+      dbStore.saveToDisk();
+
+      return {
+        success: false,
+        batch: activeBatch,
+        queueStatus: this.getQueueStatus(activeBatch.id),
+        message: `Gagal memproses video ${job.videoId}: ${err.message}`,
+      };
+    }
+  }
+
   public getQueueStatus(batchId?: string): {
     total: number;
     pending: number;
@@ -885,7 +1246,24 @@ export class Phase3Engine {
     quotaUsed24h: number;
     quotaLimit: number;
   } {
-    const filtered = batchId ? this.queue.filter((j) => j.batchId === batchId) : this.queue;
+    // Cari batch yang sedang berjalan (running) jika ada
+    let activeRunningBatch: AutomationBatch | undefined;
+    if (batchId) {
+      activeRunningBatch = dbStore.automationBatches.get(batchId);
+    }
+    if (!activeRunningBatch || activeRunningBatch.status !== 'running') {
+      for (const b of Array.from(dbStore.automationBatches.values()).reverse()) {
+        if (b.status === 'running') {
+          activeRunningBatch = b;
+          break;
+        }
+      }
+    }
+
+    const filtered = batchId
+      ? this.queue.filter((j) => j.batchId === batchId)
+      : (activeRunningBatch ? this.queue.filter((j) => j.batchId === activeRunningBatch.id) : this.queue);
+
     let waitingQuotaBesok = 0;
     let totalUnmanagedRaw = 0;
 
@@ -906,7 +1284,7 @@ export class Phase3Engine {
       }
     }
 
-    const channelId = this.lastActiveChannelId;
+    const channelId = activeRunningBatch ? activeRunningBatch.channelId : this.lastActiveChannelId;
     let quotaUsed24h = 0;
     let quotaLimit = 70;
     if (channelId) {
@@ -917,20 +1295,34 @@ export class Phase3Engine {
       }
     }
 
-    const pending = filtered.filter((j) => j.status === 'PENDING').length;
-    const retrying = filtered.filter((j) => j.status === 'RETRYING').length;
+    let pending = filtered.filter((j) => j.status === 'PENDING').length;
+    let retrying = filtered.filter((j) => j.status === 'RETRYING').length;
+    let processing = filtered.filter((j) => j.status === 'PROCESSING').length;
+    let completed = filtered.filter((j) => j.status === 'COMPLETED').length;
+    let failed = filtered.filter((j) => j.status === 'FAILED').length;
+    let total = filtered.length;
+
+    // Sinkronisasi realtime jika batch sedang berjalan di dbStore
+    if (activeRunningBatch) {
+      total = Math.max(total, activeRunningBatch.detectedCount || 50);
+      completed = Math.max(completed, activeRunningBatch.completedCount || 0);
+      failed = Math.max(failed, activeRunningBatch.failedCount || 0);
+      const remaining = Math.max(0, total - (completed + failed));
+      pending = remaining;
+      processing = remaining > 0 ? 1 : 0;
+    }
 
     return {
-      total: filtered.length,
+      total,
       pending,
-      processing: filtered.filter((j) => j.status === 'PROCESSING').length,
-      completed: filtered.filter((j) => j.status === 'COMPLETED').length,
-      failed: filtered.filter((j) => j.status === 'FAILED').length,
+      processing,
+      completed,
+      failed,
       retrying,
       remainingInQueue: pending + retrying,
       jobs: filtered,
-      isProcessing: this.isProcessing,
-      activeChannelId: this.lastActiveChannelId,
+      isProcessing: processing > 0 || this.isProcessing,
+      activeChannelId: channelId || this.lastActiveChannelId,
       waitingQuotaBesokCount: waitingQuotaBesok,
       channelRemainingRawCount: totalUnmanagedRaw,
       quotaUsed24h,

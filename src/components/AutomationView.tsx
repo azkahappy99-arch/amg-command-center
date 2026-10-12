@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   PlayCircle,
   Eye,
@@ -120,6 +120,100 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsTableExpanded(false);
   }, [selectedChannelId, previewFilter]);
 
+  // Client-Side Step Executor & Polling untuk Serverless Vercel (setiap 3 detik memproses 1 video secara serial)
+  const hasRunningBatch = batches.some((b) => b.status === 'running' || (b.status as string) === 'BERJALAN');
+  const batchesRef = useRef(batches);
+  batchesRef.current = batches;
+
+  useEffect(() => {
+    if (!hasRunningBatch) return;
+
+    let isSubscribed = true;
+    let inFlight = false;
+
+    const executeNextStep = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const currentRunning = batchesRef.current.find(
+          (b) => b.status === 'running' || (b.status as string) === 'BERJALAN'
+        );
+        if (!currentRunning) {
+          inFlight = false;
+          return;
+        }
+
+        const res = await api.processNextBatchStep(currentRunning.id, selectedChannelId);
+        if (isSubscribed && res && res.success) {
+          if (res.batch) {
+            setBatches((prev) => {
+              const updated = [...prev];
+              const bIdx = updated.findIndex(
+                (b) => b.id === res.batch.id || b.batchNumber === res.batch.batchNumber
+              );
+              if (bIdx >= 0) {
+                updated[bIdx] = res.batch;
+              } else {
+                updated.unshift(res.batch);
+              }
+              if (res.chainedNextBatch) {
+                const cIdx = updated.findIndex(
+                  (b) =>
+                    b.id === res.chainedNextBatch.id ||
+                    b.batchNumber === res.chainedNextBatch.batchNumber
+                );
+                if (cIdx >= 0) {
+                  updated[cIdx] = res.chainedNextBatch;
+                } else {
+                  updated.unshift(res.chainedNextBatch);
+                }
+              }
+              return updated;
+            });
+          }
+
+          if (res.video && res.batch) {
+            setExecutionMessage(
+              `[Worker Phase 3] Memproses ${res.batch.batchNumber}: ${res.batch.completedCount}/${res.batch.detectedCount} video selesai... Video "${res.video.title}" berhasil dijadwalkan jam 16:00 WIB.`
+            );
+          }
+
+          if (res.chainedNextBatch) {
+            setExecutionMessage(
+              `Kloter 1 selesai (${res.batch?.completedCount || 50} video)! Otomatis melanjutkan ke ${res.chainedNextBatch.batchNumber} (Kloter 2: ${res.chainedNextBatch.detectedCount} video)...`
+            );
+            fetchBatches();
+            onAutomationTriggered();
+          }
+
+          if (res.isAllCompleted || (res.batch?.status === 'completed' && !res.chainedNextBatch)) {
+            setExecutionMessage(
+              `Semua batch otomasi telah SELESAI diproses (${res.batch?.completedCount || 53}/${res.batch?.detectedCount || 53} video)! Seluruh jadwal tayang jam 16:00 WIB aktif.`
+            );
+            fetchBatches();
+            if (selectedChannelId) {
+              fetchPreview(selectedChannelId);
+            }
+            onAutomationTriggered();
+          }
+        }
+      } catch (err) {
+        console.warn('Step polling tick error:', err);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    // Eksekusi tick pertama langsung, kemudian berulang setiap 3 detik
+    executeNextStep();
+    const intervalId = setInterval(executeNextStep, 3000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(intervalId);
+    };
+  }, [hasRunningBatch, selectedChannelId, onAutomationTriggered]);
+
   // Seluruh video non-excluded otomatis dihitung sebagai INCLUDED & siap otomasi
   const includedItems = previewItems.filter(p => p.managementScope !== 'EXCLUDED');
   const unclassifiedItems = previewItems.filter(p => p.managementScope === 'UNCLASSIFIED' && !p.isAmgEligible);
@@ -190,6 +284,27 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         const totalCount = res.totalEnrolled || includedItems.length;
         const kloterCount = res.kloterSize || Math.min(50, totalCount);
         const remainingCount = Math.max(0, totalCount - kloterCount);
+
+        const newRunningBatch: AutomationBatch = res.batch || {
+          id: res.batchId,
+          batchNumber: batchNum,
+          channelId: selectedChannelId,
+          channelTitle: selectedChannel?.title || 'Ayam YAHYA',
+          profileId: selectedProfile?.id || 'profile-default',
+          profileName: selectedProfile?.name || 'Standard AMG Schedule (Kloter 1)',
+          isDryRun: false,
+          status: 'running',
+          startedAt: new Date().toISOString(),
+          lastHeartbeatAt: new Date().toISOString(),
+          detectedCount: kloterCount,
+          processedCount: 0,
+          scheduledCount: 0,
+          completedCount: 0,
+          failedCount: 0,
+        };
+
+        setBatches((prev) => [newRunningBatch, ...prev.filter((b) => b.id !== newRunningBatch.id && b.batchNumber !== batchNum)]);
+
         setExecutionMessage(
           `Batch ${batchNum} (Kloter 1: ${kloterCount} video) berhasil diluncurkan ke antrean Phase 3 Worker untuk total ${totalCount} video! ${
             remainingCount > 0

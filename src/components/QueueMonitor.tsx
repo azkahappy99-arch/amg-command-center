@@ -82,7 +82,8 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
         setErrorMsg(null);
 
         // Serverless compatibility: Proactively tick worker if jobs are waiting but idle
-        if (pending > 0 && processing === 0) {
+        if (remaining > 0) {
+          api.processNextBatchStep().catch(() => {});
           api.workerTickPhase3().catch(() => {});
         }
       }

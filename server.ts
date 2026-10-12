@@ -3346,6 +3346,22 @@ app.post('/api/batch/execute', requireAuth, handleStartBatchAutomation);
 app.post('/api/automation/execute', requireAuth, handleStartBatchAutomation);
 app.post('/api/automation/batch/execute', requireAuth, handleStartBatchAutomation);
 
+const handleProcessNextStep = async (req: Request, res: Response) => {
+  try {
+    const { batchId, channelId } = req.body || req.query || {};
+    const result = await phase3Engine.processNextStep(batchId as string, channelId as string);
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[handleProcessNextStep Error]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Error processing next step' });
+  }
+};
+
+app.post('/api/automation/process-next', handleProcessNextStep);
+app.get('/api/automation/process-next', handleProcessNextStep);
+app.post('/api/phase3/process-next', handleProcessNextStep);
+app.post('/api/automation/step', handleProcessNextStep);
+
 app.get('/api/automation/batches', (req: Request, res: Response) => {
   const batches = Array.from(dbStore.automationBatches.values()).reverse();
   res.json(batches);

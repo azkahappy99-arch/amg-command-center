@@ -2000,6 +2000,48 @@ export const api = {
     throw new Error('Server error: Gagal memulai batch otomasi pada server.');
   },
 
+  processNextBatchStep: async (batchId?: string, channelId?: string) => {
+    try {
+      const res = await authFetch('/api/automation/process-next', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId, channelId }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.batch) {
+          // Update local batch storage so UI updates instantly
+          const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
+          const idx = batches.findIndex(
+            (b) => b.id === json.batch.id || b.batchNumber === json.batch.batchNumber
+          );
+          if (idx >= 0) {
+            batches[idx] = json.batch;
+          } else {
+            batches.unshift(json.batch);
+          }
+          if (json.chainedNextBatch) {
+            const cIdx = batches.findIndex(
+              (b) =>
+                b.id === json.chainedNextBatch.id ||
+                b.batchNumber === json.chainedNextBatch.batchNumber
+            );
+            if (cIdx >= 0) {
+              batches[cIdx] = json.chainedNextBatch;
+            } else {
+              batches.unshift(json.chainedNextBatch);
+            }
+          }
+          setStorageItem(KEYS.BATCHES, batches);
+        }
+        return json;
+      }
+    } catch (e) {
+      console.warn('[api.processNextBatchStep] Error stepping batch:', e);
+    }
+    return { success: false };
+  },
+
   getAutomationBatches: async () => {
     try {
       const res = await authFetch('/api/automation/batches');
