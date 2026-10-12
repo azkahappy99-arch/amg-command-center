@@ -1899,15 +1899,32 @@ export const api = {
     payloadOptions?: {
       batchSize?: number;
       channelTitle?: string;
+      videoIds?: string[];
+      executionPlan?: Array<{
+        videoId: string;
+        title?: string;
+        assignedTitle?: string;
+        assignedThumbnail?: string;
+        thumbnailUrl?: string;
+        publishDate?: string;
+        publishTime?: string;
+        scheduledPublishAt?: string;
+      }>;
     }
   ) => {
-    // Only send lightweight payload (<100 bytes) - never send large video arrays or base64 thumbnail strings
-    const payload = {
+    // Lightweight payload (< 1 KB) - send channel, profile, batchSize, and candidate videoIds / lightweight execution plan
+    const payload: Record<string, any> = {
       channelId,
       profileId,
       batchSize: payloadOptions?.batchSize || 50,
       channelTitle: payloadOptions?.channelTitle,
     };
+    if (Array.isArray(payloadOptions?.videoIds) && payloadOptions.videoIds.length > 0) {
+      payload.videoIds = payloadOptions.videoIds;
+    }
+    if (Array.isArray(payloadOptions?.executionPlan) && payloadOptions.executionPlan.length > 0) {
+      payload.executionPlan = payloadOptions.executionPlan;
+    }
 
     const endpoints = [
       '/api/automation/start',

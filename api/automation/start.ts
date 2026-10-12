@@ -105,8 +105,104 @@ export default async function handler(req: any, res: any) {
     // Dapatkan daftar kandidat video internal di sisi server
     let allCandidates: any[] = [];
 
-    // Jika executionPlan sempat dikirim dari pemanggil eksternal dan bukan kosong, gunakan itu
-    if (Array.isArray(executionPlan) && executionPlan.length > 0) {
+    // Prioritas 1: Jika videoIds dikirim langsung dari frontend (daftar ID video yang tampil di UI pratinjau)
+    if (Array.isArray(videoIds) && videoIds.length > 0) {
+      console.log(`[api/automation/start] Menggunakan ${videoIds.length} videoIds langsung dari request frontend.`);
+
+      const planMap = new Map<string, any>();
+      if (Array.isArray(executionPlan)) {
+        for (const p of executionPlan) {
+          if (p && p.videoId) planMap.set(p.videoId, p);
+        }
+      }
+
+      const blockId = prof?.blockId || channel.blockId;
+      const titles = Array.from(dbStore.masterTitles.values()).filter((t) => !blockId || t.blockId === blockId);
+      const thumbs = Array.from(dbStore.masterThumbnails.values()).filter((t) => !blockId || t.blockId === blockId);
+
+      let anchorPublishAt = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+      let anchorTime = anchorPublishAt ? new Date(anchorPublishAt).getTime() : Date.now();
+      if (isNaN(anchorTime) || anchorTime <= Date.now()) {
+        anchorTime = Date.now();
+      }
+
+      for (let idx = 0; idx < videoIds.length; idx++) {
+        const vidId = videoIds[idx];
+        const ytId = vidId.startsWith('yt-vid-') ? vidId.replace('yt-vid-', '') : vidId;
+        let v = dbStore.getVideoById(vidId) || dbStore.videos.get(vidId);
+        const pItem = planMap.get(vidId);
+
+        const assignedTitle =
+          pItem?.assignedTitle ||
+          pItem?.title ||
+          (titles.length > 0 ? titles[idx % titles.length].text : (v?.titleAssigned || v?.titleBefore || 'Video YouTube'));
+
+        const assignedThumbnail =
+          pItem?.assignedThumbnail ||
+          pItem?.thumbnailUrl ||
+          (thumbs.length > 0 ? thumbs[idx % thumbs.length].url : (v?.thumbnailAssigned || v?.thumbnailBefore || ''));
+
+        const nextSlotDate = new Date(anchorTime + (idx + 1) * 24 * 60 * 60 * 1000);
+        nextSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
+        const isoSlot = pItem?.scheduledPublishAt || nextSlotDate.toISOString();
+        const dateStr = pItem?.publishDate || isoSlot.split('T')[0];
+        const timeStr = pItem?.publishTime || '16:00 WIB';
+
+        if (!v) {
+          v = {
+            id: vidId,
+            youtubeVideoId: ytId,
+            channelId: channel.id,
+            channelTitle: channel.title,
+            titleBefore: pItem?.originalTitle || 'Video YouTube',
+            titleAssigned: assignedTitle,
+            thumbnailBefore: '',
+            thumbnailAssigned: assignedThumbnail,
+            originalUploadAt: new Date(Date.now() - (videoIds.length - idx) * 3600000).toISOString(),
+            uploadedAt: new Date().toISOString(),
+            processingStatus: 'processed',
+            privacyStatus: 'private',
+            managementStatus: 'READY',
+            managementScope: 'REGULAR',
+            isAmgEligible: true,
+            isManaged: false,
+            isEnrolled: true,
+            isProtected: false,
+            scheduledPublishAt: isoSlot,
+            retryCount: 0,
+            isSeeded: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        } else {
+          v.channelId = channel.id;
+          v.titleAssigned = assignedTitle;
+          v.thumbnailAssigned = assignedThumbnail;
+          v.scheduledPublishAt = isoSlot;
+          v.managementScope = 'REGULAR';
+          v.isAmgEligible = true;
+          v.isEnrolled = true;
+          v.isProtected = false;
+          v.managementStatus = 'READY';
+          v.privacyStatus = 'private';
+        }
+        dbStore.videos.set(v.id, v);
+
+        allCandidates.push({
+          videoId: v.id,
+          originalTitle: v.titleBefore,
+          assignedTitle,
+          originalThumbnail: v.thumbnailBefore,
+          assignedThumbnail,
+          publishDate: dateStr,
+          publishTime: timeStr,
+          scheduledPublishAt: isoSlot,
+          managementScope: 'REGULAR',
+          isAmgEligible: true,
+          status: 'READY',
+        });
+      }
+    } else if (Array.isArray(executionPlan) && executionPlan.length > 0) {
       allCandidates = executionPlan;
     } else {
       const previewResult = automationEngine.generatePreview(channel.id, prof.id);
@@ -139,6 +235,7 @@ export default async function handler(req: any, res: any) {
           const assignedTitle = titles.length > 0 ? titles[idx % titles.length].text : (v.titleAssigned || v.titleBefore || 'Video YouTube');
           const assignedThumbnail = thumbs.length > 0 ? thumbs[idx % thumbs.length].url : (v.thumbnailAssigned || v.thumbnailBefore || '');
           const baseDate = new Date(Date.now() + (idx + 1) * 24 * 60 * 60 * 1000);
+          baseDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
           return {
             videoId: v.id,
             assignedTitle,

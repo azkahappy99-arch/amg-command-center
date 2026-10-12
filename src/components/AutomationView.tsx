@@ -168,10 +168,22 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsExecuting(true);
     setShowConfirmModal(false);
     try {
-      // Hanya kirim payload ringan { batchSize: 50, channelTitle } - backend mengambil video kandidat langsung dari dbStore internal
+      // Kirim array daftar ID video kandidat yang sedang tampil di pratinjau (<1 KB) untuk menjamin backend memiliki data lengkap
+      const candidateVideoIds = includedItems.map((v) => v.videoId || (v as any).id);
+      const lightweightPlan = includedItems.map((item) => ({
+        videoId: item.videoId || (item as any).id,
+        title: item.assignedTitle || item.originalTitle,
+        assignedTitle: item.assignedTitle || item.originalTitle,
+        assignedThumbnail: item.assignedThumbnail && !item.assignedThumbnail.startsWith('data:image') ? item.assignedThumbnail : '',
+        publishDate: item.publishDate,
+        publishTime: item.publishTime,
+      }));
+
       const res = await api.startBatchAutomation(selectedChannelId, selectedProfile?.id, {
         batchSize: 50,
         channelTitle: selectedChannel?.title,
+        videoIds: candidateVideoIds,
+        executionPlan: lightweightPlan,
       });
       if (res.success) {
         const batchNum = res.batch?.batchNumber || res.batchId || 'AMG-BATCH';
