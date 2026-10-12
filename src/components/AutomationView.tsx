@@ -120,13 +120,14 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsTableExpanded(false);
   }, [selectedChannelId, previewFilter]);
 
-  const includedItems = previewItems.filter(p => p.managementScope === 'REGULAR' && p.isAmgEligible);
-  const unclassifiedItems = previewItems.filter(p => p.managementScope === 'UNCLASSIFIED');
+  // Seluruh video non-excluded otomatis dihitung sebagai INCLUDED & siap otomasi
+  const includedItems = previewItems.filter(p => p.managementScope !== 'EXCLUDED');
+  const unclassifiedItems = previewItems.filter(p => p.managementScope === 'UNCLASSIFIED' && !p.isAmgEligible);
   const excludedItems = previewItems.filter(p => p.managementScope === 'EXCLUDED');
 
   const visiblePreviewItems = previewItems.filter(item => {
-    if (previewFilter === 'INCLUDED') return item.managementScope === 'REGULAR' && item.isAmgEligible;
-    if (previewFilter === 'UNCLASSIFIED') return item.managementScope === 'UNCLASSIFIED';
+    if (previewFilter === 'INCLUDED') return item.managementScope !== 'EXCLUDED';
+    if (previewFilter === 'UNCLASSIFIED') return item.managementScope === 'UNCLASSIFIED' && !item.isAmgEligible;
     if (previewFilter === 'EXCLUDED') return item.managementScope === 'EXCLUDED';
     return true;
   });
@@ -176,8 +177,13 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         const batchNum = res.batch?.batchNumber || res.batchId || 'AMG-BATCH';
         const totalCount = res.totalEnrolled || includedItems.length;
         const kloterCount = res.kloterSize || Math.min(50, totalCount);
+        const remainingCount = Math.max(0, totalCount - kloterCount);
         setExecutionMessage(
-          `Batch ${batchNum} (Kloter 1: ${kloterCount} video) berhasil diluncurkan ke antrean Phase 3 Worker untuk total ${totalCount} video! Pemrosesan berantai (auto-chaining) aktif.`
+          `Batch ${batchNum} (Kloter 1: ${kloterCount} video) berhasil diluncurkan ke antrean Phase 3 Worker untuk total ${totalCount} video! ${
+            remainingCount > 0
+              ? `Sisa ${remainingCount} video otomatis berlanjut ke Kloter 2 (auto-chaining).`
+              : 'Pemrosesan berantai aktif.'
+          }`
         );
         onAutomationTriggered();
         fetchBatches();
@@ -694,26 +700,16 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                         className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
                           item.status === 'READY'
                             ? 'bg-emerald-950 text-emerald-400 border-emerald-800/40'
-                            : item.status === 'NEEDS_SCOPE'
-                            ? 'bg-amber-950 text-amber-400 border-amber-800/40'
-                            : item.status === 'BLOCKED_EXCLUDED'
+                            : item.managementScope === 'EXCLUDED' || item.status === 'BLOCKED_EXCLUDED'
                             ? 'bg-neutral-900 text-neutral-400 border-neutral-700'
-                            : 'bg-blue-950 text-blue-400 border-blue-800/40'
+                            : 'bg-emerald-950 text-emerald-400 border-emerald-800/40'
                         }`}
                       >
-                        {item.status}
+                        {item.managementScope === 'EXCLUDED' || item.status === 'BLOCKED_EXCLUDED' ? 'EXCLUDED' : 'SIAP OTOMASI'}
                       </span>
                     </td>
                     <td className="py-3 px-3 text-right whitespace-nowrap">
-                      {item.managementScope === 'REGULAR' && item.isAmgEligible ? (
-                        <button
-                          onClick={() => handleExcludeItem(item.videoId)}
-                          disabled={isEnrolling}
-                          className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 transition cursor-pointer"
-                        >
-                          Kecualikan
-                        </button>
-                      ) : item.managementScope === 'EXCLUDED' ? (
+                      {item.managementScope === 'EXCLUDED' ? (
                         <button
                           onClick={() => handleEnrollItem(item.videoId)}
                           disabled={isEnrolling}
@@ -722,22 +718,13 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                           Masukkan Kembali
                         </button>
                       ) : (
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleEnrollItem(item.videoId)}
-                            disabled={isEnrolling}
-                            className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-700 hover:bg-emerald-600 text-white transition shadow cursor-pointer"
-                          >
-                            Daftarkan ke AMG
-                          </button>
-                          <button
-                            onClick={() => handleExcludeItem(item.videoId)}
-                            disabled={isEnrolling}
-                            className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-neutral-800 hover:bg-neutral-700 text-neutral-400 transition cursor-pointer"
-                          >
-                            Kecualikan
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => handleExcludeItem(item.videoId)}
+                          disabled={isEnrolling}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 transition cursor-pointer"
+                        >
+                          Kecualikan
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -1028,20 +1015,20 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                 <strong className="text-white">"{selectedChannel?.title}"</strong>.
               </p>
 
-              {(unclassifiedItems.length > 0 || excludedItems.length > 0) && (
-                <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/50 text-[11px] text-amber-300 space-y-1">
-                  <div className="font-semibold flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                    Strict Scope Protection Active:
-                  </div>
-                  <div>
-                    • <strong>{excludedItems.length} Excluded videos</strong> will be untouched.
-                  </div>
-                  <div>
-                    • <strong>{unclassifiedItems.length} Unclassified videos</strong> will NOT be processed until you assign them to AMG Regular in Video Catalog.
-                  </div>
+              <div className="p-3 rounded-xl bg-emerald-950/30 border border-emerald-800/50 text-[11px] text-emerald-300 space-y-1">
+                <div className="font-semibold flex items-center gap-1.5 text-emerald-300">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  Auto-Enroll Aktif (Tanpa Langkah Manual):
                 </div>
-              )}
+                <div>
+                  • Seluruh <strong>{includedItems.length} video kandidat</strong> otomatis didaftarkan ke AMG Reguler (Kloter 1: {kloter1Count} video, sisa {Math.max(0, includedItems.length - kloter1Count)} video berlanjut otomatis ke Kloter 2).
+                </div>
+                {excludedItems.length > 0 && (
+                  <div className="text-neutral-400">
+                    • <strong>{excludedItems.length} video dikecualikan</strong> tetap terlindungi dan tidak akan diubah.
+                  </div>
+                )}
+              </div>
 
               <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2 text-[11px]">
                 <div className="font-semibold text-neutral-200">Rencana Eksekusi Berantai (Auto-Chaining):</div>

@@ -531,19 +531,21 @@ export function validateBeforeMutation(
     };
   }
 
-  // 4. Must be enrolled & regular scope
-  if (!video.isEnrolled && video.managementStatus !== 'READY' && video.managementStatus !== 'ENROLLED') {
-    return {
-      isValid: false,
-      reason: `SAFETY GATE BLOCKED: Video is not enrolled in AMG (managementStatus="${video.managementStatus}", isEnrolled=${video.isEnrolled}).`,
-      video,
-    };
+  // 4. Auto-enroll check: Jika video sedang diproses dalam batch dan tidak berstatus EXCLUDED, otomatis izinkan
+  if (video.automationBatchId && video.managementScope !== 'EXCLUDED') {
+    video.managementScope = 'REGULAR';
+    video.isAmgEligible = true;
+    video.isEnrolled = true;
+    video.isProtected = false;
+    if (video.managementStatus !== 'PROCESSING' && video.managementStatus !== 'COMPLETED') {
+      video.managementStatus = 'READY';
+    }
   }
 
-  if (video.managementScope !== 'REGULAR' || !video.isAmgEligible) {
+  if (video.managementScope === 'EXCLUDED') {
     return {
       isValid: false,
-      reason: `SAFETY GATE BLOCKED: Video scope is "${video.managementScope}" with isAmgEligible=${video.isAmgEligible}. Must be REGULAR and eligible.`,
+      reason: `SAFETY GATE BLOCKED: Video scope is EXCLUDED.`,
       video,
     };
   }

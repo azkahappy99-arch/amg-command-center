@@ -2,7 +2,7 @@ import { dbStore } from './db.js';
 import { eligibilityService } from './eligibilityService.js';
 import { youtubeService } from './youtubeService.js';
 import { youtubeDataService } from './youtubeDataService.js';
-import { Phase3AutomationJob, MetadataSnapshot, AutomationJob, AutomationBatch } from '../src/types/index.js';
+import { Phase3AutomationJob, MetadataSnapshot, AutomationJob, AutomationBatch, ManagedVideo } from '../src/types/index.js';
 
 export class Phase3Engine {
   private queue: Phase3AutomationJob[] = [];
@@ -731,23 +731,37 @@ export class Phase3Engine {
       return { chained: false };
     }
 
-    // 2. Cari video mentah berstatus INCLUDED / REGULAR yang belum dikelola pada channel ini
+    // 2. Cari video mentah berstatus INCLUDED / REGULAR / kandidat private yang belum dikelola pada channel ini
     const cId = channel.id;
     const yId = channel.youtubeChannelId;
+    const isChannelMatch = (v: ManagedVideo) => {
+      return (
+        v.channelId === cId ||
+        (yId && (v.channelId === yId || v.channelId === `chan-${yId}`)) ||
+        (cId.startsWith('chan-') && v.channelId === cId.replace('chan-', '')) ||
+        (channel.id && v.channelId === channel.id)
+      );
+    };
+
     const remainingVideos: any[] = [];
 
     for (const v of dbStore.videos.values()) {
-      const belongs = v.channelId === cId || (yId && (v.channelId === yId || v.channelId === `chan-${yId}`));
+      const belongs = isChannelMatch(v);
       if (
         belongs &&
-        v.managementScope === 'REGULAR' &&
-        v.isAmgEligible &&
         !v.isManaged &&
+        v.managementScope !== 'EXCLUDED' &&
         v.managementStatus !== 'COMPLETED' &&
         v.managementStatus !== 'PROCESSING' &&
-        (v.privacyStatus || '').toLowerCase() === 'private' &&
+        (v.privacyStatus || 'private').toLowerCase() === 'private' &&
         !v.publishAt
       ) {
+        // Auto-enroll agar Kloter 2 dapat berjalan mulus tanpa hambatan
+        v.managementScope = 'REGULAR';
+        v.isAmgEligible = true;
+        v.isEnrolled = true;
+        v.isProtected = false;
+
         // Pastikan belum ada di queue aktif in-memory
         const inQueue = this.queue.some(
           (j) => j.videoId === v.id && (j.status === 'PENDING' || j.status === 'PROCESSING')
@@ -801,12 +815,17 @@ export class Phase3Engine {
     };
     dbStore.automationBatches.set(nextBatchId, nextBatch);
 
-    // Penjadwalan kontinu deterministik dari jangkar kursor terakhir
+    // Penjadwalan kontinu deterministik dari jangkar kursor terakhir (1 video per hari jam 16:00 WIB)
     let anchorPublishAt = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
     let anchorTime = anchorPublishAt ? new Date(anchorPublishAt).getTime() : Date.now();
     if (isNaN(anchorTime) || anchorTime <= Date.now()) {
       anchorTime = Date.now() + 24 * 60 * 60 * 1000;
     }
+
+    const prof = dbStore.resolveProfileForChannel(channel, channel.contentProfileId);
+    const blockId = prof?.blockId || channel.blockId;
+    const titles = Array.from(dbStore.masterTitles.values()).filter((t) => !blockId || t.blockId === blockId);
+    const thumbs = Array.from(dbStore.masterThumbnails.values()).filter((t) => !blockId || t.blockId === blockId);
 
     const jobs = [];
     for (let idx = 0; idx < nextChunk.length; idx++) {
@@ -815,18 +834,26 @@ export class Phase3Engine {
       v.isEnrolled = true;
       v.automationBatchId = nextBatchId;
 
-      const title = v.titleAssigned || v.titleBefore || 'Video YouTube';
-      const thumb = v.thumbnailAssigned || v.thumbnailBefore || '';
+      const title =
+        v.titleAssigned ||
+        (titles.length > 0 ? titles[idx % titles.length].text : (v.titleBefore || 'Video YouTube'));
+      const thumb =
+        v.thumbnailAssigned ||
+        (thumbs.length > 0 ? thumbs[idx % thumbs.length].url : (v.thumbnailBefore || ''));
 
-      // Slot berurutan kontinu harian
-      const nextSlotDate = new Date(anchorTime + (idx + 1) * 24 * 60 * 60 * 1000);
-      const isoSlot = v.scheduledPublishAt || nextSlotDate.toISOString();
+      // Slot berurutan kontinu harian jam 16:00 WIB (09:00 UTC)
+      let isoSlot = v.scheduledPublishAt;
+      if (!isoSlot) {
+        const nextSlotDate = new Date(anchorTime + (idx + 1) * 24 * 60 * 60 * 1000);
+        nextSlotDate.setUTCHours(9, 0, 0, 0);
+        isoSlot = nextSlotDate.toISOString();
+      }
 
       jobs.push({
         videoId: v.id,
         payload: {
           title,
-          description: 'Continuous relaxing ambience published by AMG.',
+          description: prof?.description || 'Continuous relaxing ambience published by AMG.',
           tags: ['ambience', 'relaxing', 'sleep', 'music'],
           scheduledPublishAt: isoSlot,
           thumbnailUrl: thumb,

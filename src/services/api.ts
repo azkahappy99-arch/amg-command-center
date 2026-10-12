@@ -1811,6 +1811,7 @@ export const api = {
     const candidateVideos = channelVideos.filter((v) => {
       if (v.isManaged || v.managementStatus === 'COMPLETED') return false;
       if (v.managementScope === 'EXCLUDED') return false;
+      if ((v.privacyStatus || 'private').toLowerCase() === 'private' && !v.publishAt && !v.scheduledPublishAt) return true;
       if ((v.managementScope === 'REGULAR' && v.isAmgEligible) || v.isEnrolled) return true;
       const evalRes = evaluateVideoEligibilityWithBlock(v, channel, targetBlock);
       return evalRes.isEligible || evalRes.category === 'NEW_PRIVATE_CANDIDATE';

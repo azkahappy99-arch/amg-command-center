@@ -3172,7 +3172,7 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         dbStore.videos.set(video.id, video);
       }
 
-      // Hitung jadwal kontinu slot publikasi
+      // Hitung jadwal kontinu slot publikasi (1 video per hari jam 16:00 WIB = 09:00 UTC)
       let isoPublishAt = item.scheduledPublishAt;
       if (!isoPublishAt) {
         if (item.publishDate && item.publishTime) {
@@ -3182,6 +3182,7 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
           isoPublishAt = slotDate.toISOString();
         } else {
           const baseDate = new Date(Date.now() + (idx + 1) * 24 * 60 * 60 * 1000);
+          baseDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
           isoPublishAt = baseDate.toISOString();
         }
       }
@@ -3196,6 +3197,24 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
           thumbnailUrl: item.assignedThumbnail || item.thumbnailUrl || video.thumbnailAssigned || '',
         },
       });
+    }
+
+    // Pastikan seluruh sisa kandidat untuk Kloter 2+ (misal video ke-51 s/d 53) juga terdaftar rapi di dbStore.videos
+    for (let idx = kloter1Limit; idx < allCandidates.length; idx++) {
+      const item = allCandidates[idx];
+      let video = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
+      if (video) {
+        if (item.assignedTitle || item.title) video.titleAssigned = item.assignedTitle || item.title;
+        if (item.assignedThumbnail || item.thumbnailUrl) video.thumbnailAssigned = item.assignedThumbnail || item.thumbnailUrl;
+        if (item.scheduledPublishAt) video.scheduledPublishAt = item.scheduledPublishAt;
+        video.managementScope = 'REGULAR';
+        video.isAmgEligible = true;
+        video.isEnrolled = true;
+        video.isProtected = false;
+        video.managementStatus = 'READY';
+        video.privacyStatus = 'private';
+        dbStore.videos.set(video.id, video);
+      }
     }
 
     await phase3Engine.enqueueBatchJobs(batchId, channel.id, phase3Jobs);

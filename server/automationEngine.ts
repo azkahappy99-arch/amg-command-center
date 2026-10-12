@@ -174,11 +174,21 @@ export class AutomationEngine {
       video.matchedTitlePattern = evalRes.matchedTitlePattern;
       video.isProtected = evalRes.isProtected;
 
-      if (evalRes.category === 'NEW_PRIVATE_CANDIDATE' || evalRes.category === 'ELIGIBLE') {
+      // Auto-Enroll Tanpa Syarat Manual: Seluruh video privat mentah tanpa jadwal tayang yang tidak dikecualikan
+      // otomatis didaftarkan (auto-enroll) sebagai REGULAR yang siap otomasi untuk Kloter 1 dan Kloter 2.
+      const isPrivateRawCandidate =
+        (video.privacyStatus || 'private').toLowerCase() === 'private' &&
+        !video.publishAt &&
+        !video.scheduledPublishAt &&
+        video.managementScope !== 'EXCLUDED';
+
+      if (isPrivateRawCandidate || evalRes.category === 'NEW_PRIVATE_CANDIDATE' || evalRes.category === 'ELIGIBLE') {
         video.managementScope = 'REGULAR';
         video.isAmgEligible = true;
         video.isEnrolled = true;
+        video.isProtected = false;
         video.managementStatus = video.processingStatus === 'processed' ? 'READY' : 'DISCOVERED';
+        video.safetyCategory = 'ELIGIBLE';
         enrolledRegularVideos.push(video);
       } else if (evalRes.category === 'PROTECTED_OLD') {
         protectedOldVideos.push(video);
@@ -578,31 +588,68 @@ export class AutomationEngine {
       return { success: false, error: previewResult.error };
     }
 
-    // Only process videos that are explicitly enrolled as AMG REGULAR
-    let enrolledItems = previewResult.preview.filter((p) => p.managementScope === 'REGULAR' && p.isAmgEligible);
-    if (enrolledItems.length === 0) {
-      const candidates = previewResult.preview.filter((p) => p.status === 'READY');
-      if (candidates.length > 0) {
-        for (const item of candidates) {
-          const v = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
-          if (v && !v.isManaged && v.managementScope !== 'EXCLUDED') {
-            v.managementScope = 'REGULAR';
-            v.isAmgEligible = true;
-            v.managementStatus = 'READY';
-            v.isEnrolled = true;
-            v.updatedAt = new Date().toISOString();
-            dbStore.videos.set(v.id, v);
-          }
-        }
-        enrolledItems = candidates;
+    // Bypass validasi manual: Otomatis daftarkan (auto-enroll) seluruh kandidat video non-excluded
+    let enrolledItems = previewResult.preview.filter((p) => p.managementScope !== 'EXCLUDED');
+
+    // Auto-enroll di dbStore untuk semua video kandidat
+    for (const item of enrolledItems) {
+      const v = dbStore.getVideoById(item.videoId) || dbStore.videos.get(item.videoId);
+      if (v && !v.isManaged && v.managementScope !== 'EXCLUDED') {
+        v.managementScope = 'REGULAR';
+        v.isAmgEligible = true;
+        v.managementStatus = 'READY';
+        v.isEnrolled = true;
+        v.updatedAt = new Date().toISOString();
+        dbStore.videos.set(v.id, v);
       }
     }
 
+    // Jika previewResult belum memuat item, ekstrak langsung dari video unmanaged private di dbStore
     if (enrolledItems.length === 0) {
-      const candidates = previewResult.scopeSummary?.newCandidatesCount || 0;
+      const rawVids = Array.from(dbStore.videos.values()).filter(
+        (v) =>
+          (v.channelId === channelId ||
+            v.channelId === `chan-${channelId}` ||
+            (channelId.startsWith('chan-') && v.channelId === channelId.replace('chan-', ''))) &&
+          !v.isManaged &&
+          v.managementStatus !== 'COMPLETED' &&
+          v.managementScope !== 'EXCLUDED' &&
+          (v.privacyStatus || '').toLowerCase() === 'private' &&
+          !v.publishAt
+      );
+      for (const v of rawVids) {
+        v.managementScope = 'REGULAR';
+        v.isAmgEligible = true;
+        v.managementStatus = 'READY';
+        v.isEnrolled = true;
+        v.updatedAt = new Date().toISOString();
+        dbStore.videos.set(v.id, v);
+      }
+      enrolledItems = rawVids.map((v, i) => ({
+        sequence: i + 1,
+        videoId: v.id,
+        originalTitle: v.titleBefore || 'Video YouTube',
+        assignedTitle: v.titleAssigned || v.titleBefore || 'Video YouTube',
+        originalThumbnail: v.thumbnailBefore || '',
+        assignedThumbnail: v.thumbnailAssigned || v.thumbnailBefore || '',
+        publishDate: new Date(Date.now() + (i + 1) * 86400000).toISOString().split('T')[0],
+        publishTime: '16:00 WIB',
+        targetChannelId: channelId,
+        targetChannelTitle: channelId,
+        contentProfileName: 'Profil Konten',
+        status: 'READY',
+        managementScope: 'REGULAR',
+        safetyCategory: 'ELIGIBLE',
+        isAmgEligible: true,
+        isProtected: false,
+        uploadedAt: v.originalUploadAt || v.uploadedAt,
+      }));
+    }
+
+    if (enrolledItems.length === 0) {
       return {
         success: false,
-        error: `Cannot launch automation: 0 enrolled AMG regular videos. You have ${candidates} new candidates detected. Please click "Enroll All Eligible" or select candidates to enroll before launching automation.`,
+        error: `Tidak ada video kandidat siap kelola pada channel ini. Pastikan ada video berstatus unmanaged private.`,
       };
     }
 
