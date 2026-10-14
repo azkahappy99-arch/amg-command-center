@@ -605,15 +605,24 @@ export const api = {
   },
 
   deleteChannel: async (id: string) => {
-    let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
     const target = channels.find((c) => c.id === id || c.youtubeChannelId === id || c.id === `chan-${id}`);
     const targetId = target ? target.id : id;
     const targetYoutubeId = target?.youtubeChannelId || (id.startsWith('chan-') ? id.replace('chan-', '') : id);
+    const targetTitle = target?.title || (id.toLowerCase().includes('ayam') ? 'Ayam YAHYA' : '');
 
     // 1. Mark as unlinked so that refresh or sync never resurrects it
     markChannelAsUnlinked(targetId);
     markChannelAsUnlinked(targetYoutubeId);
     markChannelAsUnlinked(id);
+    if (targetTitle) {
+      markChannelAsUnlinked(targetTitle);
+    }
+    if (targetTitle?.toLowerCase().includes('ayam') || targetId.toLowerCase().includes('ayam')) {
+      markChannelAsUnlinked('chan-ayam-yahya');
+      markChannelAsUnlinked('UC_AYAM_YAHYA_001');
+      markChannelAsUnlinked('Ayam YAHYA');
+    }
 
     // 2. Remove from active channels list
     channels = channels.filter(
@@ -621,7 +630,8 @@ export const api = {
         c.id !== targetId &&
         c.id !== id &&
         c.youtubeChannelId !== targetYoutubeId &&
-        c.youtubeChannelId !== id
+        c.youtubeChannelId !== id &&
+        (!targetTitle || c.title?.toLowerCase() !== targetTitle.toLowerCase())
     );
     setStorageItem(KEYS.CHANNELS, channels);
 
@@ -640,26 +650,58 @@ export const api = {
       }
     } catch {}
 
-    // 5. Clean up videos for this channel
+    // 5. Clean up videos, batches, and jobs for this channel
     try {
-      const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
-      const remainingVideos = videos.filter(
-        (v) =>
-          v.channelId !== targetId &&
-          v.channelId !== targetYoutubeId &&
-          v.channelId !== id &&
-          v.channelId !== `chan-${targetYoutubeId}`
-      );
-      setStorageItem(KEYS.VIDEOS, remainingVideos);
-    } catch {}
+      if (channels.length === 0) {
+        setStorageItem(KEYS.VIDEOS, []);
+        setStorageItem(KEYS.BATCHES, []);
+        setStorageItem(KEYS.JOBS, []);
+        localStorage.setItem('amg_videos', JSON.stringify([]));
+        localStorage.setItem('amg_batches', JSON.stringify([]));
+        localStorage.setItem('amg_jobs', JSON.stringify([]));
+        localStorage.removeItem('amg_youtube_access_token');
+        localStorage.removeItem('amg_youtube_connected_channel');
+        localStorage.removeItem('amg_permanent_channel_ids');
+        localStorage.removeItem('amg_persistent_channels_list');
+      } else {
+        const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
+        const remainingVideos = videos.filter(
+          (v) =>
+            v.channelId !== targetId &&
+            v.channelId !== targetYoutubeId &&
+            v.channelId !== id &&
+            v.channelId !== `chan-${targetYoutubeId}` &&
+            (!targetTitle || v.channelTitle?.toLowerCase() !== targetTitle.toLowerCase()) &&
+            (!targetTitle?.toLowerCase().includes('ayam') || (!v.youtubeVideoId?.startsWith('AY_YAHYA_') && !v.channelTitle?.toLowerCase().includes('ayam')))
+        );
+        setStorageItem(KEYS.VIDEOS, remainingVideos);
 
-    // 6. Delete on server backend if available
-    try {
-      fetch(`/api/channels/${encodeURIComponent(targetId)}`, { method: 'DELETE' }).catch(() => {});
-      if (targetYoutubeId && targetYoutubeId !== targetId) {
-        fetch(`/api/channels/${encodeURIComponent(targetYoutubeId)}`, { method: 'DELETE' }).catch(() => {});
+        const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, []);
+        const remainingBatches = batches.filter(
+          (b) =>
+            b.channelId !== targetId &&
+            b.channelId !== targetYoutubeId &&
+            b.channelId !== id &&
+            (!targetTitle || b.channelTitle?.toLowerCase() !== targetTitle.toLowerCase())
+        );
+        setStorageItem(KEYS.BATCHES, remainingBatches);
       }
     } catch {}
+
+    // 6. Delete on server backend and wait for completion
+    try {
+      await authFetch(`/api/channels/${encodeURIComponent(targetId)}`, { method: 'DELETE' }).catch(() => {});
+      if (targetYoutubeId && targetYoutubeId !== targetId) {
+        await authFetch(`/api/channels/${encodeURIComponent(targetYoutubeId)}`, { method: 'DELETE' }).catch(() => {});
+      }
+      await authFetch('/api/channels/unlink', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: targetId, channelId: targetId, youtubeChannelId: targetYoutubeId, title: targetTitle }),
+      }).catch(() => {});
+    } catch (e) {
+      console.warn('Backend deleteChannel notice:', e);
+    }
 
     return { success: true };
   },
@@ -1772,48 +1814,31 @@ export const api = {
       // fallback to client calculation
     }
 
-    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
     let channel = channels.find((c) => c.id === channelId || c.youtubeChannelId === channelId);
-    if (!channel) {
-      channel = channels.find((c) => c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) || channels[0] || initialChannels[0];
+    if (!channel && channels.length > 0) {
+      channel = channels[0];
     }
     if (!channel) {
-      throw new Error(`Channel dengan ID "${channelId}" tidak ditemukan.`);
+      throw new Error(`Tidak ada channel yang terhubung.`);
     }
 
     const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
     let targetBlockId = profileId || channel.contentProfileId || channel.blockId;
-    if (channel.id === 'chan-ayam-yahya' || channel.title?.toLowerCase().includes('ayam yahya') || !targetBlockId) {
+    if (!targetBlockId) {
       targetBlockId = 'block-general';
       channel.blockId = 'block-general';
       channel.contentProfileId = 'block-general';
     }
     let targetBlock = profiles.find((p) => p.id === targetBlockId || p.blockId === targetBlockId) || profiles.find(p => p.name.toLowerCase() === 'general') || initialProfiles[0];
 
-    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(isRealVideo);
+    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []).filter(isRealVideo);
     let channelVideos = rawVideos.filter(
       (v) =>
         v.channelId === channel.id ||
         v.channelId === channel.youtubeChannelId ||
-        v.channelId === `chan-${channel.youtubeChannelId}` ||
-        (channel.title?.toLowerCase().includes('ayam yahya') && (v.channelId === 'chan-ayam-yahya' || v.channelTitle?.toLowerCase().includes('ayam yahya')))
+        v.channelId === `chan-${channel.youtubeChannelId}`
     );
-
-    if (channelVideos.length === 0 && (channel.id === 'chan-ayam-yahya' || channel.title?.toLowerCase().includes('ayam yahya'))) {
-      try {
-        const vRes = await authFetch('/api/videos?channelId=chan-ayam-yahya');
-        if (vRes.ok) {
-          const fetched = await vRes.json();
-          if (Array.isArray(fetched) && fetched.length > 0) {
-            const clean = fetched.filter(isRealVideo);
-            if (clean.length > 0) {
-              channelVideos = clean;
-              setStorageItem(KEYS.VIDEOS, clean);
-            }
-          }
-        }
-      } catch {}
-    }
 
     if (channelVideos.length === 0) {
       return {

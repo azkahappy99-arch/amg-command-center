@@ -302,7 +302,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           id: res.batchId,
           batchNumber: batchNum,
           channelId: selectedChannelId,
-          channelTitle: selectedChannel?.title || 'Ayam YAHYA',
+          channelTitle: selectedChannel?.title || 'YouTube Channel',
           profileId: selectedProfile?.id || 'profile-default',
           profileName: selectedProfile?.name || 'Standard AMG Schedule (Kloter 1)',
           isDryRun: false,

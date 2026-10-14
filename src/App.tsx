@@ -137,18 +137,8 @@ export default function App() {
           .map(sanitizeChannel);
 
         if (cleanChannels.length === 0) {
-          cleanChannels = initialChannels.map(sanitizeChannel);
+          cleanChannels = [];
         }
-
-        // Ensure Ayam YAHYA is permanently bound to General
-        cleanChannels.forEach((c) => {
-          if (c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
-            c.blockId = 'block-general';
-            c.contentProfileId = 'block-general';
-            c.nicheCategory = 'General';
-            c.status = 'CONNECTED';
-          }
-        });
 
         setChannels(cleanChannels);
         if (cleanChannels.length > 0) {
@@ -159,6 +149,24 @@ export default function App() {
           setSelectedChannelId('');
         }
         localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
+
+        if (cleanChannels.length === 0) {
+          setStats((prev) => ({
+            ...prev,
+            metrics: {
+              ...prev.metrics,
+              totalChannels: 0,
+              connectedChannels: 0,
+              newVideos: 0,
+              hdReady: 0,
+              processing: 0,
+              scheduled: 0,
+              completedVideos: 0,
+            },
+            actionRequired: [],
+            recentBatches: [],
+          }));
+        }
 
         // Cache connected channel IDs in localStorage for client resilience
         const connectedReal = cleanChannels.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
@@ -173,7 +181,11 @@ export default function App() {
       if (thumbsData) setThumbnails(thumbsData);
       if (videosData) {
         let cleanVids = videosData.filter(isRealVideo);
-        if (cleanVids.length === 0) {
+        const hasActiveChannels = (channelsData && channelsData.length > 0);
+        if (!hasActiveChannels) {
+          cleanVids = [];
+          localStorage.setItem('amg_videos', JSON.stringify([]));
+        } else if (cleanVids.length === 0) {
           const cachedRaw = localStorage.getItem('amg_videos');
           if (cachedRaw) {
             try {
@@ -185,8 +197,10 @@ export default function App() {
           }
         }
         setVideos(cleanVids);
-        if (cleanVids.length > 0) {
+        if (cleanVids.length > 0 && hasActiveChannels) {
           localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
+        } else {
+          localStorage.setItem('amg_videos', JSON.stringify([]));
         }
       }
       if (notifsData) setNotifications(notifsData);
@@ -231,20 +245,10 @@ export default function App() {
             .map(sanitizeChannel);
 
           if (realChannels.length === 0) {
-            realChannels = initialChannels.map(sanitizeChannel);
+            realChannels = [];
           }
 
-          // Ensure Ayam YAHYA is permanently bound to General
-          realChannels.forEach((c) => {
-            if (c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
-              c.blockId = 'block-general';
-              c.contentProfileId = 'block-general';
-              c.nicheCategory = 'General';
-              c.status = 'CONNECTED';
-            }
-          });
-
-          if (storedConnectedRaw) {
+          if (storedConnectedRaw && realChannels.length > 0) {
             const live = JSON.parse(storedConnectedRaw);
             if (live && live.id && !isUnlinked(live.id) && !isUnlinked(`chan-${live.id}`)) {
               const idx = realChannels.findIndex(
@@ -286,17 +290,21 @@ export default function App() {
         }
       }
 
-      const storedVideosRaw = localStorage.getItem('amg_videos');
-      if (storedVideosRaw) {
-        try {
-          const parsedVids = JSON.parse(storedVideosRaw);
-          if (Array.isArray(parsedVids)) {
-            const clean = parsedVids.filter(isRealVideo);
-            if (clean.length > 0) {
-              setVideos(clean);
+      if (channels.length > 0) {
+        const storedVideosRaw = localStorage.getItem('amg_videos');
+        if (storedVideosRaw) {
+          try {
+            const parsedVids = JSON.parse(storedVideosRaw);
+            if (Array.isArray(parsedVids)) {
+              const clean = parsedVids.filter(isRealVideo);
+              if (clean.length > 0) {
+                setVideos(clean);
+              }
             }
-          }
-        } catch {}
+          } catch {}
+        }
+      } else {
+        setVideos([]);
       }
     } catch (e) {
       console.warn('Initial direct localStorage load:', e);

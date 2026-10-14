@@ -430,10 +430,7 @@ export async function fetchChannelVideosFromYouTube(
 
     const cleanChanId = targetChannelId ? targetChannelId.replace(/^chan-/, '') : '';
     let channelItem = chanData.items[0];
-    const ayamChan = chanData.items.find((it: any) => it.snippet?.title?.toLowerCase().includes('ayam yahya'));
-    if (ayamChan) {
-      channelItem = ayamChan;
-    } else if (cleanChanId) {
+    if (cleanChanId) {
       const matched = chanData.items.find((it: any) => it.id === cleanChanId);
       if (matched) {
         channelItem = matched;
@@ -886,7 +883,7 @@ export async function syncChannelVideos(
   }
   const vids = await fetchChannelVideosFromYouTube(token, channelId);
   const unmanaged = vids.filter((v) => !v.isManaged && v.managementScope !== 'EXCLUDED');
-  const chanTitle = vids[0]?.channelTitle || 'Ayam YAHYA';
+  const chanTitle = vids[0]?.channelTitle || 'YouTube Channel';
   return {
     channelTitle: chanTitle,
     videos: vids,

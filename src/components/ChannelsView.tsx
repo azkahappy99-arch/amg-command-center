@@ -580,7 +580,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
     if (!confirm(`Apakah Anda yakin ingin memutuskan (unlink) channel "${title}"?\nData channel akan dihapus secara permanen dari daftar AMG Command Center.`)) return;
     try {
       await api.deleteChannel(id);
-      onChannelUpdated();
+      await onChannelUpdated();
       setBannerMessage({
         text: `Channel "${title}" berhasil diputuskan (unlinked) dan dihapus secara permanen.`,
         type: 'info',

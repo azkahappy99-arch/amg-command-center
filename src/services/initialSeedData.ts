@@ -13,43 +13,7 @@ import {
   SystemSettings,
 } from "../types/index.ts";
 
-export const initialChannels: Channel[] = [
-  {
-    id: 'chan-ayam-yahya',
-    youtubeChannelId: 'UC_AYAM_YAHYA_001',
-    title: 'Ayam YAHYA',
-    customUrl: '@AyamYAHYA',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=150&auto=format&fit=crop&q=80',
-    status: 'CONNECTED',
-    monetizationStatus: 'NOT_MONETIZED',
-    watchHours: 120,
-    nicheCategory: 'General',
-    nicheBadge: 'emerald',
-    blockId: 'block-general',
-    contentProfileId: 'block-general',
-    publishFrequency: '1/day',
-    publishTime: '16:00',
-    timezone: 'Asia/Jakarta',
-    scheduleConfig: {
-      mode: 'DAILY',
-      videosPerDay: 1,
-      times: ['16:00'],
-      timezone: 'Asia/Jakarta',
-      startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-    },
-    subscriberCount: 1540,
-    videoCount: 53,
-    unmanagedVideoCount: 53,
-    hasOAuthConfigured: true,
-    isSeeded: false,
-    createdAt: '2026-09-01T00:00:00.000Z',
-    updatedAt: new Date().toISOString(),
-    connectedAt: '2026-09-01T00:00:00.000Z',
-    scheduleBufferDays: 53,
-    scheduleStockCount: 53,
-    scheduleAlertStatus: 'SAFE',
-  },
-];
+export const initialChannels: Channel[] = [];
 
 export const initialProfiles: ContentProfile[] = [
   {

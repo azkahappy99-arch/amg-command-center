@@ -501,7 +501,7 @@ class DatabaseStore {
         },
         masterTitleIds: ['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4'],
         masterThumbnailIds: ['thumb-gen-1', 'thumb-gen-2', 'thumb-gen-3', 'thumb-gen-4'],
-        assignedChannelCount: 1,
+        assignedChannelCount: 0,
         createdAt: '2026-09-01T00:00:00.000Z',
         updatedAt: new Date().toISOString(),
       };
@@ -563,7 +563,8 @@ class DatabaseStore {
       }
     }
 
-    // 4. Ensure Channel "Ayam YAHYA" is permanently registered with block "General"
+    // 4. If Channel "Ayam YAHYA" is currently registered, ensure it is assigned to block "General"
+    // (Never automatically create or resurrect Ayam YAHYA if not present or unlinked)
     let ayamYahya = this.channels.get('chan-ayam-yahya');
     if (!ayamYahya) {
       for (const ch of this.channels.values()) {
@@ -574,57 +575,19 @@ class DatabaseStore {
       }
     }
 
-    if (!ayamYahya) {
-      ayamYahya = {
-        id: 'chan-ayam-yahya',
-        youtubeChannelId: 'UC_AYAM_YAHYA_001',
-        title: 'Ayam YAHYA',
-        customUrl: '@AyamYAHYA',
-        thumbnailUrl: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=150&auto=format&fit=crop&q=80',
-        status: 'CONNECTED',
-        monetizationStatus: 'NOT_MONETIZED',
-        watchHours: 120,
-        nicheCategory: 'General',
-        nicheBadge: 'emerald',
-        blockId: 'block-general',
-        contentProfileId: 'block-general',
-        workspaceId: 'ws-owner-primary',
-        ownerId: 'usr-owner-primary',
-        publishFrequency: '1/day',
-        publishTime: '16:00',
-        timezone: 'Asia/Jakarta',
-        scheduleConfig: {
-          mode: 'DAILY',
-          videosPerDay: 1,
-          times: ['16:00'],
-          timezone: 'Asia/Jakarta',
-          startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-        },
-        subscriberCount: 1540,
-        videoCount: 53,
-        unmanagedVideoCount: 53,
-        hasOAuthConfigured: true,
-        isSeeded: false,
-        createdAt: '2026-09-01T00:00:00.000Z',
-        updatedAt: new Date().toISOString(),
-        connectedAt: '2026-09-01T00:00:00.000Z',
-        scheduleBufferDays: 53,
-        scheduleStockCount: 53,
-        scheduleAlertStatus: 'SAFE',
-      };
-      this.channels.set(ayamYahya.id, ayamYahya);
-      changed = true;
-    } else {
-      ayamYahya.blockId = 'block-general';
-      ayamYahya.contentProfileId = 'block-general';
-      ayamYahya.nicheCategory = 'General';
-      ayamYahya.nicheBadge = 'emerald';
-      ayamYahya.status = 'CONNECTED';
-      ayamYahya.title = 'Ayam YAHYA';
-      ayamYahya.workspaceId = 'ws-owner-primary';
-      ayamYahya.ownerId = 'usr-owner-primary';
-      this.channels.set(ayamYahya.id, ayamYahya);
-      changed = true;
+    if (ayamYahya) {
+      if (
+        ayamYahya.blockId !== 'block-general' ||
+        ayamYahya.contentProfileId !== 'block-general' ||
+        ayamYahya.nicheCategory !== 'General'
+      ) {
+        ayamYahya.blockId = 'block-general';
+        ayamYahya.contentProfileId = 'block-general';
+        ayamYahya.nicheCategory = 'General';
+        ayamYahya.nicheBadge = 'emerald';
+        this.channels.set(ayamYahya.id, ayamYahya);
+        changed = true;
+      }
     }
 
     // 5. Purge any legacy mock AY_YAHYA_* videos to allow authentic YouTube videos only
@@ -639,54 +602,50 @@ class DatabaseStore {
       }
     }
 
-    // 6. Ensure 53 authentic YouTube videos exist for Ayam YAHYA
-    const ayamVideos = Array.from(this.videos.values()).filter(
-      (v) => v.channelId === 'chan-ayam-yahya' || v.channelTitle?.toLowerCase().includes('ayam yahya')
-    );
-    if (ayamVideos.length === 0) {
-      const REAL_YOUTUBE_IDS = [
-        'BcKgCAmFsMY', 'mX001c2Dx', 'qW002e3Fx', 'pL003g4Hx', 'jN004j5Kx', 'vR005l6Mx', 'tY006n7Px',
-        'sF007q8Rx', 'hG008s9Tx', 'bD009u0Vx', 'kZ010a1Bx', 'mX011c2Dx', 'qW012e3Fx', 'pL013g4Hx',
-        'jN014j5Kx', 'vR015l6Mx', 'tY016n7Px', 'sF017q8Rx', 'hG018s9Tx', 'bD019u0Vx', 'kZ020a1Bx',
-        'mX021c2Dx', 'qW022e3Fx', 'pL023g4Hx', 'jN024j5Kx', 'vR025l6Mx', 'tY026n7Px', 'sF027q8Rx',
-        'hG028s9Tx', 'bD029u0Vx', 'kZ030a1Bx', 'mX031c2Dx', 'qW032e3Fx', 'pL033g4Hx', 'jN034j5Kx',
-        'vR035l6Mx', 'tY036n7Px', 'sF037q8Rx', 'hG038s9Tx', 'bD039u0Vx', 'kZ040a1Bx', 'mX041c2Dx',
-        'qW042e3Fx', 'pL043g4Hx', 'jN044j5Kx', 'vR045l6Mx', 'tY046n7Px', 'sF047q8Rx', 'hG048s9Tx',
-        'bD049u0Vx', 'kZ050a1Bx', 'mX051c2Dx', 'qW052e3Fx'
-      ];
-      for (let i = 0; i < REAL_YOUTUBE_IDS.length; i++) {
-        const ytId = REAL_YOUTUBE_IDS[i];
-        const uploadDate = new Date(Date.now() - (53 - i) * 3600000).toISOString();
-        const vObj: ManagedVideo = {
-          id: ytId,
-          youtubeVideoId: ytId,
-          channelId: 'chan-ayam-yahya',
-          channelTitle: 'Ayam YAHYA',
-          blockId: 'block-general',
-          contentProfileId: 'block-general',
-          titleBefore: 'Salinan dari A',
-          titleAssigned: '',
-          thumbnailBefore: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
-          thumbnailAssigned: '',
-          originalUploadAt: uploadDate,
-          uploadedAt: uploadDate,
-          processingStatus: 'processed',
-          privacyStatus: 'private',
-          managementStatus: 'DISCOVERED',
-          managementScope: 'REGULAR',
-          isAmgEligible: true,
-          isManaged: false,
-          isEnrolled: true,
-          isProtected: false,
-          retryCount: 0,
-          definition: 'hd',
-          isSeeded: false,
-          createdAt: uploadDate,
-          updatedAt: new Date().toISOString(),
-        };
-        this.videos.set(ytId, vObj);
+    // 6. Purge orphan videos and batches if no associated channel exists
+    if (this.channels.size === 0) {
+      if (this.videos.size > 0) {
+        this.videos.clear();
+        changed = true;
       }
-      changed = true;
+      if (this.automationBatches.size > 0) {
+        this.automationBatches.clear();
+        changed = true;
+      }
+      if (this.automationJobs.size > 0) {
+        this.automationJobs.clear();
+        changed = true;
+      }
+    } else {
+      for (const [id, v] of this.videos.entries()) {
+        const hasChannel = this.channels.has(v.channelId) || Array.from(this.channels.values()).some(
+          c => c.youtubeChannelId === v.channelId || `chan-${c.youtubeChannelId}` === v.channelId || c.title?.toLowerCase() === v.channelTitle?.toLowerCase()
+        );
+        if (!hasChannel) {
+          this.videos.delete(id);
+          changed = true;
+        }
+      }
+      for (const [id, b] of this.automationBatches.entries()) {
+        const hasChannel = this.channels.has(b.channelId) || Array.from(this.channels.values()).some(
+          c => c.youtubeChannelId === b.channelId || `chan-${c.youtubeChannelId}` === b.channelId || c.title?.toLowerCase() === b.channelTitle?.toLowerCase()
+        );
+        if (!hasChannel) {
+          this.automationBatches.delete(id);
+          changed = true;
+        }
+      }
+    }
+
+    // 7. Update assignedChannelCount on profiles accurately
+    for (const p of this.profiles.values()) {
+      const count = Array.from(this.channels.values()).filter(
+        c => c.blockId === p.id || c.contentProfileId === p.id
+      ).length;
+      if (p.assignedChannelCount !== count) {
+        p.assignedChannelCount = count;
+        changed = true;
+      }
     }
 
     if (changed) {
@@ -766,6 +725,150 @@ class DatabaseStore {
     this.channels.set(newChan.id, newChan);
     this.saveToDisk();
     return newChan;
+  }
+
+  /**
+   * Permanently unlinks/deletes a channel and all associated videos, batches, jobs, and errors.
+   */
+  public deleteChannel(targetId: string): {
+    success: boolean;
+    channelTitle: string;
+    removedVideos: number;
+    removedBatches: number;
+    removedJobs: number;
+    remainingChannels: number;
+  } {
+    const normId = (targetId || '').trim().toLowerCase();
+    const toDeleteChannelIds = new Set<string>();
+    let detectedTitle = targetId;
+
+    for (const [id, c] of this.channels.entries()) {
+      const cIdNorm = id.toLowerCase();
+      const ytIdNorm = (c.youtubeChannelId || '').toLowerCase();
+      const titleNorm = (c.title || '').toLowerCase();
+
+      const isMatch =
+        id === targetId ||
+        c.youtubeChannelId === targetId ||
+        `chan-${c.youtubeChannelId}` === targetId ||
+        cIdNorm === normId ||
+        ytIdNorm === normId ||
+        `chan-${ytIdNorm}` === normId ||
+        titleNorm === normId ||
+        (normId.length >= 3 && titleNorm.includes(normId)) ||
+        (normId.includes('ayam') && titleNorm.includes('ayam'));
+
+      if (isMatch) {
+        toDeleteChannelIds.add(id);
+        if (c.youtubeChannelId) {
+          toDeleteChannelIds.add(c.youtubeChannelId);
+          toDeleteChannelIds.add(`chan-${c.youtubeChannelId}`);
+        }
+        if (c.title) detectedTitle = c.title;
+      }
+    }
+
+    toDeleteChannelIds.add(targetId);
+    if (targetId.startsWith('chan-')) {
+      toDeleteChannelIds.add(targetId.replace('chan-', ''));
+    } else {
+      toDeleteChannelIds.add(`chan-${targetId}`);
+    }
+
+    // Delete from this.channels
+    for (const id of toDeleteChannelIds) {
+      this.channels.delete(id);
+    }
+    const normDetectedTitle = detectedTitle.toLowerCase();
+    for (const [id, c] of this.channels.entries()) {
+      if (c.title && c.title.toLowerCase() === normDetectedTitle) {
+        this.channels.delete(id);
+      }
+    }
+
+    // Purge associated videos
+    let removedVideos = 0;
+    for (const [vId, v] of this.videos.entries()) {
+      const vChanId = v.channelId || '';
+      const vChanTitle = (v.channelTitle || '').toLowerCase();
+      const isAssociated =
+        toDeleteChannelIds.has(vChanId) ||
+        (v.youtubeVideoId && toDeleteChannelIds.has(v.youtubeVideoId)) ||
+        (normDetectedTitle && vChanTitle === normDetectedTitle) ||
+        (normDetectedTitle && vChanTitle.includes(normDetectedTitle)) ||
+        (normId.includes('ayam') && (vChanTitle.includes('ayam') || vChanId.toLowerCase().includes('ayam') || v.youtubeVideoId?.startsWith('AY_YAHYA_')));
+
+      if (isAssociated) {
+        this.videos.delete(vId);
+        removedVideos++;
+      }
+    }
+
+    // Purge associated automation batches
+    let removedBatches = 0;
+    for (const [bId, b] of this.automationBatches.entries()) {
+      const bChanId = b.channelId || '';
+      const bChanTitle = (b.channelTitle || '').toLowerCase();
+      const isAssociated =
+        toDeleteChannelIds.has(bChanId) ||
+        (normDetectedTitle && bChanTitle === normDetectedTitle) ||
+        (normDetectedTitle && bChanTitle.includes(normDetectedTitle));
+
+      if (isAssociated) {
+        this.automationBatches.delete(bId);
+        removedBatches++;
+      }
+    }
+
+    // Purge associated automation jobs
+    let removedJobs = 0;
+    for (const [jId, j] of this.automationJobs.entries()) {
+      const jChanId = j.channelId || '';
+      if (toDeleteChannelIds.has(jChanId)) {
+        this.automationJobs.delete(jId);
+        removedJobs++;
+      }
+    }
+
+    // Purge associated error logs
+    for (const [eId, e] of this.errorLogs.entries()) {
+      if (e.channelId && toDeleteChannelIds.has(e.channelId)) {
+        this.errorLogs.delete(eId);
+      }
+    }
+
+    // Purge associated notifications
+    for (const [nId, n] of this.notifications.entries()) {
+      if (n.channelId && toDeleteChannelIds.has(n.channelId)) {
+        this.notifications.delete(nId);
+      }
+    }
+
+    // If 0 channels remain, ensure no orphan videos or batches linger
+    if (this.channels.size === 0) {
+      this.videos.clear();
+      this.automationBatches.clear();
+      this.automationJobs.clear();
+    }
+
+    // Update assignedChannelCount on all profiles
+    for (const p of this.profiles.values()) {
+      const count = Array.from(this.channels.values()).filter(
+        (c) => c.blockId === p.id || c.contentProfileId === p.id
+      ).length;
+      p.assignedChannelCount = count;
+    }
+
+    this.saveToDisk();
+
+    return {
+      success: true,
+      channelTitle: detectedTitle,
+      removedVideos,
+      removedBatches,
+      removedJobs,
+      remainingChannels: this.channels.size,
+    };
   }
 
   /**
@@ -1233,11 +1336,6 @@ class DatabaseStore {
     let removedBatches = 0;
 
     for (const [id, c] of this.channels.entries()) {
-      // Ayam YAHYA is a permanent production channel - never delete
-      if (id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
-        continue;
-      }
-
       const isFixture =
         c.isSeeded ||
         id === 'chan-ayam-warna' ||
@@ -1269,11 +1367,13 @@ class DatabaseStore {
         continue;
       }
 
-      // Authentic raw YouTube videos for Ayam YAHYA - keep
-      if (
-        v.channelId === 'chan-ayam-yahya' ||
-        v.channelTitle?.toLowerCase().includes('ayam yahya')
-      ) {
+      // If video's channel does not exist in this.channels, purge orphan video
+      const channelExists = this.channels.has(v.channelId) || Array.from(this.channels.values()).some(
+        (c) => c.youtubeChannelId === v.channelId || `chan-${c.youtubeChannelId}` === v.channelId || c.title?.toLowerCase() === v.channelTitle?.toLowerCase()
+      );
+      if (!channelExists) {
+        this.videos.delete(id);
+        removedVideos++;
         continue;
       }
 

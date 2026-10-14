@@ -721,7 +721,7 @@ app.get('/api/channels', requireAuth, (req: Request, res: Response) => {
   if (ctx.role === 'USER') {
     rawChannels = rawChannels.filter(c => c.workspaceId === ctx.workspaceId && c.ownerId === ctx.user?.id);
   } else {
-    rawChannels = rawChannels.filter(c => c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya') || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com' || !c.ownerId);
+    rawChannels = rawChannels.filter(c => c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com' || !c.ownerId);
   }
 
   const allVideos = Array.from(dbStore.videos.values());
@@ -1079,50 +1079,51 @@ app.post('/api/schedule/preview', (req: Request, res: Response) => {
   });
 });
 
-app.delete('/api/channels/:id', (req: Request, res: Response) => {
-  const targetId = req.params.id;
-  const channel =
-    dbStore.channels.get(targetId) ||
-    dbStore.getChannelByYoutubeId(targetId) ||
-    Array.from(dbStore.channels.values()).find(
-      (c) => c.id === targetId || c.youtubeChannelId === targetId || c.id === `chan-${targetId}`
-    );
+const handleUnlinkChannelPermanently = (targetId: string) => {
+  const result = dbStore.deleteChannel(targetId);
 
-  if (channel) {
-    dbStore.channels.delete(channel.id);
-    youtubeAuthService.revokeCredentials(channel.id);
-    if (channel.youtubeChannelId) {
-      youtubeAuthService.revokeCredentials(channel.youtubeChannelId);
-      youtubeAuthService.revokeCredentials(`chan-${channel.youtubeChannelId}`);
-    }
-
-    // Clean up associated videos from memory & persistence
-    for (const [vId, v] of dbStore.videos.entries()) {
-      if (
-        v.channelId === channel.id ||
-        v.channelId === channel.youtubeChannelId ||
-        v.channelId === `chan-${channel.youtubeChannelId}`
-      ) {
-        dbStore.videos.delete(vId);
-      }
-    }
-
-    dbStore.saveToDisk();
-
-    dbStore.logActivity({
-      user: 'Administrator',
-      channelId: channel.id,
-      channelTitle: channel.title,
-      operation: 'Channel Unlinked / Removed',
-      previousValue: channel.status,
-      newValue: 'Unlinked permanently by user',
-      result: 'SUCCESS',
-    });
-
-    return res.json({ success: true, message: `Channel "${channel.title}" berhasil diputuskan dan dihapus.` });
+  // Revoke credentials
+  youtubeAuthService.revokeCredentials(targetId);
+  if (targetId.startsWith('chan-')) {
+    youtubeAuthService.revokeCredentials(targetId.replace('chan-', ''));
   }
 
-  res.json({ success: true, message: `Channel "${targetId}" telah diputuskan.` });
+  dbStore.logActivity({
+    user: 'Administrator',
+    channelId: targetId,
+    channelTitle: result.channelTitle,
+    operation: 'Channel Unlinked / Removed',
+    previousValue: 'CONNECTED',
+    newValue: 'Unlinked permanently by user. Purged all associated videos and batches.',
+    result: 'SUCCESS',
+  });
+
+  return result;
+};
+
+app.delete('/api/channels/:id', (req: Request, res: Response) => {
+  const result = handleUnlinkChannelPermanently(req.params.id);
+  res.json({
+    message: `Channel "${result.channelTitle}" berhasil diputuskan dan seluruh datanya telah dihapus.`,
+    ...result,
+  });
+});
+
+app.post('/api/channels/:id/unlink', (req: Request, res: Response) => {
+  const result = handleUnlinkChannelPermanently(req.params.id);
+  res.json({
+    message: `Channel "${result.channelTitle}" berhasil diputuskan (unlinked) dan seluruh datanya telah dihapus.`,
+    ...result,
+  });
+});
+
+app.post('/api/channels/unlink', (req: Request, res: Response) => {
+  const targetId = req.body?.id || req.body?.channelId || req.query?.channelId;
+  const result = handleUnlinkChannelPermanently(targetId as string);
+  res.json({
+    message: `Channel "${result.channelTitle}" berhasil diputuskan (unlinked) dan seluruh datanya telah dihapus.`,
+    ...result,
+  });
 });
 
 // REAL YOUTUBE SYNC ENDPOINT
