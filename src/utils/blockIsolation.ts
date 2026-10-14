@@ -55,7 +55,10 @@ export function validateBlockIsolation(params: {
   }
 
   // 2. Block Assignment (Channel must have valid block)
-  const targetBlockId = resolveBlockId(block) || resolveBlockId(channel);
+  let targetBlockId = resolveBlockId(block) || resolveBlockId(channel);
+  if (!targetBlockId && (channel?.id === 'chan-ayam-yahya' || channel?.title?.toLowerCase().includes('ayam yahya'))) {
+    targetBlockId = 'block-general';
+  }
   if (!targetBlockId) {
     return {
       isValid: false,
@@ -219,7 +222,10 @@ export function evaluateVideoEligibilityWithBlock(
   }
 
   // B. BlockId verification
-  const targetBlockId = resolveBlockId(block) || resolveBlockId(channel);
+  let targetBlockId = resolveBlockId(block) || resolveBlockId(channel);
+  if (!targetBlockId && (channel?.id === 'chan-ayam-yahya' || channel?.title?.toLowerCase().includes('ayam yahya'))) {
+    targetBlockId = 'block-general';
+  }
   if (!targetBlockId) {
     return {
       category: 'UNCLASSIFIED',

@@ -721,7 +721,7 @@ app.get('/api/channels', requireAuth, (req: Request, res: Response) => {
   if (ctx.role === 'USER') {
     rawChannels = rawChannels.filter(c => c.workspaceId === ctx.workspaceId && c.ownerId === ctx.user?.id);
   } else {
-    rawChannels = rawChannels.filter(c => c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com');
+    rawChannels = rawChannels.filter(c => c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya') || c.workspaceId === 'ws-owner-primary' || c.ownerId === 'usr-owner-primary' || c.ownerId === 'azkahappy99@gmail.com' || !c.ownerId);
   }
 
   const allVideos = Array.from(dbStore.videos.values());
@@ -2904,11 +2904,12 @@ app.get('/api/scheduler/reconcile/:channelId', async (req: Request, res: Respons
 // ==========================================
 // 10. AUTOMATION (PREVIEW, DRY RUN, START)
 // ==========================================
-app.post('/api/automation/preview', (req: Request, res: Response) => {
-  const { channelId, profileId } = req.body;
+app.all('/api/automation/preview', (req: Request, res: Response) => {
+  const channelId = req.body?.channelId || req.query?.channelId;
+  const profileId = req.body?.profileId || req.query?.profileId;
   if (!channelId) return res.status(400).json({ error: 'channelId is required.' });
 
-  const result = automationEngine.generatePreview(channelId, profileId);
+  const result = automationEngine.generatePreview(channelId as string, profileId as string);
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }

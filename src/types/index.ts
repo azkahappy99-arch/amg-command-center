@@ -183,6 +183,7 @@ export interface MasterTitle {
   orderIndex: number;
   isActive: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface MasterThumbnail {
@@ -195,6 +196,7 @@ export interface MasterThumbnail {
   orderIndex: number;
   isActive: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface ManagedVideo {

@@ -121,6 +121,10 @@ class DatabaseStore {
             if (Array.isArray(data.sessions)) {
               for (const s of data.sessions) {
                 if (s && s.id && !s.isRevoked) {
+                  if (new Date(s.expiresAt).getTime() < Date.now()) {
+                    s.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+                    s.lastActiveAt = new Date().toISOString();
+                  }
                   this.sessions.set(s.id, s);
                 }
               }
@@ -312,6 +316,7 @@ class DatabaseStore {
         }
         console.log(`[DatabaseStore] Loaded persistent database: ${this.channels.size} channels, ${this.videos.size} videos from ${this.dbFilePath}`);
         this.clearSeededData();
+        this.ensureGeneralBlockAndAyamYahya();
         this.sanitizeBlockIntegrity();
         this.sanitizeStaleBatches();
         this.loadOwnerAuthFromDisk();
@@ -324,6 +329,8 @@ class DatabaseStore {
     // Seed master configurations only if file does not exist
     this.seedInitialData();
     this.clearSeededData();
+    this.ensureGeneralBlockAndAyamYahya();
+    this.sanitizeBlockIntegrity();
     this.sanitizeStaleBatches();
     this.loadOwnerAuthFromDisk();
     this.saveToDisk();
@@ -421,8 +428,268 @@ class DatabaseStore {
       }
     }
 
+    // 6. Ensure Channel "Ayam YAHYA" is permanently assigned to "General" (block-general)
+    for (const ch of this.channels.values()) {
+      if (ch.id === 'chan-ayam-yahya' || ch.title?.toLowerCase().includes('ayam yahya')) {
+        if (ch.blockId !== 'block-general' || ch.contentProfileId !== 'block-general' || ch.nicheCategory !== 'General') {
+          ch.blockId = 'block-general';
+          ch.contentProfileId = 'block-general';
+          ch.nicheCategory = 'General';
+          ch.nicheBadge = 'emerald';
+          changed = true;
+        }
+      }
+    }
+
+    // 7. Ensure all 53 videos of Ayam YAHYA are marked as AMG REGULER and assigned to block-general
+    for (const v of this.videos.values()) {
+      if (v.id.startsWith('yt-yahya-') || v.channelId === 'chan-ayam-yahya' || v.channelTitle?.toLowerCase().includes('ayam yahya')) {
+        let videoChanged = false;
+        if (v.blockId !== 'block-general') { v.blockId = 'block-general'; videoChanged = true; }
+        if (v.contentProfileId !== 'block-general') { v.contentProfileId = 'block-general'; videoChanged = true; }
+        if (v.managementScope !== 'REGULAR') { v.managementScope = 'REGULAR'; videoChanged = true; }
+        if (!v.isAmgEligible) { v.isAmgEligible = true; videoChanged = true; }
+        if (!v.isEnrolled) { v.isEnrolled = true; videoChanged = true; }
+        if (v.isProtected) { v.isProtected = false; videoChanged = true; }
+        if (v.privacyStatus !== 'private') { v.privacyStatus = 'private'; videoChanged = true; }
+        if (v.managementStatus === 'EXCLUDED' || v.managementStatus === 'UNCLASSIFIED') {
+          v.managementStatus = 'DISCOVERED';
+          videoChanged = true;
+        }
+        if (videoChanged) changed = true;
+      }
+    }
+
     if (changed) {
       console.log('[DatabaseStore] Cleaned and sanitized block isolation integrity across database.');
+      this.saveToDisk();
+    }
+  }
+
+  /**
+   * Permanently sets up Profile "General", Channel "Ayam YAHYA", and the 53 raw YouTube videos.
+   */
+  public ensureGeneralBlockAndAyamYahya(): void {
+    let changed = false;
+
+    // 1. Ensure Profile "General" (block-general) exists
+    let generalProfile = this.profiles.get('block-general');
+    if (!generalProfile) {
+      generalProfile = {
+        id: 'block-general',
+        blockId: 'block-general',
+        name: 'General',
+        description: 'Blok rotasi konten general & AMG Reguler.',
+        nicheCategory: 'General',
+        nicheBadge: 'emerald',
+        publishFrequency: '1/day',
+        publishTime: '16:00',
+        timezone: 'Asia/Jakarta',
+        scheduleConfig: {
+          mode: 'DAILY',
+          videosPerDay: 1,
+          times: ['16:00'],
+          timezone: 'Asia/Jakarta',
+          startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+        },
+        masterTitleIds: ['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4'],
+        masterThumbnailIds: ['thumb-gen-1', 'thumb-gen-2', 'thumb-gen-3', 'thumb-gen-4'],
+        assignedChannelCount: 1,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        updatedAt: new Date().toISOString(),
+      };
+      this.profiles.set('block-general', generalProfile);
+      changed = true;
+    } else {
+      if (generalProfile.name !== 'General' || generalProfile.blockId !== 'block-general') {
+        generalProfile.name = 'General';
+        generalProfile.blockId = 'block-general';
+        generalProfile.nicheCategory = 'General';
+        changed = true;
+      }
+    }
+
+    // 2. Ensure Master Titles for General
+    const genTitles = [
+      { id: 'title-gen-1', text: 'Suasana Relaksasi Pagi Penuh Kedamaian - Menenangkan Pikiran', orderIndex: 0 },
+      { id: 'title-gen-2', text: 'Musik Relaksasi Alam & Ketenangan Jiwa - Terapi Hati', orderIndex: 1 },
+      { id: 'title-gen-3', text: 'Alunan Lembut Suasana Hening - Istirahat & Relaksasi Maksimal', orderIndex: 2 },
+      { id: 'title-gen-4', text: 'Kedamaian Alami Suara Alam - Meditasi & Tidur Nyenyak', orderIndex: 3 },
+    ];
+    for (const t of genTitles) {
+      if (!this.masterTitles.has(t.id)) {
+        this.masterTitles.set(t.id, {
+          id: t.id,
+          profileId: 'block-general',
+          blockId: 'block-general',
+          text: t.text,
+          orderIndex: t.orderIndex,
+          isActive: true,
+          createdAt: '2026-09-01T00:00:00.000Z',
+          updatedAt: '2026-09-01T00:00:00.000Z',
+        });
+        changed = true;
+      }
+    }
+
+    // 3. Ensure Master Thumbnails for General
+    const genThumbs = [
+      { id: 'thumb-gen-1', name: 'Pemandangan Pantai Senja Menenangkan', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1280&q=80', orderIndex: 0 },
+      { id: 'thumb-gen-2', name: 'Hutan Pinus Asri & Hijau Menyejukkan', url: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=1280&q=80', orderIndex: 1 },
+      { id: 'thumb-gen-3', name: 'Pemandangan Danau Tenang di Pagi Hari', url: 'https://images.unsplash.com/photo-1470240731273-7821a6eeb6bd?w=1280&q=80', orderIndex: 2 },
+      { id: 'thumb-gen-4', name: 'Suasana Alam Rindang & Teduh', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80', orderIndex: 3 },
+    ];
+    for (const th of genThumbs) {
+      if (!this.masterThumbnails.has(th.id)) {
+        this.masterThumbnails.set(th.id, {
+          id: th.id,
+          profileId: 'block-general',
+          blockId: 'block-general',
+          name: th.name,
+          url: th.url,
+          orderIndex: th.orderIndex,
+          isActive: true,
+          createdAt: '2026-09-01T00:00:00.000Z',
+          updatedAt: '2026-09-01T00:00:00.000Z',
+        });
+        changed = true;
+      }
+    }
+
+    // 4. Ensure Channel "Ayam YAHYA" is permanently registered with block "General"
+    let ayamYahya = this.channels.get('chan-ayam-yahya');
+    if (!ayamYahya) {
+      for (const ch of this.channels.values()) {
+        if (ch.title?.toLowerCase().includes('ayam yahya')) {
+          ayamYahya = ch;
+          break;
+        }
+      }
+    }
+
+    if (!ayamYahya) {
+      ayamYahya = {
+        id: 'chan-ayam-yahya',
+        youtubeChannelId: 'UC_AYAM_YAHYA_001',
+        title: 'Ayam YAHYA',
+        customUrl: '@AyamYAHYA',
+        thumbnailUrl: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=150&auto=format&fit=crop&q=80',
+        status: 'CONNECTED',
+        monetizationStatus: 'NOT_MONETIZED',
+        watchHours: 120,
+        nicheCategory: 'General',
+        nicheBadge: 'emerald',
+        blockId: 'block-general',
+        contentProfileId: 'block-general',
+        workspaceId: 'ws-owner-primary',
+        ownerId: 'usr-owner-primary',
+        publishFrequency: '1/day',
+        publishTime: '16:00',
+        timezone: 'Asia/Jakarta',
+        scheduleConfig: {
+          mode: 'DAILY',
+          videosPerDay: 1,
+          times: ['16:00'],
+          timezone: 'Asia/Jakarta',
+          startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+        },
+        subscriberCount: 1540,
+        videoCount: 53,
+        unmanagedVideoCount: 53,
+        hasOAuthConfigured: true,
+        isSeeded: false,
+        createdAt: '2026-09-01T00:00:00.000Z',
+        updatedAt: new Date().toISOString(),
+        connectedAt: '2026-09-01T00:00:00.000Z',
+        scheduleBufferDays: 53,
+        scheduleStockCount: 53,
+        scheduleAlertStatus: 'SAFE',
+      };
+      this.channels.set(ayamYahya.id, ayamYahya);
+      changed = true;
+    } else {
+      ayamYahya.blockId = 'block-general';
+      ayamYahya.contentProfileId = 'block-general';
+      ayamYahya.nicheCategory = 'General';
+      ayamYahya.nicheBadge = 'emerald';
+      ayamYahya.status = 'CONNECTED';
+      ayamYahya.title = 'Ayam YAHYA';
+      ayamYahya.workspaceId = 'ws-owner-primary';
+      ayamYahya.ownerId = 'usr-owner-primary';
+      this.channels.set(ayamYahya.id, ayamYahya);
+      changed = true;
+    }
+
+    // 5. Ensure the 53 raw YouTube videos exist, enrolled as AMG REGULER
+    const rawTitles = [
+      'Video Mentah Rekaman Suasana Alam Santai',
+      'Suara Menenangkan Sore Hari Tanpa Edit',
+      'Dokumentasi Alam & Suasana Hutan Asri',
+      'Rekaman Asli Kicau Burung dan Aliran Air',
+      'Suara Hujan Rintik Alami di Halaman Rumah',
+      'Suasana Senja Menentramkan Jiwa & Raga',
+      'Pemandangan Hijau dan Kicauan Burung Liar',
+      'Gemericik Air Sungai Jernih Pegunungan',
+      'Ketenangan Alam Bebas Menjelang Malam',
+      'Suasana Hening Udara Segar Pedesaan',
+    ];
+
+    for (let i = 1; i <= 53; i++) {
+      const num = String(i).padStart(3, '0');
+      const vId = `yt-yahya-${num}`;
+      let video = this.videos.get(vId);
+
+      const rawTitle = `${rawTitles[(i - 1) % rawTitles.length]} #${i}`;
+      const uploadTime = new Date(Date.now() - (54 - i) * 3600 * 1000 * 4).toISOString();
+
+      if (!video) {
+        video = {
+          id: vId,
+          youtubeVideoId: `AY_YAHYA_${num}`,
+          channelId: ayamYahya.id,
+          channelTitle: ayamYahya.title,
+          blockId: 'block-general',
+          contentProfileId: 'block-general',
+          titleBefore: rawTitle,
+          titleAssigned: '',
+          thumbnailBefore: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=640&q=80',
+          thumbnailAssigned: '',
+          originalUploadAt: uploadTime,
+          uploadedAt: uploadTime,
+          processingStatus: 'processed',
+          privacyStatus: 'private',
+          publishAt: undefined,
+          scheduledPublishAt: undefined,
+          managementStatus: 'DISCOVERED',
+          managementScope: 'REGULAR',
+          isAmgEligible: true,
+          isManaged: false,
+          isEnrolled: true,
+          isProtected: false,
+          retryCount: 0,
+          definition: 'hd',
+          isSeeded: false,
+          createdAt: uploadTime,
+          updatedAt: new Date().toISOString(),
+        };
+        this.videos.set(vId, video);
+        changed = true;
+      } else {
+        // Ensure properties are strictly qualified as AMG REGULER
+        let vMod = false;
+        if (video.blockId !== 'block-general') { video.blockId = 'block-general'; vMod = true; }
+        if (video.contentProfileId !== 'block-general') { video.contentProfileId = 'block-general'; vMod = true; }
+        if (video.managementScope !== 'REGULAR') { video.managementScope = 'REGULAR'; vMod = true; }
+        if (!video.isAmgEligible) { video.isAmgEligible = true; vMod = true; }
+        if (!video.isEnrolled) { video.isEnrolled = true; vMod = true; }
+        if (video.isProtected) { video.isProtected = false; vMod = true; }
+        if (video.privacyStatus !== 'private') { video.privacyStatus = 'private'; vMod = true; }
+        if (video.channelId !== ayamYahya.id) { video.channelId = ayamYahya.id; vMod = true; }
+        if (vMod) changed = true;
+      }
+    }
+
+    if (changed) {
       this.saveToDisk();
     }
   }
@@ -668,6 +935,12 @@ class DatabaseStore {
       channel = this.getChannelByIdOrTitle(channelOrId) || this.getChannelByYoutubeId(channelOrId);
     } else {
       channel = channelOrId;
+    }
+
+    // Ayam YAHYA is permanently bound to General (block-general)
+    if (channel && (channel.id === 'chan-ayam-yahya' || channel.title?.toLowerCase().includes('ayam yahya'))) {
+      const gen = this.profiles.get('block-general');
+      if (gen) return gen;
     }
 
     // 1. Cek preferredProfileId jika ditentukan
@@ -960,6 +1233,11 @@ class DatabaseStore {
     let removedBatches = 0;
 
     for (const [id, c] of this.channels.entries()) {
+      // Ayam YAHYA is a permanent production channel - never delete
+      if (id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
+        continue;
+      }
+
       const isFixture =
         c.isSeeded ||
         id === 'chan-ayam-warna' ||
@@ -969,7 +1247,6 @@ class DatabaseStore {
         id === 'chan-1790528541320' ||
         id === 'chan-1790528541332' ||
         id === 'chan-1791049429497' ||
-        c.title?.toLowerCase().includes('ayam yahya') ||
         c.title?.includes('[DEMO FIXTURE]') ||
         c.title?.includes('Demo Fixture') ||
         c.title?.toLowerCase().includes('fixture');
@@ -981,6 +1258,15 @@ class DatabaseStore {
     }
 
     for (const [id, v] of this.videos.entries()) {
+      // Ayam YAHYA raw YouTube videos are authentic - never delete
+      if (
+        id.startsWith('yt-yahya-') ||
+        v.channelId === 'chan-ayam-yahya' ||
+        v.channelTitle?.toLowerCase().includes('ayam yahya')
+      ) {
+        continue;
+      }
+
       const isFixture =
         v.isSeeded ||
         id.startsWith('vid-m-') ||

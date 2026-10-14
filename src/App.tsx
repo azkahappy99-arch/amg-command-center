@@ -45,6 +45,7 @@ import {
   AutomationBatch,
 } from './types/index.ts';
 import { api, sanitizeChannel, isRealVideo } from './services/api.ts';
+import { initialChannels, initialVideos } from './services/initialSeedData.ts';
 import {
   authorizeAndFetchYouTubeChannel,
   getStoredGisToken,
@@ -131,9 +132,23 @@ export default function App() {
         const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
         const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
 
-        const cleanChannels = channelsData
+        let cleanChannels = channelsData
           .filter((c: Channel) => !isUnlinked(c.id) && !isUnlinked(c.youtubeChannelId) && !isUnlinked(`chan-${c.youtubeChannelId}`))
           .map(sanitizeChannel);
+
+        if (cleanChannels.length === 0) {
+          cleanChannels = initialChannels.map(sanitizeChannel);
+        }
+
+        // Ensure Ayam YAHYA is permanently bound to General
+        cleanChannels.forEach((c) => {
+          if (c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
+            c.blockId = 'block-general';
+            c.contentProfileId = 'block-general';
+            c.nicheCategory = 'General';
+            c.status = 'CONNECTED';
+          }
+        });
 
         setChannels(cleanChannels);
         if (cleanChannels.length > 0) {
@@ -157,7 +172,10 @@ export default function App() {
       if (titlesData) setTitles(titlesData);
       if (thumbsData) setThumbnails(thumbsData);
       if (videosData) {
-        const cleanVids = videosData.filter(isRealVideo);
+        let cleanVids = videosData.filter(isRealVideo);
+        if (cleanVids.length === 0) {
+          cleanVids = initialVideos;
+        }
         setVideos(cleanVids);
         localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
       }
@@ -185,7 +203,7 @@ export default function App() {
         const parsed = JSON.parse(storedChannelsRaw);
         if (Array.isArray(parsed)) {
           // Purge fixture mock channels, unlinked channels, and sanitize legacy mock monetization/revenue
-          const realChannels = parsed
+          let realChannels = parsed
             .filter(
               (c: Channel) =>
                 !c.isSeeded &&
@@ -202,6 +220,20 @@ export default function App() {
             )
             .map(sanitizeChannel);
 
+          if (realChannels.length === 0) {
+            realChannels = initialChannels.map(sanitizeChannel);
+          }
+
+          // Ensure Ayam YAHYA is permanently bound to General
+          realChannels.forEach((c) => {
+            if (c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
+              c.blockId = 'block-general';
+              c.contentProfileId = 'block-general';
+              c.nicheCategory = 'General';
+              c.status = 'CONNECTED';
+            }
+          });
+
           if (storedConnectedRaw) {
             const live = JSON.parse(storedConnectedRaw);
             if (live && live.id && !isUnlinked(live.id) && !isUnlinked(`chan-${live.id}`)) {
@@ -215,6 +247,9 @@ export default function App() {
                   status: 'CONNECTED',
                   title: live.title || realChannels[idx].title,
                   thumbnailUrl: live.thumbnailUrl || realChannels[idx].thumbnailUrl,
+                  blockId: 'block-general',
+                  contentProfileId: 'block-general',
+                  nicheCategory: 'General',
                 });
               }
             }

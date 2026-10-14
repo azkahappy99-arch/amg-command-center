@@ -73,7 +73,10 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
-  const selectedProfile = profiles.find((p) => p.id === selectedChannel?.contentProfileId || p.id === selectedChannel?.blockId || p.blockId === selectedChannel?.blockId);
+  const selectedProfile =
+    profiles.find((p) => p.id === selectedChannel?.contentProfileId || p.id === selectedChannel?.blockId || p.blockId === selectedChannel?.blockId) ||
+    profiles.find((p) => p.name.toLowerCase() === 'general' || p.nicheCategory?.toLowerCase() === 'general') ||
+    profiles[0];
 
   const fetchPreview = async (channelId: string) => {
     setIsLoadingPreview(true);
