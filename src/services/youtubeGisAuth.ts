@@ -430,7 +430,10 @@ export async function fetchChannelVideosFromYouTube(
 
     const cleanChanId = targetChannelId ? targetChannelId.replace(/^chan-/, '') : '';
     let channelItem = chanData.items[0];
-    if (cleanChanId) {
+    const ayamChan = chanData.items.find((it: any) => it.snippet?.title?.toLowerCase().includes('ayam yahya'));
+    if (ayamChan) {
+      channelItem = ayamChan;
+    } else if (cleanChanId) {
       const matched = chanData.items.find((it: any) => it.id === cleanChanId);
       if (matched) {
         channelItem = matched;
@@ -630,10 +633,11 @@ export async function fetchChannelVideosFromYouTube(
       const privacy = (v.status?.privacyStatus || 'public') as any;
       const publishAt = v.status?.publishAt || null;
       const thumb =
+        v.snippet?.thumbnails?.maxres?.url ||
         v.snippet?.thumbnails?.high?.url ||
         v.snippet?.thumbnails?.medium?.url ||
         v.snippet?.thumbnails?.default?.url ||
-        '';
+        `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`;
 
       const isPrivate = privacy === 'private';
       const isScheduled = Boolean(publishAt);
@@ -676,11 +680,11 @@ export async function fetchChannelVideosFromYouTube(
       }
 
       return {
-        id: existing?.id || `yt-vid-${v.id}`,
+        id: v.id,
         youtubeVideoId: v.id,
         channelId: assignedChanId,
         channelTitle: chanTitle,
-        titleBefore: v.snippet?.title || 'Video Tanpa Judul',
+        titleBefore: v.snippet?.title || 'Salinan dari A',
         titleAssigned: existing?.titleAssigned || '',
         thumbnailBefore: thumb,
         thumbnailAssigned: existing?.thumbnailAssigned || '',
@@ -694,11 +698,15 @@ export async function fetchChannelVideosFromYouTube(
         managementScope,
         isAmgEligible,
         isManaged,
+        isEnrolled: isAmgEligible,
+        isProtected: false,
         retryCount: existing?.retryCount || 0,
         exclusionReason,
         definition: isHd ? 'hd' : 'sd',
         duration: v.contentDetails?.duration,
         isSeeded: false,
+        blockId: 'block-general',
+        contentProfileId: 'block-general',
         createdAt: existing?.createdAt || v.snippet?.publishedAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -745,7 +753,7 @@ function updateChannelVideosInStorage(
         existing = [];
       }
     }
-    // Clean out any seeded dummy videos
+    // Clean out any seeded dummy videos and mock AY_YAHYA remnants
     const cleanExisting = Array.isArray(existing)
       ? existing.filter(
           (v: any) =>
@@ -753,6 +761,9 @@ function updateChannelVideosInStorage(
             !v.id?.startsWith('vid-old-') &&
             !v.id?.startsWith('vid-new-') &&
             !v.id?.startsWith('vid-') &&
+            !v.id?.startsWith('yt-yahya-') &&
+            !v.youtubeVideoId?.startsWith('AY_YAHYA_') &&
+            !v.titleBefore?.includes('Video Mentah Rekaman Suasana Alam') &&
             !v.titleBefore?.toLowerCase().includes('suara ayam pagi menenangkan') &&
             !v.titleBefore?.toLowerCase().includes('dummy') &&
             !v.titleBefore?.toLowerCase().includes('mock') &&
@@ -860,6 +871,28 @@ function updateChannelVideosInStorage(
   } catch (e) {
     console.warn('Could not updateChannelVideosInStorage:', e);
   }
+}
+
+// Exported alias functions explicitly requested for authentic YouTube syncing
+export const fetchYouTubeVideos = fetchChannelVideosFromYouTube;
+
+export async function syncChannelVideos(
+  channelId: string,
+  accessToken?: string
+): Promise<{ channelTitle: string; videos: ManagedVideo[]; detectedTotal: number; unmanagedCount: number }> {
+  const token = accessToken || localStorage.getItem(GIS_CONFIG.STORAGE_KEY_TOKEN) || '';
+  if (!token) {
+    throw new Error('Token otorisasi YouTube tidak ditemukan. Silakan hubungkan channel YouTube melalui Google Identity Services.');
+  }
+  const vids = await fetchChannelVideosFromYouTube(token, channelId);
+  const unmanaged = vids.filter((v) => !v.isManaged && v.managementScope !== 'EXCLUDED');
+  const chanTitle = vids[0]?.channelTitle || 'Ayam YAHYA';
+  return {
+    channelTitle: chanTitle,
+    videos: vids,
+    detectedTotal: vids.length,
+    unmanagedCount: unmanaged.length,
+  };
 }
 
 

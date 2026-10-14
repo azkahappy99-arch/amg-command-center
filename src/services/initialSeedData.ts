@@ -183,56 +183,7 @@ export const initialMasterThumbnails: MasterThumbnail[] = [
   { id: 'thumb-gen-4', profileId: 'block-general', blockId: 'block-general', name: 'Suasana Alam Rindang & Teduh', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80', orderIndex: 3, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
 ];
 
-const rawTitlesList = [
-  'Video Mentah Rekaman Suasana Alam Santai',
-  'Suara Menenangkan Sore Hari Tanpa Edit',
-  'Dokumentasi Alam & Suasana Hutan Asri',
-  'Rekaman Asli Kicau Burung dan Aliran Air',
-  'Suara Hujan Rintik Alami di Halaman Rumah',
-  'Suasana Senja Menentramkan Jiwa & Raga',
-  'Pemandangan Hijau dan Kicauan Burung Liar',
-  'Gemericik Air Sungai Jernih Pegunungan',
-  'Ketenangan Alam Bebas Menjelang Malam',
-  'Suasana Hening Udara Segar Pedesaan',
-];
-
-export const initialVideos: ManagedVideo[] = Array.from({ length: 53 }, (_, idx) => {
-  const i = idx + 1;
-  const num = String(i).padStart(3, '0');
-  const vId = `yt-yahya-${num}`;
-  const rawTitle = `${rawTitlesList[(i - 1) % rawTitlesList.length]} #${i}`;
-  const uploadTime = new Date(Date.now() - (54 - i) * 3600 * 1000 * 4).toISOString();
-
-  return {
-    id: vId,
-    youtubeVideoId: `AY_YAHYA_${num}`,
-    channelId: 'chan-ayam-yahya',
-    channelTitle: 'Ayam YAHYA',
-    blockId: 'block-general',
-    contentProfileId: 'block-general',
-    titleBefore: rawTitle,
-    titleAssigned: '',
-    thumbnailBefore: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=640&q=80',
-    thumbnailAssigned: '',
-    originalUploadAt: uploadTime,
-    uploadedAt: uploadTime,
-    processingStatus: 'processed',
-    privacyStatus: 'private',
-    publishAt: undefined,
-    scheduledPublishAt: undefined,
-    managementStatus: 'DISCOVERED',
-    managementScope: 'REGULAR',
-    isAmgEligible: true,
-    isManaged: false,
-    isEnrolled: true,
-    isProtected: false,
-    retryCount: 0,
-    definition: 'hd',
-    isSeeded: false,
-    createdAt: uploadTime,
-    updatedAt: new Date().toISOString(),
-  };
-});
+export const initialVideos: ManagedVideo[] = [];
 
 export const initialAutomationBatches: AutomationBatch[] = [];
 export const initialAutomationJobs: AutomationJob[] = [];

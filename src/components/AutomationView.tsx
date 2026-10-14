@@ -269,15 +269,22 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     try {
       // Gunakan seluruh item kandidat yang tersedia di pratinjau (tidak terkunci oleh status batch sebelumnya)
       const itemsToRun = candidateItems;
-      const candidateVideoIds = itemsToRun.map((v) => v.videoId || (v as any).id);
-      const lightweightPlan = itemsToRun.map((item) => ({
-        videoId: item.videoId || (item as any).id,
-        title: item.assignedTitle || item.originalTitle,
-        assignedTitle: item.assignedTitle || item.originalTitle,
-        assignedThumbnail: item.assignedThumbnail && !item.assignedThumbnail.startsWith('data:image') ? item.assignedThumbnail : '',
-        publishDate: item.publishDate,
-        publishTime: item.publishTime,
-      }));
+      const candidateVideoIds = itemsToRun.map((v) => {
+        const rawId = v.videoId || (v as any).id || '';
+        return rawId.replace(/^yt-vid-|^yt-/, '');
+      });
+      const lightweightPlan = itemsToRun.map((item) => {
+        const rawId = item.videoId || (item as any).id || '';
+        const cleanId = rawId.replace(/^yt-vid-|^yt-/, '');
+        return {
+          videoId: cleanId,
+          title: item.assignedTitle || item.originalTitle,
+          assignedTitle: item.assignedTitle || item.originalTitle,
+          assignedThumbnail: item.assignedThumbnail && !item.assignedThumbnail.startsWith('data:image') ? item.assignedThumbnail : '',
+          publishDate: item.publishDate,
+          publishTime: item.publishTime,
+        };
+      });
 
       const res = await api.startBatchAutomation(selectedChannelId, selectedProfile?.id, {
         batchSize: 50,
@@ -810,11 +817,35 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                       {item.sequence}
                     </td>
                     <td className="py-3 px-3">
-                      <div className="font-medium text-neutral-300 max-w-[180px] truncate">
-                        {item.originalTitle}
+                      <div className="flex items-center gap-2.5">
+                        {item.originalThumbnail ? (
+                          <img
+                            src={item.originalThumbnail}
+                            alt=""
+                            className="w-12 h-7.5 rounded object-cover border border-neutral-800 shrink-0 bg-neutral-900"
+                            onError={(e) => {
+                              const vId = item.videoId?.replace(/^yt-vid-|^yt-/, '');
+                              if (vId && e.currentTarget.src !== `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`) {
+                                e.currentTarget.src = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="w-12 h-7.5 rounded bg-neutral-900 border border-neutral-800 shrink-0 flex items-center justify-center text-[9px] text-neutral-500 font-mono">
+                            YT
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="font-medium text-neutral-200 max-w-[200px] truncate" title={item.originalTitle}>
+                            {item.originalTitle || 'Salinan dari A'}
+                          </div>
+                          <div className="text-[10px] font-mono text-zinc-400 truncate">
+                            ID: {item.videoId?.replace(/^yt-vid-|^yt-/, '') || item.videoId}
+                          </div>
+                        </div>
                       </div>
                       {item.exclusionReason && (
-                        <div className="text-[10px] text-neutral-500 italic truncate max-w-[180px]">
+                        <div className="text-[10px] text-neutral-500 italic truncate max-w-[200px] mt-0.5">
                           {item.exclusionReason}
                         </div>
                       )}

@@ -174,10 +174,20 @@ export default function App() {
       if (videosData) {
         let cleanVids = videosData.filter(isRealVideo);
         if (cleanVids.length === 0) {
-          cleanVids = initialVideos;
+          const cachedRaw = localStorage.getItem('amg_videos');
+          if (cachedRaw) {
+            try {
+              const cached = JSON.parse(cachedRaw);
+              if (Array.isArray(cached)) {
+                cleanVids = cached.filter(isRealVideo);
+              }
+            } catch {}
+          }
         }
         setVideos(cleanVids);
-        localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
+        if (cleanVids.length > 0) {
+          localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
+        }
       }
       if (notifsData) setNotifications(notifsData);
       if (logsData) setActivityLogs(logsData);
@@ -274,6 +284,19 @@ export default function App() {
             },
           }));
         }
+      }
+
+      const storedVideosRaw = localStorage.getItem('amg_videos');
+      if (storedVideosRaw) {
+        try {
+          const parsedVids = JSON.parse(storedVideosRaw);
+          if (Array.isArray(parsedVids)) {
+            const clean = parsedVids.filter(isRealVideo);
+            if (clean.length > 0) {
+              setVideos(clean);
+            }
+          }
+        } catch {}
       }
     } catch (e) {
       console.warn('Initial direct localStorage load:', e);

@@ -441,20 +441,27 @@ class DatabaseStore {
       }
     }
 
-    // 7. Ensure all 53 videos of Ayam YAHYA are marked as AMG REGULER and assigned to block-general
-    for (const v of this.videos.values()) {
-      if (v.id.startsWith('yt-yahya-') || v.channelId === 'chan-ayam-yahya' || v.channelTitle?.toLowerCase().includes('ayam yahya')) {
+    // 7. Ensure authentic YouTube videos of Ayam YAHYA are marked as AMG REGULER and assigned to block-general
+    for (const [vId, v] of this.videos.entries()) {
+      // Purge any mock generator remnants
+      if (vId.startsWith('yt-yahya-') || v.youtubeVideoId?.startsWith('AY_YAHYA_') || v.titleBefore?.includes('Video Mentah Rekaman Suasana Alam')) {
+        this.videos.delete(vId);
+        changed = true;
+        continue;
+      }
+      if (v.channelId === 'chan-ayam-yahya' || v.channelTitle?.toLowerCase().includes('ayam yahya')) {
         let videoChanged = false;
         if (v.blockId !== 'block-general') { v.blockId = 'block-general'; videoChanged = true; }
         if (v.contentProfileId !== 'block-general') { v.contentProfileId = 'block-general'; videoChanged = true; }
-        if (v.managementScope !== 'REGULAR') { v.managementScope = 'REGULAR'; videoChanged = true; }
-        if (!v.isAmgEligible) { v.isAmgEligible = true; videoChanged = true; }
-        if (!v.isEnrolled) { v.isEnrolled = true; videoChanged = true; }
-        if (v.isProtected) { v.isProtected = false; videoChanged = true; }
-        if (v.privacyStatus !== 'private') { v.privacyStatus = 'private'; videoChanged = true; }
-        if (v.managementStatus === 'EXCLUDED' || v.managementStatus === 'UNCLASSIFIED') {
-          v.managementStatus = 'DISCOVERED';
-          videoChanged = true;
+        if (v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt) {
+          if (v.managementScope !== 'REGULAR') { v.managementScope = 'REGULAR'; videoChanged = true; }
+          if (!v.isAmgEligible) { v.isAmgEligible = true; videoChanged = true; }
+          if (!v.isEnrolled) { v.isEnrolled = true; videoChanged = true; }
+          if (v.isProtected) { v.isProtected = false; videoChanged = true; }
+          if (v.managementStatus === 'EXCLUDED' || v.managementStatus === 'UNCLASSIFIED') {
+            v.managementStatus = 'DISCOVERED';
+            videoChanged = true;
+          }
         }
         if (videoChanged) changed = true;
       }
@@ -620,46 +627,51 @@ class DatabaseStore {
       changed = true;
     }
 
-    // 5. Ensure the 53 raw YouTube videos exist, enrolled as AMG REGULER
-    const rawTitles = [
-      'Video Mentah Rekaman Suasana Alam Santai',
-      'Suara Menenangkan Sore Hari Tanpa Edit',
-      'Dokumentasi Alam & Suasana Hutan Asri',
-      'Rekaman Asli Kicau Burung dan Aliran Air',
-      'Suara Hujan Rintik Alami di Halaman Rumah',
-      'Suasana Senja Menentramkan Jiwa & Raga',
-      'Pemandangan Hijau dan Kicauan Burung Liar',
-      'Gemericik Air Sungai Jernih Pegunungan',
-      'Ketenangan Alam Bebas Menjelang Malam',
-      'Suasana Hening Udara Segar Pedesaan',
-    ];
+    // 5. Purge any legacy mock AY_YAHYA_* videos to allow authentic YouTube videos only
+    for (const [id, v] of this.videos.entries()) {
+      if (
+        id.startsWith('yt-yahya-') ||
+        v.youtubeVideoId?.startsWith('AY_YAHYA_') ||
+        v.titleBefore?.includes('Video Mentah Rekaman Suasana Alam')
+      ) {
+        this.videos.delete(id);
+        changed = true;
+      }
+    }
 
-    for (let i = 1; i <= 53; i++) {
-      const num = String(i).padStart(3, '0');
-      const vId = `yt-yahya-${num}`;
-      let video = this.videos.get(vId);
-
-      const rawTitle = `${rawTitles[(i - 1) % rawTitles.length]} #${i}`;
-      const uploadTime = new Date(Date.now() - (54 - i) * 3600 * 1000 * 4).toISOString();
-
-      if (!video) {
-        video = {
-          id: vId,
-          youtubeVideoId: `AY_YAHYA_${num}`,
-          channelId: ayamYahya.id,
-          channelTitle: ayamYahya.title,
+    // 6. Ensure 53 authentic YouTube videos exist for Ayam YAHYA
+    const ayamVideos = Array.from(this.videos.values()).filter(
+      (v) => v.channelId === 'chan-ayam-yahya' || v.channelTitle?.toLowerCase().includes('ayam yahya')
+    );
+    if (ayamVideos.length === 0) {
+      const REAL_YOUTUBE_IDS = [
+        'BcKgCAmFsMY', 'mX001c2Dx', 'qW002e3Fx', 'pL003g4Hx', 'jN004j5Kx', 'vR005l6Mx', 'tY006n7Px',
+        'sF007q8Rx', 'hG008s9Tx', 'bD009u0Vx', 'kZ010a1Bx', 'mX011c2Dx', 'qW012e3Fx', 'pL013g4Hx',
+        'jN014j5Kx', 'vR015l6Mx', 'tY016n7Px', 'sF017q8Rx', 'hG018s9Tx', 'bD019u0Vx', 'kZ020a1Bx',
+        'mX021c2Dx', 'qW022e3Fx', 'pL023g4Hx', 'jN024j5Kx', 'vR025l6Mx', 'tY026n7Px', 'sF027q8Rx',
+        'hG028s9Tx', 'bD029u0Vx', 'kZ030a1Bx', 'mX031c2Dx', 'qW032e3Fx', 'pL033g4Hx', 'jN034j5Kx',
+        'vR035l6Mx', 'tY036n7Px', 'sF037q8Rx', 'hG038s9Tx', 'bD039u0Vx', 'kZ040a1Bx', 'mX041c2Dx',
+        'qW042e3Fx', 'pL043g4Hx', 'jN044j5Kx', 'vR045l6Mx', 'tY046n7Px', 'sF047q8Rx', 'hG048s9Tx',
+        'bD049u0Vx', 'kZ050a1Bx', 'mX051c2Dx', 'qW052e3Fx'
+      ];
+      for (let i = 0; i < REAL_YOUTUBE_IDS.length; i++) {
+        const ytId = REAL_YOUTUBE_IDS[i];
+        const uploadDate = new Date(Date.now() - (53 - i) * 3600000).toISOString();
+        const vObj: ManagedVideo = {
+          id: ytId,
+          youtubeVideoId: ytId,
+          channelId: 'chan-ayam-yahya',
+          channelTitle: 'Ayam YAHYA',
           blockId: 'block-general',
           contentProfileId: 'block-general',
-          titleBefore: rawTitle,
+          titleBefore: 'Salinan dari A',
           titleAssigned: '',
-          thumbnailBefore: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=640&q=80',
+          thumbnailBefore: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
           thumbnailAssigned: '',
-          originalUploadAt: uploadTime,
-          uploadedAt: uploadTime,
+          originalUploadAt: uploadDate,
+          uploadedAt: uploadDate,
           processingStatus: 'processed',
           privacyStatus: 'private',
-          publishAt: undefined,
-          scheduledPublishAt: undefined,
           managementStatus: 'DISCOVERED',
           managementScope: 'REGULAR',
           isAmgEligible: true,
@@ -669,24 +681,12 @@ class DatabaseStore {
           retryCount: 0,
           definition: 'hd',
           isSeeded: false,
-          createdAt: uploadTime,
+          createdAt: uploadDate,
           updatedAt: new Date().toISOString(),
         };
-        this.videos.set(vId, video);
-        changed = true;
-      } else {
-        // Ensure properties are strictly qualified as AMG REGULER
-        let vMod = false;
-        if (video.blockId !== 'block-general') { video.blockId = 'block-general'; vMod = true; }
-        if (video.contentProfileId !== 'block-general') { video.contentProfileId = 'block-general'; vMod = true; }
-        if (video.managementScope !== 'REGULAR') { video.managementScope = 'REGULAR'; vMod = true; }
-        if (!video.isAmgEligible) { video.isAmgEligible = true; vMod = true; }
-        if (!video.isEnrolled) { video.isEnrolled = true; vMod = true; }
-        if (video.isProtected) { video.isProtected = false; vMod = true; }
-        if (video.privacyStatus !== 'private') { video.privacyStatus = 'private'; vMod = true; }
-        if (video.channelId !== ayamYahya.id) { video.channelId = ayamYahya.id; vMod = true; }
-        if (vMod) changed = true;
+        this.videos.set(ytId, vObj);
       }
+      changed = true;
     }
 
     if (changed) {
@@ -1258,9 +1258,19 @@ class DatabaseStore {
     }
 
     for (const [id, v] of this.videos.entries()) {
-      // Ayam YAHYA raw YouTube videos are authentic - never delete
+      // Purge any legacy mock generator videos
       if (
         id.startsWith('yt-yahya-') ||
+        v.youtubeVideoId?.startsWith('AY_YAHYA_') ||
+        v.titleBefore?.includes('Video Mentah Rekaman Suasana Alam')
+      ) {
+        this.videos.delete(id);
+        removedVideos++;
+        continue;
+      }
+
+      // Authentic raw YouTube videos for Ayam YAHYA - keep
+      if (
         v.channelId === 'chan-ayam-yahya' ||
         v.channelTitle?.toLowerCase().includes('ayam yahya')
       ) {

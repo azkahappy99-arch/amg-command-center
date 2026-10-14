@@ -41,11 +41,15 @@ import {
 } from './initialSeedData.ts';
 import {
   fetchChannelVideosFromYouTube,
+  fetchYouTubeVideos,
+  syncChannelVideos,
   markChannelAsUnlinked,
   unmarkChannelAsUnlinked,
   removePersistedConnectedChannel,
   savePersistedConnectedChannel,
 } from './youtubeGisAuth.ts';
+
+export { fetchYouTubeVideos, syncChannelVideos };
 import {
   resolveBlockId,
   getBlockMasters,
@@ -131,15 +135,26 @@ export function isRealChannel(c: Channel): boolean {
 // Helper to identify and preserve only authentic real videos (purge dummy list like "Copy of A")
 export function isRealVideo(v: ManagedVideo): boolean {
   if (!v) return false;
-  if (
-    v.id?.startsWith('yt-yahya-') ||
-    v.channelId === 'chan-ayam-yahya' ||
-    v.channelTitle?.toLowerCase().includes('ayam yahya')
-  ) {
-    return true;
-  }
   if (v.isSeeded) return false;
+
   const id = v.id || '';
+  const yId = v.youtubeVideoId || '';
+  const title = v.titleBefore || '';
+
+  // 1. Strict rejection of any mock AY_YAHYA or fake title remnants
+  if (
+    yId.startsWith('AY_YAHYA_') ||
+    id.startsWith('yt-yahya-') ||
+    title.includes('Video Mentah Rekaman Suasana Alam') ||
+    title.includes('Suara Menenangkan Sore Hari Tanpa Edit') ||
+    title.includes('Dokumentasi Alam & Suasana Hutan Asri') ||
+    title.includes('Rekaman Asli Kicau Burung dan Aliran Air') ||
+    title.includes('Suara Hujan Rintik Alami di Halaman Rumah')
+  ) {
+    return false;
+  }
+
+  // 2. Reject legacy dummy fixture prefixes
   if (
     id.startsWith('vid-old-') ||
     id.startsWith('vid-new-') ||
@@ -160,13 +175,13 @@ export function isRealVideo(v: ManagedVideo): boolean {
   ) {
     return false;
   }
-  const title = (v.titleBefore || '').toLowerCase();
+  const lowerTitle = title.toLowerCase();
   if (
-    title.includes('demo fixture') ||
-    title.includes('[demo fixture]') ||
-    title.includes('demo seed fixture') ||
-    title.includes('suara ayam pagi menenangkan') ||
-    title.includes('mock dummy')
+    lowerTitle.includes('demo fixture') ||
+    lowerTitle.includes('[demo fixture]') ||
+    lowerTitle.includes('demo seed fixture') ||
+    lowerTitle.includes('suara ayam pagi menenangkan') ||
+    lowerTitle.includes('mock dummy')
   ) {
     return false;
   }
@@ -1785,8 +1800,19 @@ export const api = {
     );
 
     if (channelVideos.length === 0 && (channel.id === 'chan-ayam-yahya' || channel.title?.toLowerCase().includes('ayam yahya'))) {
-      channelVideos = initialVideos;
-      setStorageItem(KEYS.VIDEOS, initialVideos);
+      try {
+        const vRes = await authFetch('/api/videos?channelId=chan-ayam-yahya');
+        if (vRes.ok) {
+          const fetched = await vRes.json();
+          if (Array.isArray(fetched) && fetched.length > 0) {
+            const clean = fetched.filter(isRealVideo);
+            if (clean.length > 0) {
+              channelVideos = clean;
+              setStorageItem(KEYS.VIDEOS, clean);
+            }
+          }
+        }
+      } catch {}
     }
 
     if (channelVideos.length === 0) {
