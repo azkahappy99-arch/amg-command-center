@@ -576,8 +576,25 @@ export async function fetchChannelVideosFromYouTube(
 
     const assignedChanId = targetChannelId || `chan-${chanId}`;
 
+    const rawExisting = localStorage.getItem('amg_videos');
+    const totalRemoteVideos = parseInt(channelItem.statistics?.videoCount || '0', 10);
     if (videoIds.length === 0) {
-      // Channel has 0 videos uploaded yet
+      // If YouTube reports that channel has videos but none could be fetched, retain existing to avoid data loss
+      if (totalRemoteVideos > 0 && rawExisting) {
+        console.warn(`[youtubeGisAuth] Remote videoCount is ${totalRemoteVideos} but discovery returned 0. Retaining stored videos.`);
+        try {
+          const parsedExisting = JSON.parse(rawExisting);
+          if (Array.isArray(parsedExisting)) {
+            const chVids = parsedExisting.filter(
+              (v: any) =>
+                v.channelId === assignedChanId ||
+                v.channelId === chanId ||
+                v.channelId === `chan-${chanId}`
+            );
+            if (chVids.length > 0) return chVids;
+          }
+        } catch {}
+      }
       updateChannelVideosInStorage(assignedChanId, chanId, chanTitle, []);
       return [];
     }
@@ -608,7 +625,6 @@ export async function fetchChannelVideosFromYouTube(
     }
 
     // Existing videos lookup map for IDEMPOTENCY (preserve existing assigned title, thumbnail, schedule, scope)
-    const rawExisting = localStorage.getItem('amg_videos');
     const existingMap = new Map<string, ManagedVideo>();
     if (rawExisting) {
       try {
@@ -622,6 +638,29 @@ export async function fetchChannelVideosFromYouTube(
       } catch {
         // ignore
       }
+    }
+
+    // Resolve channel's actual contentProfileId and blockId from amg_channels
+    let channelProfileId = 'block-general';
+    let channelBlockId = 'block-general';
+    const rawChannels = localStorage.getItem('amg_channels');
+    if (rawChannels) {
+      try {
+        const parsedChans = JSON.parse(rawChannels);
+        if (Array.isArray(parsedChans)) {
+          const foundCh = parsedChans.find(
+            (c: any) =>
+              c.id === assignedChanId ||
+              c.id === chanId ||
+              c.youtubeChannelId === chanId ||
+              c.id === `chan-${chanId}`
+          );
+          if (foundCh) {
+            channelProfileId = foundCh.contentProfileId || foundCh.blockId || channelProfileId;
+            channelBlockId = foundCh.blockId || foundCh.contentProfileId || channelBlockId;
+          }
+        }
+      } catch {}
     }
 
     const managedVideos: ManagedVideo[] = detailedItems.map((v: any) => {
@@ -702,8 +741,8 @@ export async function fetchChannelVideosFromYouTube(
         definition: isHd ? 'hd' : 'sd',
         duration: v.contentDetails?.duration,
         isSeeded: false,
-        blockId: 'block-general',
-        contentProfileId: 'block-general',
+        blockId: existing?.blockId || channelBlockId,
+        contentProfileId: existing?.contentProfileId || channelProfileId,
         createdAt: existing?.createdAt || v.snippet?.publishedAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -757,15 +796,13 @@ function updateChannelVideosInStorage(
             !v.isSeeded &&
             !v.id?.startsWith('vid-old-') &&
             !v.id?.startsWith('vid-new-') &&
-            !v.id?.startsWith('vid-') &&
+            !v.id?.startsWith('vid-cand-') &&
+            !v.id?.startsWith('vid-fixture-') &&
             !v.id?.startsWith('yt-yahya-') &&
             !v.youtubeVideoId?.startsWith('AY_YAHYA_') &&
             !v.titleBefore?.includes('Video Mentah Rekaman Suasana Alam') &&
             !v.titleBefore?.toLowerCase().includes('suara ayam pagi menenangkan') &&
-            !v.titleBefore?.toLowerCase().includes('dummy') &&
-            !v.titleBefore?.toLowerCase().includes('mock') &&
-            !v.titleBefore?.includes('Copy of A') &&
-            !v.titleBefore?.includes('[DEMO FIXTURE]') &&
+            !v.titleBefore?.toLowerCase().includes('[demo fixture]') &&
             !v.titleBefore?.includes('Demo Fixture') &&
             v.channelId !== 'chan-ayam-warna' &&
             v.channelId !== 'chan-suara-alam' &&

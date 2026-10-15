@@ -58,22 +58,51 @@ export const VideosView: React.FC<VideosViewProps> = ({
   const [privacyFilter, setPrivacyFilter] = useState<string>('ALL');
   const [managedFilter, setManagedFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [scopeFilter, setScopeFilter] = useState<string>('CANDIDATE');
+  const [scopeFilter, setScopeFilter] = useState<string>('ALL');
   const [selectedVideoIds, setSelectedVideoIds] = useState<string[]>([]);
   const [isUpdatingScope, setIsUpdatingScope] = useState(false);
 
   // Map channelId to channel object for instant niche lookup
   const channelMap = useMemo(() => {
     const map = new Map<string, Channel>();
-    channels.forEach((c) => map.set(c.id, c));
+    channels.forEach((c) => {
+      map.set(c.id, c);
+      if (c.youtubeChannelId) {
+        map.set(c.youtubeChannelId, c);
+        map.set(`chan-${c.youtubeChannelId}`, c);
+      }
+      if (c.id.startsWith('chan-')) {
+        map.set(c.id.replace('chan-', ''), c);
+      }
+    });
     return map;
   }, [channels]);
 
   const currentChannelObj = useMemo(() => {
     return channels.find(
-      (c) => c.id === selectedChannelId || c.youtubeChannelId === selectedChannelId
+      (c) =>
+        c.id === selectedChannelId ||
+        c.youtubeChannelId === selectedChannelId ||
+        (selectedChannelId.startsWith('chan-') && c.id === selectedChannelId.replace('chan-', '')) ||
+        (c.youtubeChannelId && selectedChannelId === `chan-${c.youtubeChannelId}`)
     );
   }, [channels, selectedChannelId]);
+
+  // Robust check if video belongs to the selected channel
+  const isVideoInSelectedChannel = (vChanId: string) => {
+    if (selectedChannelId === 'ALL') return true;
+    if (vChanId === selectedChannelId) return true;
+    if (vChanId === `chan-${selectedChannelId}`) return true;
+    if (selectedChannelId.startsWith('chan-') && vChanId === selectedChannelId.replace('chan-', '')) return true;
+    if (currentChannelObj) {
+      if (vChanId === currentChannelObj.id) return true;
+      if (currentChannelObj.youtubeChannelId) {
+        if (vChanId === currentChannelObj.youtubeChannelId) return true;
+        if (vChanId === `chan-${currentChannelObj.youtubeChannelId}`) return true;
+      }
+    }
+    return false;
+  };
 
   // Strict Privacy & Schedule Check helpers (Requirements: private && !publishAt)
   const isVideoPrivate = (v: ManagedVideo) => v.privacyStatus === 'private';
@@ -96,14 +125,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
   const channelVideos =
     selectedChannelId === 'ALL'
       ? videos
-      : videos.filter(
-          (v) =>
-            v.channelId === selectedChannelId ||
-            v.channelId === `chan-${selectedChannelId}` ||
-            (currentChannelObj?.youtubeChannelId &&
-              (v.channelId === currentChannelObj.youtubeChannelId ||
-                v.channelId === `chan-${currentChannelObj.youtubeChannelId}`))
-        );
+      : videos.filter((v) => isVideoInSelectedChannel(v.channelId));
 
   const candidateCount = channelVideos.filter(isVideoCandidate).length;
   const scheduledCount = channelVideos.filter(isVideoScheduled).length;
@@ -123,13 +145,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
       (v.titleAssigned && v.titleAssigned.toLowerCase().includes(searchQuery.toLowerCase())) ||
       v.youtubeVideoId.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesChannel =
-      selectedChannelId === 'ALL' ||
-      v.channelId === selectedChannelId ||
-      v.channelId === `chan-${selectedChannelId}` ||
-      (currentChannelObj?.youtubeChannelId &&
-        (v.channelId === currentChannelObj.youtubeChannelId ||
-          v.channelId === `chan-${currentChannelObj.youtubeChannelId}`));
+    const matchesChannel = isVideoInSelectedChannel(v.channelId);
     const parentChannel = channelMap.get(v.channelId);
     const videoNiche = parentChannel?.nicheCategory || 'General';
     const matchesNiche = nicheCategoryFilter === 'ALL' || videoNiche === nicheCategoryFilter;

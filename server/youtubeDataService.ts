@@ -192,7 +192,13 @@ export class YouTubeDataService {
 
         const res = await fetch(url, { headers });
         if (!res.ok) {
-          break;
+          const errBody = await res.json().catch(() => ({}));
+          const errMsg = errBody?.error?.message || `YouTube API responded with status ${res.status}`;
+          console.error(`[youtubeDataService] playlistItems error: ${errMsg}`);
+          return {
+            success: false,
+            error: `Gagal membaca playlist video YouTube (${res.status}): ${errMsg}`,
+          };
         }
 
         const json = await res.json();

@@ -154,26 +154,32 @@ export function isRealVideo(v: ManagedVideo): boolean {
     return false;
   }
 
-  // 2. Reject legacy dummy fixture prefixes
+  // 2. Reject legacy dummy fixture prefixes only when there is no genuine youtubeVideoId
   if (
-    id.startsWith('vid-old-') ||
-    id.startsWith('vid-new-') ||
-    id.startsWith('vid-m-') ||
-    id.startsWith('vid-cand-') ||
-    id.startsWith('vid-wrong-') ||
-    id.startsWith('vid-personal-') ||
-    id.startsWith('vid-test-') ||
-    id.startsWith('vid-') ||
-    id === 'vid-1' ||
-    id === 'vid-2' ||
-    id === 'vid-3' ||
-    id === 'vid-4' ||
-    id === 'vid-5' ||
-    id === 'vid-6' ||
-    id === 'vid-7' ||
-    id === 'vid-8'
+    !v.youtubeVideoId ||
+    v.youtubeVideoId.startsWith('AY_YAHYA_') ||
+    v.youtubeVideoId.startsWith('dummy-')
   ) {
-    return false;
+    if (
+      id.startsWith('vid-old-') ||
+      id.startsWith('vid-new-') ||
+      id.startsWith('vid-m-') ||
+      id.startsWith('vid-cand-') ||
+      id.startsWith('vid-fixture-') ||
+      id.startsWith('vid-wrong-') ||
+      id.startsWith('vid-personal-') ||
+      id.startsWith('vid-test-') ||
+      id === 'vid-1' ||
+      id === 'vid-2' ||
+      id === 'vid-3' ||
+      id === 'vid-4' ||
+      id === 'vid-5' ||
+      id === 'vid-6' ||
+      id === 'vid-7' ||
+      id === 'vid-8'
+    ) {
+      return false;
+    }
   }
   const lowerTitle = title.toLowerCase();
   if (
@@ -1567,7 +1573,21 @@ export const api = {
         const backendVideos = await res.json();
         if (Array.isArray(backendVideos)) {
           const clean = backendVideos.filter(isRealVideo);
-          setStorageItem(KEYS.VIDEOS, clean);
+          const rawExisting = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
+          let mergedVideos: ManagedVideo[];
+          if (params?.channelId && params.channelId !== 'ALL') {
+            const targetChId = params.channelId;
+            const otherChannelsVideos = rawExisting.filter(
+              (v) =>
+                v.channelId !== targetChId &&
+                v.channelId !== `chan-${targetChId}` &&
+                (!targetChId.startsWith('chan-') || v.channelId !== targetChId.replace('chan-', ''))
+            );
+            mergedVideos = [...clean, ...otherChannelsVideos];
+          } else {
+            mergedVideos = clean;
+          }
+          setStorageItem(KEYS.VIDEOS, mergedVideos);
           let list = clean;
           if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);
           if (params?.isManaged !== undefined) list = list.filter((v) => v.isManaged === params.isManaged);
@@ -1639,16 +1659,47 @@ export const api = {
   },
 
   getChannelScopeSummary: async (channelId: string) => {
+    try {
+      const res = await authFetch(`/api/channels/${encodeURIComponent(channelId)}/scope-summary`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.summary) return data;
+      }
+    } catch {}
+
+    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    const channel = channels.find(
+      (c) =>
+        c.id === channelId ||
+        c.youtubeChannelId === channelId ||
+        (channelId.startsWith('chan-') && c.id === channelId.replace('chan-', '')) ||
+        (c.youtubeChannelId && channelId === `chan-${c.youtubeChannelId}`)
+    );
+
+    const isMatch = (vChanId: string) => {
+      if (vChanId === channelId) return true;
+      if (vChanId === `chan-${channelId}`) return true;
+      if (channelId.startsWith('chan-') && vChanId === channelId.replace('chan-', '')) return true;
+      if (channel) {
+        if (vChanId === channel.id) return true;
+        if (channel.youtubeChannelId) {
+          if (vChanId === channel.youtubeChannelId) return true;
+          if (vChanId === `chan-${channel.youtubeChannelId}`) return true;
+        }
+      }
+      return false;
+    };
+
     const list = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(
-      (v) => v.channelId === channelId
+      (v) => isMatch(v.channelId)
     );
     return {
       channelId,
-      channelTitle: 'Channel',
+      channelTitle: channel?.title || 'Channel',
       summary: {
-        includedCount: list.filter((v) => v.managementScope === 'REGULAR').length,
-        excludedCount: list.filter((v) => v.managementScope === 'EXCLUDED').length,
-        needsScopeAssignmentCount: list.filter((v) => v.managementScope === 'UNCLASSIFIED').length,
+        includedCount: list.filter((v) => v.managementScope === 'REGULAR' && v.isAmgEligible).length,
+        excludedCount: list.filter((v) => v.managementScope === 'EXCLUDED' || !v.isAmgEligible).length,
+        needsScopeAssignmentCount: list.filter((v) => v.managementScope === 'UNCLASSIFIED' || !v.managementScope).length,
         totalDetected: list.length,
       },
     };
@@ -2396,8 +2447,12 @@ export const api = {
         (v as any).scheduledAt ||
         (v as any).status?.publishAt
       );
+      const isChanMatch =
+        v.channelId === channelId ||
+        v.channelId === `chan-${channelId}` ||
+        (channelId.startsWith('chan-') && v.channelId === channelId.replace('chan-', ''));
       if (
-        v.channelId === channelId &&
+        isChanMatch &&
         !v.isManaged &&
         v.privacyStatus === 'private' &&
         !hasPublishAt &&

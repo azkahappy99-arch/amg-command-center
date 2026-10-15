@@ -636,15 +636,21 @@ function isVideoUnmanagedPrivateRaw(v: any): boolean {
   return true;
 }
 
+// Evaluates whether a video belongs to a given channel across ID variations
+function isVideoForChannel(v: any, channel: any): boolean {
+  if (!v || !channel) return false;
+  if (v.channelId === channel.id) return true;
+  if (channel.youtubeChannelId) {
+    if (v.channelId === channel.youtubeChannelId) return true;
+    if (v.channelId === `chan-${channel.youtubeChannelId}`) return true;
+  }
+  if (channel.id && typeof channel.id === 'string' && channel.id.startsWith('chan-') && v.channelId === channel.id.replace('chan-', '')) return true;
+  return false;
+}
+
 // Computes the furthest scheduled video anchor and unmanaged counts for a channel
 function refreshChannelScheduleAndUnmanagedState(channel: any, allVideos: any[]) {
-  const channelVideos = allVideos.filter(
-    (v) =>
-      v.channelId === channel.id ||
-      (channel.youtubeChannelId &&
-        (v.channelId === channel.youtubeChannelId ||
-          v.channelId === `chan-${channel.youtubeChannelId}`))
-  );
+  const channelVideos = allVideos.filter((v) => isVideoForChannel(v, channel));
 
   let maxTime = 0;
   let latestAnchorPublishAt: string | null = null;
@@ -2064,7 +2070,22 @@ app.get('/api/videos', (req: Request, res: Response) => {
   }
 
   if (channelId) {
-    videos = videos.filter(v => v.channelId === channelId);
+    const rawTarget = String(channelId);
+    const targetChan = dbStore.channels.get(rawTarget) ||
+      Array.from(dbStore.channels.values()).find(
+        (c) => c.youtubeChannelId === rawTarget || c.id === rawTarget || c.id === `chan-${rawTarget}` || (c.youtubeChannelId && rawTarget === `chan-${c.youtubeChannelId}`)
+      );
+    const validChanIds = new Set<string>([rawTarget]);
+    if (rawTarget.startsWith('chan-')) validChanIds.add(rawTarget.replace('chan-', ''));
+    else validChanIds.add(`chan-${rawTarget}`);
+    if (targetChan) {
+      validChanIds.add(targetChan.id);
+      if (targetChan.youtubeChannelId) {
+        validChanIds.add(targetChan.youtubeChannelId);
+        validChanIds.add(`chan-${targetChan.youtubeChannelId}`);
+      }
+    }
+    videos = videos.filter(v => validChanIds.has(v.channelId));
   }
   if (status) {
     videos = videos.filter(v => v.managementStatus === status);
@@ -2154,6 +2175,9 @@ app.post('/api/videos/batch-sync', (req: Request, res: Response) => {
       definition: v.definition || 'hd',
       duration: v.duration,
       isSeeded: false,
+      contentProfileId: existing?.contentProfileId || v.contentProfileId || channel?.contentProfileId || 'block-general',
+      blockId: existing?.blockId || v.blockId || channel?.blockId || channel?.contentProfileId || 'block-general',
+      workspaceId: (existing as any)?.workspaceId || v.workspaceId || channel?.workspaceId || 'ws-owner-primary',
       createdAt: existing?.createdAt || v.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -2380,7 +2404,7 @@ app.post('/api/videos/:id/enroll', (req: Request, res: Response) => {
   // Update channel unmanaged count
   if (channel) {
     const unmanaged = Array.from(dbStore.videos.values()).filter(
-      (v) => v.channelId === channel.id && !v.isManaged && v.managementScope === 'REGULAR' && v.isAmgEligible
+      (v) => isVideoForChannel(v, channel) && !v.isManaged && v.managementScope === 'REGULAR' && v.isAmgEligible
     ).length;
     channel.unmanagedVideoCount = unmanaged;
   }
@@ -2423,10 +2447,10 @@ app.post('/api/videos/:id/reject', (req: Request, res: Response) => {
   video.updatedAt = new Date().toISOString();
   dbStore.videos.set(video.id, video);
 
-  const channel = dbStore.channels.get(video.channelId);
+  const channel = dbStore.channels.get(video.channelId) || Array.from(dbStore.channels.values()).find(c => isVideoForChannel(video, c));
   if (channel) {
     const unmanaged = Array.from(dbStore.videos.values()).filter(
-      (v) => v.channelId === channel.id && !v.isManaged && v.managementScope === 'REGULAR' && v.isAmgEligible
+      (v) => isVideoForChannel(v, channel) && !v.isManaged && v.managementScope === 'REGULAR' && v.isAmgEligible
     ).length;
     channel.unmanagedVideoCount = unmanaged;
   }
@@ -2458,7 +2482,7 @@ app.post('/api/channels/:id/enroll-all-candidates', (req: Request, res: Response
   const enrolledList = [];
 
   for (const video of dbStore.videos.values()) {
-    if (video.channelId !== channel.id || video.isManaged || video.isEnrolled) continue;
+    if (!isVideoForChannel(video, channel) || video.isManaged || video.isEnrolled) continue;
 
     const evalRes = evaluateVideoEligibility(video, channel, profile);
     if (evalRes.category === 'NEW_PRIVATE_CANDIDATE' || evalRes.category === 'ELIGIBLE') {
@@ -2535,7 +2559,7 @@ app.post('/api/test/phase2-acceptance', (req: Request, res: Response) => {
 
   // TEST 1: Multi-Layer Video Classification
   detectChannelCandidates(channel.id);
-  const channelVideos = Array.from(dbStore.videos.values()).filter((v) => v.channelId === channel.id);
+  const channelVideos = Array.from(dbStore.videos.values()).filter((v) => isVideoForChannel(v, channel));
   const oldProtectedCount = channelVideos.filter((v) => v.safetyCategory === 'PROTECTED_OLD').length;
   const cutoffProtectedCount = channelVideos.filter((v) => v.safetyCategory === 'PROTECTED_BY_CUTOFF').length;
   const newCandidatesCount = channelVideos.filter(

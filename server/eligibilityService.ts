@@ -372,7 +372,13 @@ export function detectChannelCandidates(
   const profile = dbStore.resolveProfileForChannel(channel);
   const config = resolveEligibilityConfig(channel, profile);
 
-  const channelVideos = Array.from(dbStore.videos.values()).filter((v) => v.channelId === channelId);
+  const channelVideos = Array.from(dbStore.videos.values()).filter(
+    (v) =>
+      v.channelId === channel.id ||
+      (channel.youtubeChannelId &&
+        (v.channelId === channel.youtubeChannelId ||
+          v.channelId === `chan-${channel.youtubeChannelId}`))
+  );
 
   let newCandidatesCount = 0;
   let eligibleCount = 0;
@@ -636,7 +642,10 @@ export function enrollAllEligibleCandidates(
 
   const candidates = Array.from(dbStore.videos.values()).filter(
     (v) =>
-      v.channelId === channelId &&
+      (v.channelId === channel.id ||
+        (channel.youtubeChannelId &&
+          (v.channelId === channel.youtubeChannelId ||
+            v.channelId === `chan-${channel.youtubeChannelId}`))) &&
       !v.isManaged &&
       !v.isProtected &&
       (v.safetyCategory === 'NEW_PRIVATE_CANDIDATE' || v.safetyCategory === 'ELIGIBLE' || v.managementStatus === 'NEW_PRIVATE_CANDIDATE')
@@ -657,7 +666,14 @@ export function enrollAllEligibleCandidates(
 
   // Update channel unmanaged video count
   const regularEligible = Array.from(dbStore.videos.values()).filter(
-    (v) => v.channelId === channelId && !v.isManaged && v.managementScope === 'REGULAR' && v.isAmgEligible
+    (v) =>
+      (v.channelId === channel.id ||
+        (channel.youtubeChannelId &&
+          (v.channelId === channel.youtubeChannelId ||
+            v.channelId === `chan-${channel.youtubeChannelId}`))) &&
+      !v.isManaged &&
+      v.managementScope === 'REGULAR' &&
+      v.isAmgEligible
   );
   channel.unmanagedVideoCount = regularEligible.length;
 

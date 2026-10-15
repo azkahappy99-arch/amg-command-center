@@ -1566,17 +1566,27 @@ class DatabaseStore {
     let needsScopeAssignmentCount = 0;
     let totalDetected = 0;
 
+    const channel = this.channels.get(channelId);
+    const validChanIds = new Set<string>([channelId]);
+    if (channelId.startsWith('chan-')) validChanIds.add(channelId.replace('chan-', ''));
+    else validChanIds.add(`chan-${channelId}`);
+    if (channel) {
+      validChanIds.add(channel.id);
+      if (channel.youtubeChannelId) {
+        validChanIds.add(channel.youtubeChannelId);
+        validChanIds.add(`chan-${channel.youtubeChannelId}`);
+      }
+    }
+
     for (const v of this.videos.values()) {
-      if (v.channelId === channelId) {
+      if (validChanIds.has(v.channelId)) {
         totalDetected++;
         if (v.managementScope === 'REGULAR' && v.isAmgEligible) {
           includedCount++;
-        } else if (v.managementScope === 'EXCLUDED' || !v.isAmgEligible) {
-          if (v.managementScope === 'UNCLASSIFIED') {
-            needsScopeAssignmentCount++;
-          } else {
-            excludedCount++;
-          }
+        } else if (v.managementScope === 'UNCLASSIFIED' || !v.managementScope) {
+          needsScopeAssignmentCount++;
+        } else {
+          excludedCount++;
         }
       }
     }
