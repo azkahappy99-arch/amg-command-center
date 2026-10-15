@@ -127,12 +127,13 @@ export default function App() {
         setStats({ metrics: statsData.metrics, actionRequired: statsData.actionRequired });
         if (statsData.recentBatches) setRecentBatches(statsData.recentBatches);
       }
+      let cleanChannels: Channel[] = [];
       if (channelsData) {
         const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
         const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
         const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
 
-        let cleanChannels = channelsData
+        cleanChannels = channelsData
           .filter((c: Channel) => !isUnlinked(c.id) && !isUnlinked(c.youtubeChannelId) && !isUnlinked(`chan-${c.youtubeChannelId}`))
           .map(sanitizeChannel);
 
@@ -144,9 +145,14 @@ export default function App() {
         if (cleanChannels.length > 0) {
           if (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId)) {
             setSelectedChannelId(cleanChannels[0].id);
+            localStorage.setItem('amg_active_channel', cleanChannels[0].id);
           }
         } else {
           setSelectedChannelId('');
+          localStorage.removeItem('amg_active_channel');
+          localStorage.setItem('amg_channels', JSON.stringify([]));
+          localStorage.setItem('amg_videos', JSON.stringify([]));
+          localStorage.setItem('amg_batches', JSON.stringify([]));
         }
         localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
 
@@ -181,10 +187,12 @@ export default function App() {
       if (thumbsData) setThumbnails(thumbsData);
       if (videosData) {
         let cleanVids = videosData.filter(isRealVideo);
-        const hasActiveChannels = (channelsData && channelsData.length > 0);
+        const hasActiveChannels = (cleanChannels && cleanChannels.length > 0);
         if (!hasActiveChannels) {
           cleanVids = [];
           localStorage.setItem('amg_videos', JSON.stringify([]));
+          localStorage.setItem('amg_batches', JSON.stringify([]));
+          localStorage.removeItem('amg_active_channel');
         } else if (cleanVids.length === 0) {
           const cachedRaw = localStorage.getItem('amg_videos');
           if (cachedRaw) {

@@ -34,8 +34,8 @@ export const initialProfiles: ContentProfile[] = [
       startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
     },
     masterTitleIds: ['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4'],
-    masterThumbnailIds: ['thumb-gen-1', 'thumb-gen-2', 'thumb-gen-3', 'thumb-gen-4'],
-    assignedChannelCount: 1,
+    masterThumbnailIds: [],
+    assignedChannelCount: 0,
     createdAt: '2026-09-01T00:00:00.000Z',
     updatedAt: '2026-09-20T08:00:00.000Z',
   },
@@ -140,12 +140,7 @@ export const initialMasterTitles: MasterTitle[] = [
   { id: 'title-gen-4', profileId: 'block-general', blockId: 'block-general', text: 'Kedamaian Alami Suara Alam - Meditasi & Tidur Nyenyak', orderIndex: 3, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
 ];
 
-export const initialMasterThumbnails: MasterThumbnail[] = [
-  { id: 'thumb-gen-1', profileId: 'block-general', blockId: 'block-general', name: 'Pemandangan Pantai Senja Menenangkan', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1280&q=80', orderIndex: 0, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-  { id: 'thumb-gen-2', profileId: 'block-general', blockId: 'block-general', name: 'Hutan Pinus Asri & Hijau Menyejukkan', url: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=1280&q=80', orderIndex: 1, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-  { id: 'thumb-gen-3', profileId: 'block-general', blockId: 'block-general', name: 'Pemandangan Danau Tenang di Pagi Hari', url: 'https://images.unsplash.com/photo-1470240731273-7821a6eeb6bd?w=1280&q=80', orderIndex: 2, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-  { id: 'thumb-gen-4', profileId: 'block-general', blockId: 'block-general', name: 'Suasana Alam Rindang & Teduh', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80', orderIndex: 3, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-];
+export const initialMasterThumbnails: MasterThumbnail[] = [];
 
 export const initialVideos: ManagedVideo[] = [];
 

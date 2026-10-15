@@ -656,9 +656,11 @@ export const api = {
         setStorageItem(KEYS.VIDEOS, []);
         setStorageItem(KEYS.BATCHES, []);
         setStorageItem(KEYS.JOBS, []);
+        localStorage.setItem('amg_channels', JSON.stringify([]));
         localStorage.setItem('amg_videos', JSON.stringify([]));
         localStorage.setItem('amg_batches', JSON.stringify([]));
         localStorage.setItem('amg_jobs', JSON.stringify([]));
+        localStorage.removeItem('amg_active_channel');
         localStorage.removeItem('amg_youtube_access_token');
         localStorage.removeItem('amg_youtube_connected_channel');
         localStorage.removeItem('amg_permanent_channel_ids');
@@ -1876,11 +1878,15 @@ export const api = {
       if (titles.length === 0) titles = initialMasterTitles;
       hasTitles = true;
     }
-    if (!hasThumbnails) {
-      thumbnails = initialMasterThumbnails.filter(th => th.blockId === targetBlock.id || th.profileId === targetBlock.id);
-      if (thumbnails.length === 0) thumbnails = initialMasterThumbnails;
-      hasThumbnails = true;
-    }
+    const isMockThumb = (url?: string, id?: string, name?: string) => {
+      if (!url) return true;
+      if (url.includes('images.unsplash.com')) return true;
+      if (id && (id.startsWith('thumb-gen-') || id.startsWith('thumb-default-') || id.startsWith('thumb-1') || id.startsWith('thumb-2') || id.startsWith('thumb-3') || id.startsWith('thumb-4') || id.startsWith('ayam-th-') || id.startsWith('asmr-th-') || id.startsWith('murottal-th-'))) return true;
+      const n = (name || '').toLowerCase();
+      if (n.includes('pemandangan') || n.includes('hutan pinus') || n.includes('danau tenang') || n.includes('suasana alam rindang') || n.includes('default ambience landscape')) return true;
+      return false;
+    };
+    const realCustomThumbnails = (thumbnails || []).filter(th => !isMockThumb(th.url, th.id, th.name));
 
     // Filter candidate videos strictly matching all criteria (all unmanaged eligible candidates)
     const candidateVideos = channelVideos.filter((v) => {
@@ -1895,14 +1901,19 @@ export const api = {
     // Map ALL candidate videos (without capping or slicing at 10)
     const preview: AutomationPreviewItem[] = candidateVideos.map((v, i) => {
       const assignedT = titles[i % titles.length].text;
-      const assignedThumb = thumbnails[i % thumbnails.length].url;
+      const rawNativeThumb = v.thumbnailBefore || v.thumbnailAssigned || (v.youtubeVideoId ? `https://i.ytimg.com/vi/${v.youtubeVideoId}/hqdefault.jpg` : '');
+      const hasCustomMasterThumb = realCustomThumbnails.length > 0;
+      const assignedThumb = hasCustomMasterThumb ? realCustomThumbnails[i % realCustomThumbnails.length].url : rawNativeThumb;
+
       return {
         sequence: i + 1,
         videoId: v.id,
         originalTitle: v.titleBefore || v.titleAssigned || 'Video YouTube',
         assignedTitle: assignedT,
-        originalThumbnail: v.thumbnailBefore || v.thumbnailAssigned || '',
+        originalThumbnail: rawNativeThumb,
         assignedThumbnail: assignedThumb,
+        isCustomThumbnail: hasCustomMasterThumb,
+        thumbnailLabel: hasCustomMasterThumb ? `Master Kustom TH${(i % realCustomThumbnails.length) + 1}` : 'Bawaan YouTube',
         publishDate: new Date(Date.now() + (i + 1) * 86400000).toISOString().split('T')[0],
         publishTime: targetBlock.scheduleConfig?.times?.[0] || '16:00',
         targetChannelId: channel.id,

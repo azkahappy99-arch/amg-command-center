@@ -11,7 +11,7 @@
  */
 
 import { dbStore } from './db.js';
-import { generateRotationMatrix, RotationTitle, RotationThumbnail } from './rotationService.js';
+import { generateRotationMatrix, getTitleForIndex, RotationTitle, RotationThumbnail } from './rotationService.js';
 import { calculateNextSchedules, resolveScheduleConfig, validateScheduleConfig } from './scheduleReconciliationService.js';
 import { youtubeDataService } from './youtubeDataService.js';
 import { youtubeAuthService } from './youtubeAuthService.js';
@@ -94,48 +94,31 @@ export class AutomationEngine {
       );
     }
 
-    // Fetch Master Thumbnails strictly bound to this profile / channel
+    // Fetch Master Thumbnails strictly bound to this profile / channel (excluding any mock assets)
+    const isMockThumb = (url?: string, id?: string, name?: string) => {
+      if (!url) return true;
+      if (url.includes('images.unsplash.com')) return true;
+      if (id && (id.startsWith('thumb-gen-') || id.startsWith('thumb-default-') || id.startsWith('thumb-1') || id.startsWith('thumb-2') || id.startsWith('thumb-3') || id.startsWith('thumb-4') || id.startsWith('ayam-th-') || id.startsWith('asmr-th-') || id.startsWith('murottal-th-'))) return true;
+      const n = (name || '').toLowerCase();
+      if (n.includes('pemandangan') || n.includes('hutan pinus') || n.includes('danau tenang') || n.includes('suasana alam rindang') || n.includes('default ambience landscape')) return true;
+      return false;
+    };
+
     const thumbnails: RotationThumbnail[] = [];
     const seenThumbIds = new Set<string>();
     for (const thId of profile.masterThumbnailIds || []) {
       const th = dbStore.masterThumbnails.get(thId);
-      if (th && th.isActive && !seenThumbIds.has(th.id)) {
+      if (th && th.isActive && !isMockThumb(th.url, th.id, th.name) && !seenThumbIds.has(th.id)) {
         seenThumbIds.add(th.id);
         thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
       }
     }
     for (const th of dbStore.masterThumbnails.values()) {
       const belongs = th.profileId === profile.id || (th as any).channelId === channel.id || (th as any).channelId === channel.youtubeChannelId;
-      if (belongs && th.isActive && !seenThumbIds.has(th.id)) {
+      if (belongs && th.isActive && !isMockThumb(th.url, th.id, th.name) && !seenThumbIds.has(th.id)) {
         seenThumbIds.add(th.id);
         thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
       }
-    }
-    // Fallback: Jika profil belum mengikat master thumbnail, ambil dari master thumbnail aktif umum
-    if (thumbnails.length === 0) {
-      for (const th of dbStore.masterThumbnails.values()) {
-        if (th.isActive && !seenThumbIds.has(th.id)) {
-          seenThumbIds.add(th.id);
-          thumbnails.push({ id: th.id, name: th.name, url: th.url, orderIndex: th.orderIndex });
-        }
-      }
-    }
-    // Fallback pamungkas: Sediakan thumbnail default berkualitas tinggi agar otomasi tetap lancar
-    if (thumbnails.length === 0) {
-      thumbnails.push(
-        {
-          id: 'thumb-default-1',
-          name: 'Default Ambience Landscape 1',
-          url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1280&q=80',
-          orderIndex: 0,
-        },
-        {
-          id: 'thumb-default-2',
-          name: 'Default Ambience Landscape 2',
-          url: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=1280&q=80',
-          orderIndex: 1,
-        }
-      );
     }
 
     // 1. EVALUATE & CLASSIFY ALL UNMANAGED VIDEOS
@@ -293,13 +276,15 @@ export class AutomationEngine {
     let scheduleSlots: any[] = [];
 
     if (enrolledRegularVideos.length > 0) {
-      rotationAssignments = generateRotationMatrix(
-        titles,
-        thumbnails,
-        enrolledRegularVideos.length,
-        startingTitleOffset,
-        startingThumbnailOffset
-      );
+      if (thumbnails.length > 0) {
+        rotationAssignments = generateRotationMatrix(
+          titles,
+          thumbnails,
+          enrolledRegularVideos.length,
+          startingTitleOffset,
+          startingThumbnailOffset
+        );
+      }
       scheduleSlots = calculateNextSchedules(
         enrolledRegularVideos.length,
         scheduleConfig,
@@ -313,14 +298,16 @@ export class AutomationEngine {
     let candidateSlots: any[] = [];
     if (candidateVideos.length > 0) {
       const candidateTitleOffset = (startingTitleOffset + enrolledRegularVideos.length) % titles.length;
-      const candidateThumbOffset = (startingThumbnailOffset + enrolledRegularVideos.length) % thumbnails.length;
-      candidateRotations = generateRotationMatrix(
-        titles,
-        thumbnails,
-        candidateVideos.length,
-        candidateTitleOffset,
-        candidateThumbOffset
-      );
+      const candidateThumbOffset = thumbnails.length > 0 ? (startingThumbnailOffset + enrolledRegularVideos.length) % thumbnails.length : 0;
+      if (thumbnails.length > 0) {
+        candidateRotations = generateRotationMatrix(
+          titles,
+          thumbnails,
+          candidateVideos.length,
+          candidateTitleOffset,
+          candidateThumbOffset
+        );
+      }
       const candidateAnchor =
         scheduleSlots.length > 0 ? scheduleSlots[scheduleSlots.length - 1].isoPublishAt : effectiveLatest;
       const allOccupied = [...occupiedSlots, ...scheduleSlots.map((s) => s.isoPublishAt)];
@@ -342,13 +329,20 @@ export class AutomationEngine {
       const rotation = rotationAssignments[i];
       const slot = scheduleSlots[i];
 
+      const assignedTitle = rotation ? rotation.title.text : getTitleForIndex(titles, startingTitleOffset + i).text;
+      const rawNativeThumb = video.thumbnailBefore || video.thumbnailAssigned || (video.youtubeVideoId ? `https://i.ytimg.com/vi/${video.youtubeVideoId}/hqdefault.jpg` : '');
+      const hasCustomMasterThumb = Boolean(rotation && rotation.thumbnail && !isMockThumb(rotation.thumbnail.url, rotation.thumbnail.id, rotation.thumbnail.name));
+      const assignedThumbnail = hasCustomMasterThumb ? rotation.thumbnail.url : rawNativeThumb;
+
       previewItems.push({
         sequence: sequenceCounter++,
         videoId: video.id,
         originalTitle: video.titleBefore,
-        assignedTitle: rotation.title.text,
-        originalThumbnail: video.thumbnailBefore,
-        assignedThumbnail: rotation.thumbnail.url,
+        assignedTitle,
+        originalThumbnail: rawNativeThumb,
+        assignedThumbnail,
+        isCustomThumbnail: hasCustomMasterThumb,
+        thumbnailLabel: hasCustomMasterThumb ? (rotation?.thumbnail?.name || `Master Kustom TH${(i % Math.max(1, thumbnails.length)) + 1}`) : 'Bawaan YouTube',
         publishDate: slot.dateString,
         publishTime: `${slot.timeString} ${slot.timezoneAbbreviation}`,
         targetChannelId: channel.id,
@@ -369,13 +363,20 @@ export class AutomationEngine {
       const rotation = candidateRotations[i];
       const slot = candidateSlots[i];
 
+      const assignedTitle = rotation ? rotation.title.text : (titles.length > 0 ? getTitleForIndex(titles, startingTitleOffset + enrolledRegularVideos.length + i).text : '(Pending Enrollment)');
+      const rawNativeThumb = video.thumbnailBefore || video.thumbnailAssigned || (video.youtubeVideoId ? `https://i.ytimg.com/vi/${video.youtubeVideoId}/hqdefault.jpg` : '');
+      const hasCustomMasterThumb = Boolean(rotation && rotation.thumbnail && !isMockThumb(rotation.thumbnail.url, rotation.thumbnail.id, rotation.thumbnail.name));
+      const assignedThumbnail = hasCustomMasterThumb ? rotation.thumbnail.url : rawNativeThumb;
+
       previewItems.push({
         sequence: sequenceCounter++,
         videoId: video.id,
         originalTitle: video.titleBefore,
-        assignedTitle: rotation ? rotation.title.text : '(Pending Enrollment)',
-        originalThumbnail: video.thumbnailBefore,
-        assignedThumbnail: rotation ? rotation.thumbnail.url : video.thumbnailBefore,
+        assignedTitle,
+        originalThumbnail: rawNativeThumb,
+        assignedThumbnail,
+        isCustomThumbnail: hasCustomMasterThumb,
+        thumbnailLabel: hasCustomMasterThumb ? (rotation?.thumbnail?.name || `Master Kustom TH${(i % Math.max(1, thumbnails.length)) + 1}`) : 'Bawaan YouTube',
         publishDate: slot ? slot.dateString : '—',
         publishTime: slot ? `${slot.timeString} ${slot.timezoneAbbreviation}` : 'Pending Enrollment',
         targetChannelId: channel.id,

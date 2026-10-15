@@ -384,6 +384,8 @@ export interface AutomationPreviewItem {
   matchedTitlePattern?: string;
   exclusionReason?: string;
   uploadedAt?: string;
+  isCustomThumbnail?: boolean;
+  thumbnailLabel?: string;
 }
 
 // ==========================================

@@ -280,7 +280,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           videoId: cleanId,
           title: item.assignedTitle || item.originalTitle,
           assignedTitle: item.assignedTitle || item.originalTitle,
-          assignedThumbnail: item.assignedThumbnail && !item.assignedThumbnail.startsWith('data:image') ? item.assignedThumbnail : '',
+          assignedThumbnail: (item.isCustomThumbnail && item.assignedThumbnail && !item.assignedThumbnail.includes('images.unsplash.com') && !item.assignedThumbnail.startsWith('data:image')) ? item.assignedThumbnail : '',
           publishDate: item.publishDate,
           publishTime: item.publishTime,
         };
@@ -864,18 +864,44 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     </td>
                     <td className="py-3 px-3">
                       <div className="flex items-center gap-2">
-                        {item.assignedThumbnail && (
-                          <img
-                            src={item.assignedThumbnail}
-                            alt=""
-                            className="w-12 h-8 rounded object-cover border border-neutral-700"
-                          />
-                        )}
-                        <span className="text-[11px] text-neutral-300">
-                          {item.managementScope === 'REGULAR' && item.isAmgEligible
-                            ? `TH${((item.sequence - 1) % 4) + 1}`
-                            : 'Asli'}
-                        </span>
+                        {(() => {
+                          const isMock = (url?: string) => {
+                            if (!url) return true;
+                            if (url.includes('images.unsplash.com')) return true;
+                            if (url.includes('thumb-gen-') || url.includes('thumb-default-')) return true;
+                            return false;
+                          };
+                          const vId = item.videoId?.replace(/^yt-vid-|^yt-/, '');
+                          const nativeYtThumb = item.originalThumbnail || (vId ? `https://i.ytimg.com/vi/${vId}/hqdefault.jpg` : '');
+                          const hasCustom = Boolean(item.isCustomThumbnail && item.assignedThumbnail && !isMock(item.assignedThumbnail));
+                          const effectiveThumb = hasCustom ? item.assignedThumbnail : nativeYtThumb;
+
+                          return (
+                            <>
+                              {effectiveThumb ? (
+                                <img
+                                  src={effectiveThumb}
+                                  alt=""
+                                  className="w-12 h-8 rounded object-cover border border-neutral-700 bg-neutral-900 shrink-0"
+                                  onError={(e) => {
+                                    if (vId && e.currentTarget.src !== `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`) {
+                                      e.currentTarget.src = `https://i.ytimg.com/vi/${vId}/hqdefault.jpg`;
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <div className="w-12 h-8 rounded bg-neutral-900 border border-neutral-800 shrink-0 flex items-center justify-center text-[9px] text-neutral-500 font-mono">
+                                  YT
+                                </div>
+                              )}
+                              <span className={`text-[11px] font-medium ${hasCustom ? 'text-amber-400' : 'text-neutral-400'}`}>
+                                {hasCustom
+                                  ? (item.thumbnailLabel || `Kustom (TH${((item.sequence - 1) % 4) + 1})`)
+                                  : 'Bawaan YouTube'}
+                              </span>
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                     <td className="py-3 px-3 whitespace-nowrap">

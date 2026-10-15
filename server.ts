@@ -3179,11 +3179,19 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
 
         const blockId = prof?.blockId || channel.blockId;
         const titles = Array.from(dbStore.masterTitles.values()).filter((t) => !blockId || t.blockId === blockId);
-        const thumbs = Array.from(dbStore.masterThumbnails.values()).filter((t) => !blockId || t.blockId === blockId);
+        const thumbs = Array.from(dbStore.masterThumbnails.values()).filter(
+          (t) =>
+            (!blockId || t.blockId === blockId) &&
+            t.isActive &&
+            !t.url?.includes('images.unsplash.com') &&
+            !t.id?.startsWith('thumb-gen-') &&
+            !t.id?.startsWith('thumb-default-')
+        );
 
         allCandidates = rawCandidates.map((v, idx) => {
           const assignedTitle = titles.length > 0 ? titles[idx % titles.length].text : (v.titleAssigned || v.titleBefore || 'Video YouTube');
-          const assignedThumbnail = thumbs.length > 0 ? thumbs[idx % thumbs.length].url : (v.thumbnailAssigned || v.thumbnailBefore || '');
+          const rawNativeThumb = v.thumbnailBefore || v.thumbnailAssigned || (v.youtubeVideoId ? `https://i.ytimg.com/vi/${v.youtubeVideoId}/hqdefault.jpg` : '');
+          const assignedThumbnail = thumbs.length > 0 ? thumbs[idx % thumbs.length].url : rawNativeThumb;
           const baseDate = new Date(Date.now() + (idx + 1) * 24 * 60 * 60 * 1000);
           baseDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
           return {

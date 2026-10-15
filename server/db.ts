@@ -320,6 +320,7 @@ class DatabaseStore {
         this.sanitizeBlockIntegrity();
         this.sanitizeStaleBatches();
         this.loadOwnerAuthFromDisk();
+        this.saveToDisk();
         return;
       } catch (err) {
         console.error('[DatabaseStore] Failed to parse existing database file, seeding default:', err);
@@ -500,7 +501,7 @@ class DatabaseStore {
           startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
         },
         masterTitleIds: ['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4'],
-        masterThumbnailIds: ['thumb-gen-1', 'thumb-gen-2', 'thumb-gen-3', 'thumb-gen-4'],
+        masterThumbnailIds: [],
         assignedChannelCount: 0,
         createdAt: '2026-09-01T00:00:00.000Z',
         updatedAt: new Date().toISOString(),
@@ -513,6 +514,14 @@ class DatabaseStore {
         generalProfile.blockId = 'block-general';
         generalProfile.nicheCategory = 'General';
         changed = true;
+      }
+      if (generalProfile.masterThumbnailIds && generalProfile.masterThumbnailIds.length > 0) {
+        // Strip mock thumbnail IDs
+        const cleanedThumbs = generalProfile.masterThumbnailIds.filter(id => !id.startsWith('thumb-gen-') && !id.startsWith('thumb-default-'));
+        if (cleanedThumbs.length !== generalProfile.masterThumbnailIds.length) {
+          generalProfile.masterThumbnailIds = cleanedThumbs;
+          changed = true;
+        }
       }
     }
 
@@ -539,26 +548,18 @@ class DatabaseStore {
       }
     }
 
-    // 3. Ensure Master Thumbnails for General
-    const genThumbs = [
-      { id: 'thumb-gen-1', name: 'Pemandangan Pantai Senja Menenangkan', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1280&q=80', orderIndex: 0 },
-      { id: 'thumb-gen-2', name: 'Hutan Pinus Asri & Hijau Menyejukkan', url: 'https://images.unsplash.com/photo-1518495973542-4542c06a5843?w=1280&q=80', orderIndex: 1 },
-      { id: 'thumb-gen-3', name: 'Pemandangan Danau Tenang di Pagi Hari', url: 'https://images.unsplash.com/photo-1470240731273-7821a6eeb6bd?w=1280&q=80', orderIndex: 2 },
-      { id: 'thumb-gen-4', name: 'Suasana Alam Rindang & Teduh', url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=1280&q=80', orderIndex: 3 },
-    ];
-    for (const th of genThumbs) {
-      if (!this.masterThumbnails.has(th.id)) {
-        this.masterThumbnails.set(th.id, {
-          id: th.id,
-          profileId: 'block-general',
-          blockId: 'block-general',
-          name: th.name,
-          url: th.url,
-          orderIndex: th.orderIndex,
-          isActive: true,
-          createdAt: '2026-09-01T00:00:00.000Z',
-          updatedAt: '2026-09-01T00:00:00.000Z',
-        });
+    // 3. Purge mock thumbnail assets from store
+    for (const [id, th] of this.masterThumbnails.entries()) {
+      if (
+        id.startsWith('thumb-gen-') ||
+        id.startsWith('thumb-default-') ||
+        th.url?.includes('images.unsplash.com') ||
+        th.name?.toLowerCase().includes('pemandangan') ||
+        th.name?.toLowerCase().includes('hutan pinus') ||
+        th.name?.toLowerCase().includes('danau tenang') ||
+        th.name?.toLowerCase().includes('suasana alam rindang')
+      ) {
+        this.masterThumbnails.delete(id);
         changed = true;
       }
     }
@@ -1462,14 +1463,33 @@ class DatabaseStore {
 
     // Purge fake preset thumbnails
     const presetThumbIds = new Set([
+      'thumb-gen-1', 'thumb-gen-2', 'thumb-gen-3', 'thumb-gen-4',
+      'thumb-default-1', 'thumb-default-2',
       'ayam-th-1', 'ayam-th-2', 'ayam-th-3',
       'thumb-1', 'thumb-2', 'thumb-3', 'thumb-4',
       'asmr-th-1', 'asmr-th-2',
       'murottal-th-1', 'murottal-th-2',
     ]);
     for (const [id, th] of this.masterThumbnails.entries()) {
-      if (presetThumbIds.has(id) || th.url?.includes('images.unsplash.com')) {
+      if (
+        presetThumbIds.has(id) ||
+        id.startsWith('thumb-gen-') ||
+        id.startsWith('thumb-default-') ||
+        th.url?.includes('images.unsplash.com') ||
+        th.name?.toLowerCase().includes('pemandangan') ||
+        th.name?.toLowerCase().includes('hutan pinus') ||
+        th.name?.toLowerCase().includes('danau tenang') ||
+        th.name?.toLowerCase().includes('suasana alam rindang') ||
+        th.name?.toLowerCase().includes('default ambience landscape')
+      ) {
         this.masterThumbnails.delete(id);
+      }
+    }
+
+    // Clean profile masterThumbnailIds
+    for (const profile of this.profiles.values()) {
+      if (profile.masterThumbnailIds && profile.masterThumbnailIds.length > 0) {
+        profile.masterThumbnailIds = profile.masterThumbnailIds.filter(id => this.masterThumbnails.has(id));
       }
     }
 
