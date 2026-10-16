@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:scheduler": "tsx test/scheduler.test.ts"
+    "test:scheduler": "tsx test/scheduler.test.ts",
+    "test:candidacy": "tsx test/youtubeSyncAndCandidacy.test.ts",
+    "test": "tsx test/scheduler.test.ts && tsx test/youtubeSyncAndCandidacy.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

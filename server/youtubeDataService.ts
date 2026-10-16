@@ -170,7 +170,7 @@ export class YouTubeDataService {
     }
 
     const videoIds: string[] = [];
-    const SAFE_MAX_VIDEOS = Math.min(Math.max(maxResults, 200), 500); // Batas aman 200-500 video
+    const SAFE_MAX_VIDEOS = Math.min(Math.max(maxResults, 200), 2500); // Full scan up to 2500 videos (50 pages)
     const MAX_PAGES = Math.ceil(SAFE_MAX_VIDEOS / 50);
 
     try {
@@ -334,8 +334,13 @@ export class YouTubeDataService {
 
         const res = await fetch(url, { headers });
         if (!res.ok) {
-          console.warn(`[youtubeDataService] Video chunk batch fetch failed (${res.status}) for chunk ${i / 50 + 1}`);
-          continue;
+          const errJson = await res.json().catch(() => ({}));
+          const errMsg = errJson?.error?.message || `YouTube API responded with status ${res.status}`;
+          console.error(`[youtubeDataService] Video chunk batch fetch failed (${res.status}): ${errMsg}`);
+          return {
+            success: false,
+            error: `Gagal mengambil metadata detail video YouTube (${res.status}): ${errMsg}`,
+          };
         }
 
         const json = await res.json();

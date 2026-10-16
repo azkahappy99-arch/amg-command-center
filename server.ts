@@ -24,6 +24,7 @@ import { automationEngine } from './server/automationEngine.js';
 import {
   detectChannelCandidates,
   evaluateVideoEligibility,
+  matchTitlePattern,
   validateBeforeMutation,
 } from './server/eligibilityService.js';
 import { phase3Engine } from './server/phase3Engine.js';
@@ -443,18 +444,9 @@ app.get('/api/stats', requireAuth, (req: Request, res: Response) => {
     c.status === 'TOKEN EXPIRED'
   ).length;
   const newVideos = videos.filter(v => {
-    if (v.privacyStatus !== 'private' || v.isManaged || v.scheduledPublishAt) return false;
-    const ch = dbStore.channels.get(v.channelId) || dbStore.getChannelByYoutubeId(v.channelId);
+    const ch = dbStore.channels.get(v.channelId) || Array.from(dbStore.channels.values()).find(c => isVideoForChannel(v, c));
     if (!ch || (ch.status !== 'CONNECTED' && ch.status !== 'Connected' && ch.status !== 'Ready')) return false;
-    const blockId = ch.contentProfileId || (ch as any).blockId;
-    if (!blockId) return false;
-    const cutoff = ch.lastScheduledPublishAt || ch.latestManagedUploadAt;
-    if (cutoff) {
-      const vTime = new Date(v.originalUploadAt || (v as any).uploadedAt || v.createdAt).getTime();
-      const cTime = new Date(cutoff).getTime();
-      if (!isNaN(cTime) && !isNaN(vTime) && vTime <= cTime) return false;
-    }
-    return true;
+    return isVideoUnmanagedPrivateRaw(v, ch);
   }).length;
   const hdReady = videos.filter(v => !v.isManaged && v.processingStatus === 'processed').length;
   const processing = videos.filter(v => v.processingStatus === 'processing').length;
@@ -569,8 +561,8 @@ app.get('/api/stats', requireAuth, (req: Request, res: Response) => {
   });
 });
 
-// Strict evaluation of unmanaged raw private videos according to 5 AMG criteria
-function isVideoUnmanagedPrivateRaw(v: any): boolean {
+// Strict evaluation of unmanaged raw private videos according to AMG criteria
+function isVideoUnmanagedPrivateRaw(v: any, channel?: any): boolean {
   if (!v) return false;
 
   // CONDITION A — Privacy: Must be private
@@ -629,6 +621,18 @@ function isVideoUnmanagedPrivateRaw(v: any): boolean {
     return false;
   }
   if (v.automationBatchId && v.automationBatchId.trim() !== '') {
+    return false;
+  }
+
+  // EXCLUSION 6 — Manual scope exclusion
+  if (v.managementScope === 'EXCLUDED') {
+    return false;
+  }
+
+  // CONDITION C — Title must match placeholder pattern (e.g. "Salinan dari A", "Copy of A", draft, or channel pattern)
+  const patterns = Array.isArray(channel?.eligibleTitlePatterns) ? channel.eligibleTitlePatterns : [];
+  const titleMatch = matchTitlePattern(v.titleBefore || v.title || '', patterns);
+  if (!titleMatch.matched) {
     return false;
   }
 
@@ -697,8 +701,8 @@ function refreshChannelScheduleAndUnmanagedState(channel: any, allVideos: any[])
   }
   channel.scheduleStockCount = scheduledCount;
 
-  // Unmanaged videos according to 5 strict AMG criteria
-  const unmanagedList = channelVideos.filter(isVideoUnmanagedPrivateRaw);
+  // Unmanaged videos according to strict AMG criteria
+  const unmanagedList = channelVideos.filter((v) => isVideoUnmanagedPrivateRaw(v, channel));
   channel.unmanagedVideoCount = unmanagedList.length;
   channel.videoCount = channelVideos.length;
 

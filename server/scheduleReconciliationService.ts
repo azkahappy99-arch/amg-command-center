@@ -592,7 +592,8 @@ export function evaluateChannelScheduleBuffer(
       v.channelId === channel.id ||
       (channel.youtubeChannelId &&
         (v.channelId === channel.youtubeChannelId ||
-          v.channelId === `chan-${channel.youtubeChannelId}`));
+          v.channelId === `chan-${channel.youtubeChannelId}`)) ||
+      (channel.id && typeof channel.id === 'string' && channel.id.startsWith('chan-') && v.channelId === channel.id.replace('chan-', ''));
 
     if (isChanMatch) {
       const scheduledAt = v.publishAt || v.scheduledPublishAt || (v as any).status?.publishAt || v.scheduledAt;
@@ -608,14 +609,6 @@ export function evaluateChannelScheduleBuffer(
         }
       }
     }
-  }
-
-  // If no scheduled videos detected, estimate stock based on channel unmanaged/scheduled status
-  if (stockCount === 0 && exhaustionIso) {
-    // If channel has a scheduled date 4 days ahead, compute minimum estimated scheduled videos
-    const diffMs = new Date(exhaustionIso).getTime() - nowMs;
-    const days = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-    stockCount = Math.min(days, 2);
   }
 
   let bufferDays = 0;
