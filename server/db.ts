@@ -500,7 +500,7 @@ class DatabaseStore {
           timezone: 'Asia/Jakarta',
           startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
         },
-        masterTitleIds: ['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4'],
+        masterTitleIds: [],
         masterThumbnailIds: [],
         assignedChannelCount: 0,
         createdAt: '2026-09-01T00:00:00.000Z',
@@ -523,27 +523,28 @@ class DatabaseStore {
           changed = true;
         }
       }
+      if (generalProfile.masterTitleIds && generalProfile.masterTitleIds.length > 0) {
+        const cleanedTitles = generalProfile.masterTitleIds.filter(id => !id.startsWith('title-gen-'));
+        if (cleanedTitles.length !== generalProfile.masterTitleIds.length) {
+          generalProfile.masterTitleIds = cleanedTitles;
+          changed = true;
+        }
+      }
     }
 
-    // 2. Ensure Master Titles for General
-    const genTitles = [
-      { id: 'title-gen-1', text: 'Suasana Relaksasi Pagi Penuh Kedamaian - Menenangkan Pikiran', orderIndex: 0 },
-      { id: 'title-gen-2', text: 'Musik Relaksasi Alam & Ketenangan Jiwa - Terapi Hati', orderIndex: 1 },
-      { id: 'title-gen-3', text: 'Alunan Lembut Suasana Hening - Istirahat & Relaksasi Maksimal', orderIndex: 2 },
-      { id: 'title-gen-4', text: 'Kedamaian Alami Suara Alam - Meditasi & Tidur Nyenyak', orderIndex: 3 },
-    ];
-    for (const t of genTitles) {
-      if (!this.masterTitles.has(t.id)) {
-        this.masterTitles.set(t.id, {
-          id: t.id,
-          profileId: 'block-general',
-          blockId: 'block-general',
-          text: t.text,
-          orderIndex: t.orderIndex,
-          isActive: true,
-          createdAt: '2026-09-01T00:00:00.000Z',
-          updatedAt: '2026-09-01T00:00:00.000Z',
-        });
+    // 2. Bersihkan Seluruh Dummy Master Judul (0 Judul secara default)
+    const dummyTitleIds = new Set(['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4']);
+    for (const [id, t] of this.masterTitles.entries()) {
+      if (
+        dummyTitleIds.has(id) ||
+        id.startsWith('title-gen-') ||
+        t.text?.includes('Suasana Relaksasi') ||
+        t.text?.includes('Musik Relaksasi Alam') ||
+        t.text?.includes('Alunan Lembut') ||
+        t.text?.includes('Kedamaian Alami') ||
+        t.text?.includes('Tidur Nyenyak dengan Suara Hujan')
+      ) {
+        this.masterTitles.delete(id);
         changed = true;
       }
     }

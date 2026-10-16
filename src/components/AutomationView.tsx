@@ -23,7 +23,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { Channel, ContentProfile, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
+import { Channel, ContentProfile, MasterTitle, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
 import { api } from '../services/api.ts';
 import { Phase2AcceptanceModal } from './Phase2AcceptanceModal.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
@@ -37,6 +37,7 @@ interface AutomationViewProps {
   initialChannelId?: string;
   onAutomationTriggered: () => void;
   onNavigateToQueue: () => void;
+  onNavigateToTitles?: (channelId?: string) => void;
 }
 
 export const AutomationView: React.FC<AutomationViewProps> = ({
@@ -45,10 +46,12 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   initialChannelId,
   onAutomationTriggered,
   onNavigateToQueue,
+  onNavigateToTitles,
 }) => {
   const [selectedChannelId, setSelectedChannelId] = useState<string>(
     initialChannelId || channels[0]?.id || ''
   );
+  const [channelTitles, setChannelTitles] = useState<MasterTitle[]>([]);
   const [previewItems, setPreviewItems] = useState<AutomationPreviewItem[]>([]);
   const [scopeSummary, setScopeSummary] = useState<AutomationScopeSummary | null>(null);
   const [batches, setBatches] = useState<AutomationBatch[]>([]);
@@ -247,7 +250,21 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   // Jumlah video di Kloter 1 (maks 50 video dari seluruh kandidat aktif)
   const kloter1Count = Math.min(50, Math.max(1, candidateItems.length));
 
+  useEffect(() => {
+    if (selectedChannelId) {
+      api.getMasterTitles(selectedChannelId).then((res) => {
+        if (Array.isArray(res)) {
+          setChannelTitles(res);
+        }
+      }).catch(() => {});
+    }
+  }, [selectedChannelId]);
+
   const handleRunDryRun = async () => {
+    if (channelTitles.length === 0) {
+      alert('Silakan masukkan Master Judul sebelum memulai otomasi');
+      return;
+    }
     setIsDryRunning(true);
     setDryRunResult(null);
     try {
@@ -264,6 +281,10 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   };
 
   const handleStartAutomation = async () => {
+    if (channelTitles.length === 0) {
+      alert('Silakan masukkan Master Judul sebelum memulai otomasi');
+      return;
+    }
     setIsExecuting(true);
     setShowConfirmModal(false);
     try {
@@ -741,6 +762,29 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         </div>
       )}
 
+      {/* Master Judul Validation Alert */}
+      {channelTitles.length === 0 && (
+        <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-600/50 text-amber-300 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-lg">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-amber-200 text-sm">Silakan masukkan Master Judul sebelum memulai otomasi</p>
+              <p className="text-amber-300/80 text-xs mt-0.5">
+                Channel ini belum memiliki Master Judul kustom. Sistem AMG mewajibkan minimal 1 Master Judul milik channel Anda agar rotasi judul berjalan secara deterministik dan legal.
+              </p>
+            </div>
+          </div>
+          {onNavigateToTitles && (
+            <button
+              onClick={() => onNavigateToTitles(selectedChannelId)}
+              className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold transition whitespace-nowrap cursor-pointer shadow flex items-center gap-1.5 self-start sm:self-auto"
+            >
+              <span>+ Input Master Judul</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Preview Section & Action Bar */}
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-neutral-800">
@@ -757,7 +801,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={handleRunDryRun}
-              disabled={isDryRunning || includedItems.length === 0}
+              disabled={isDryRunning || includedItems.length === 0 || channelTitles.length === 0}
+              title={channelTitles.length === 0 ? "Silakan masukkan Master Judul sebelum memulai otomasi" : undefined}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-neutral-200 text-xs font-semibold border border-neutral-700 transition active:scale-95 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isDryRunning ? 'animate-spin text-blue-400' : ''}`} />
@@ -765,8 +810,15 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
             </button>
 
             <button
-              onClick={() => setShowConfirmModal(true)}
-              disabled={candidateItems.length === 0}
+              onClick={() => {
+                if (channelTitles.length === 0) {
+                  alert('Silakan masukkan Master Judul sebelum memulai otomasi');
+                  return;
+                }
+                setShowConfirmModal(true);
+              }}
+              disabled={candidateItems.length === 0 || channelTitles.length === 0}
+              title={channelTitles.length === 0 ? "Silakan masukkan Master Judul sebelum memulai otomasi" : undefined}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-red-900/30 transition active:scale-95 cursor-pointer"
             >
               <PlayCircle className="w-4 h-4" />

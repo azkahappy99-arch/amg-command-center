@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   Tv,
@@ -44,10 +44,11 @@ import {
   ActivityLog,
   AutomationBatch,
 } from './types/index.ts';
-import { api, sanitizeChannel, isRealVideo } from './services/api.ts';
+import { api, sanitizeChannel, isRealVideo, isRealThumbnail } from './services/api.ts';
 import { initialChannels, initialVideos } from './services/initialSeedData.ts';
 import {
   authorizeAndFetchYouTubeChannel,
+  fetchChannelVideosFromYouTube,
   getStoredGisToken,
 } from './services/youtubeGisAuth.ts';
 
@@ -61,6 +62,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<UserSessionData | null>(null);
   const [isOwnerProvisioned, setIsOwnerProvisioned] = useState<boolean>(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const isAutoFetchingRef = useRef(false);
 
   // Core Data States
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -184,31 +186,101 @@ export default function App() {
       }
       if (profilesData) setProfiles(profilesData);
       if (titlesData) setTitles(titlesData);
-      if (thumbsData) setThumbnails(thumbsData);
+      if (thumbsData) {
+        let cleanThumbs = thumbsData.filter(isRealThumbnail);
+        const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
+        if (targetChan) {
+          const cleanId = targetChan.replace(/^chan-/, '');
+          const raw1 = localStorage.getItem(`amg_master_thumbnails_${targetChan}`);
+          const raw2 = localStorage.getItem(`amg_master_thumbnails_${cleanId}`);
+          const raw3 = localStorage.getItem(`amg_master_thumbnails_chan-${cleanId}`);
+          const combined = [
+            ...(raw1 ? JSON.parse(raw1) : []),
+            ...(raw2 ? JSON.parse(raw2) : []),
+            ...(raw3 ? JSON.parse(raw3) : []),
+          ].filter(isRealThumbnail);
+          for (const lt of combined) {
+            if (!cleanThumbs.some((t) => t.id === lt.id)) {
+              cleanThumbs.push(lt);
+            }
+          }
+        }
+        setThumbnails(cleanThumbs);
+      }
       if (videosData) {
         let cleanVids = videosData.filter(isRealVideo);
         const hasActiveChannels = (cleanChannels && cleanChannels.length > 0);
+        const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
+        const cleanChanId = targetChan ? targetChan.replace(/^chan-/, '') : '';
+
         if (!hasActiveChannels) {
           cleanVids = [];
           localStorage.setItem('amg_videos', JSON.stringify([]));
           localStorage.setItem('amg_batches', JSON.stringify([]));
           localStorage.removeItem('amg_active_channel');
         } else if (cleanVids.length === 0) {
-          const cachedRaw = localStorage.getItem('amg_videos');
-          if (cachedRaw) {
-            try {
-              const cached = JSON.parse(cachedRaw);
-              if (Array.isArray(cached)) {
-                cleanVids = cached.filter(isRealVideo);
-              }
-            } catch {}
+          // Check channel-specific persistent key: amg_real_videos_{channelId}
+          if (targetChan) {
+            const raw1 = localStorage.getItem(`amg_real_videos_${targetChan}`);
+            const raw2 = localStorage.getItem(`amg_real_videos_${cleanChanId}`);
+            const raw3 = localStorage.getItem(`amg_real_videos_chan-${cleanChanId}`);
+            const storedJson = raw1 || raw2 || raw3;
+            if (storedJson) {
+              try {
+                const parsed = JSON.parse(storedJson);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  cleanVids = parsed.filter(isRealVideo);
+                }
+              } catch {}
+            }
+          }
+          if (cleanVids.length === 0) {
+            const cachedRaw = localStorage.getItem('amg_videos');
+            if (cachedRaw) {
+              try {
+                const cached = JSON.parse(cachedRaw);
+                if (Array.isArray(cached)) {
+                  cleanVids = cached.filter(isRealVideo);
+                }
+              } catch {}
+            }
           }
         }
+
         setVideos(cleanVids);
         if (cleanVids.length > 0 && hasActiveChannels) {
           localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
+          if (targetChan) {
+            localStorage.setItem(`amg_real_videos_${targetChan}`, JSON.stringify(cleanVids));
+            localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(cleanVids));
+          }
         } else {
           localStorage.setItem('amg_videos', JSON.stringify([]));
+        }
+
+        // Auto-Fetch Real YouTube Data saat Channel Terkoneksi (Tanpa Klik Manual)
+        if (hasActiveChannels && cleanVids.length === 0 && !isAutoFetchingRef.current) {
+          const storedToken = localStorage.getItem('amg_youtube_access_token');
+          if (storedToken && targetChan) {
+            isAutoFetchingRef.current = true;
+            fetchChannelVideosFromYouTube(storedToken, targetChan)
+              .then((vids) => {
+                if (Array.isArray(vids) && vids.length > 0) {
+                  const real = vids.filter(isRealVideo);
+                  setVideos(real);
+                  setToastMessage({
+                    text: `Auto-Fetch Berhasil: ${real.length} video riil YouTube berhasil dimuat otomatis!`,
+                    type: 'success',
+                  });
+                }
+              })
+              .catch((err) => {
+                console.warn('[Auto-Fetch Background Sync]', err);
+              })
+              .finally(() => {
+                isAutoFetchingRef.current = false;
+              });
+          }
         }
       }
       if (notifsData) setNotifications(notifsData);
@@ -593,6 +665,10 @@ export default function App() {
               initialChannelId={selectedChannelId}
               onAutomationTriggered={loadAllData}
               onNavigateToQueue={() => setCurrentSection('queue')}
+              onNavigateToTitles={(chanId) => {
+                if (chanId) setSelectedChannelId(chanId);
+                setCurrentSection('titles');
+              }}
             />
           )}
 

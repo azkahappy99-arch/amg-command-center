@@ -121,11 +121,34 @@ export const VideosView: React.FC<VideosViewProps> = ({
     v.managementStatus !== 'COMPLETED' &&
     v.managementScope !== 'EXCLUDED';
 
+  // Persistent fallback for real videos per channel (Anti-Reset Serverless)
+  const effectiveVideos = useMemo(() => {
+    if (videos && videos.length > 0) return videos;
+    if (selectedChannelId && selectedChannelId !== 'ALL') {
+      const cleanId = selectedChannelId.replace(/^chan-/, '');
+      const raw = localStorage.getItem(`amg_real_videos_${selectedChannelId}`) || localStorage.getItem(`amg_real_videos_${cleanId}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        } catch {}
+      }
+    }
+    const rawAll = localStorage.getItem('amg_videos');
+    if (rawAll) {
+      try {
+        const parsed = JSON.parse(rawAll);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return videos;
+  }, [videos, selectedChannelId]);
+
   // Scope statistics across current channel or all channels
   const channelVideos =
     selectedChannelId === 'ALL'
-      ? videos
-      : videos.filter((v) => isVideoInSelectedChannel(v.channelId));
+      ? effectiveVideos
+      : effectiveVideos.filter((v) => isVideoInSelectedChannel(v.channelId));
 
   const candidateCount = channelVideos.filter(isVideoCandidate).length;
   const scheduledCount = channelVideos.filter(isVideoScheduled).length;
@@ -139,7 +162,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
     (v) => v.managementScope === 'EXCLUDED' || !isVideoPrivate(v) || isVideoScheduled(v)
   ).length;
 
-  const filteredVideos = videos.filter((v) => {
+  const filteredVideos = effectiveVideos.filter((v) => {
     const matchesSearch =
       v.titleBefore.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (v.titleAssigned && v.titleAssigned.toLowerCase().includes(searchQuery.toLowerCase())) ||

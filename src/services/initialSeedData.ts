@@ -33,7 +33,7 @@ export const initialProfiles: ContentProfile[] = [
       timezone: 'Asia/Jakarta',
       startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
     },
-    masterTitleIds: ['title-gen-1', 'title-gen-2', 'title-gen-3', 'title-gen-4'],
+    masterTitleIds: [],
     masterThumbnailIds: [],
     assignedChannelCount: 0,
     createdAt: '2026-09-01T00:00:00.000Z',
@@ -133,12 +133,7 @@ export const initialProfiles: ContentProfile[] = [
   },
 ];
 
-export const initialMasterTitles: MasterTitle[] = [
-  { id: 'title-gen-1', profileId: 'block-general', blockId: 'block-general', text: 'Suasana Relaksasi Pagi Penuh Kedamaian - Menenangkan Pikiran', orderIndex: 0, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-  { id: 'title-gen-2', profileId: 'block-general', blockId: 'block-general', text: 'Musik Relaksasi Alam & Ketenangan Jiwa - Terapi Hati', orderIndex: 1, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-  { id: 'title-gen-3', profileId: 'block-general', blockId: 'block-general', text: 'Alunan Lembut Suasana Hening - Istirahat & Relaksasi Maksimal', orderIndex: 2, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-  { id: 'title-gen-4', profileId: 'block-general', blockId: 'block-general', text: 'Kedamaian Alami Suara Alam - Meditasi & Tidur Nyenyak', orderIndex: 3, isActive: true, createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z' },
-];
+export const initialMasterTitles: MasterTitle[] = [];
 
 export const initialMasterThumbnails: MasterThumbnail[] = [];
 

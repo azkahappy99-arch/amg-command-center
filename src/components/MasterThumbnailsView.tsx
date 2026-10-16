@@ -58,10 +58,16 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     }
   }, [activeChannel?.id, activeProfile?.id]);
 
-  // Filter thumbnails strictly for the active block / profile - 100% Isolated
+  // Filter thumbnails strictly for the active channel & block - 100% Isolated & Persistent
   const currentBlockId = selectedProfileId || activeProfile?.id || activeChannel?.blockId || activeChannel?.contentProfileId || '';
   const profileThumbnails = thumbnails
     .filter((th) => {
+      if (activeChannel?.id && (th.channelId === activeChannel.id || th.channelId === activeChannel.youtubeChannelId)) {
+        return true;
+      }
+      if (activeChannel?.youtubeChannelId && th.channelId === `chan-${activeChannel.youtubeChannelId}`) {
+        return true;
+      }
       const thumbBlock = th.blockId || th.profileId;
       if (currentBlockId) {
         return thumbBlock === currentBlockId;

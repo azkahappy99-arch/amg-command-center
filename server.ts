@@ -1981,7 +1981,7 @@ app.delete('/api/master-titles/:id', (req: Request, res: Response) => {
 // ==========================================
 app.get('/api/master-thumbnails', (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
-  const profileId = (req.query.profileId || req.query.blockId) as string;
+  const profileId = (req.query.profileId || req.query.blockId || req.query.channelId) as string;
   let thumbs = Array.from(dbStore.masterThumbnails.values());
 
   if (ctx.role === 'USER') {
@@ -1991,7 +1991,13 @@ app.get('/api/master-thumbnails', (req: Request, res: Response) => {
   }
 
   if (profileId && profileId !== 'ALL') {
-    thumbs = thumbs.filter(t => t.profileId === profileId || t.blockId === profileId);
+    const rawTarget = String(profileId);
+    thumbs = thumbs.filter(t =>
+      t.profileId === rawTarget ||
+      t.blockId === rawTarget ||
+      t.channelId === rawTarget ||
+      (t.channelId && (t.channelId === `chan-${rawTarget}` || `chan-${t.channelId}` === rawTarget))
+    );
   }
   thumbs.sort((a, b) => a.orderIndex - b.orderIndex);
   res.json(thumbs);
@@ -1999,15 +2005,20 @@ app.get('/api/master-thumbnails', (req: Request, res: Response) => {
 
 app.post('/api/master-thumbnails', (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
-  const { profileId, name, url, orderIndex } = req.body;
+  const { profileId, blockId, channelId, name, url, orderIndex } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'Name and URL are required' });
 
-  const existing = Array.from(dbStore.masterThumbnails.values()).filter(t => t.profileId === (profileId || 'profile-ayam-warna'));
+  const resolvedBlock = blockId || profileId || 'block-general';
+  const existing = Array.from(dbStore.masterThumbnails.values()).filter(t => 
+    t.profileId === resolvedBlock || (channelId && t.channelId === channelId)
+  );
   const id = `thumb-${Date.now()}`;
   const thumbnail = {
     id,
     workspaceId: ctx.workspaceId,
-    profileId: profileId || 'profile-ayam-warna',
+    profileId: resolvedBlock,
+    blockId: resolvedBlock,
+    channelId: channelId || '',
     name,
     url,
     orderIndex: orderIndex !== undefined ? orderIndex : existing.length,
@@ -2188,17 +2199,35 @@ app.post('/api/videos/batch-sync', (req: Request, res: Response) => {
 
     const isPriv = (vidRecord.privacyStatus || 'private').toLowerCase() === 'private';
     const isSched = Boolean(vidRecord.publishAt || vidRecord.scheduledPublishAt);
-    if (isPriv && !isSched) {
-      const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED' || v.managementStatus === 'COMPLETED';
+    const rawTitle = vidRecord.titleBefore || vidRecord.title || '';
+    const isPlaceholderTitle = /^(salinan dari a|copy of a)/i.test(rawTitle.trim());
+    const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED' || v.managementStatus === 'COMPLETED' || existing?.isManaged === true;
+
+    if (isPriv && !isSched && isPlaceholderTitle && !isAlreadyCompleted) {
       vidRecord.managementScope = 'REGULAR';
       vidRecord.isAmgEligible = true;
-      vidRecord.isManaged = isAlreadyCompleted ? true : false;
-      vidRecord.managementStatus = isAlreadyCompleted
-        ? 'COMPLETED'
-        : (vidRecord.managementStatus === 'PROCESSING' || vidRecord.managementStatus === 'ENROLLED'
-          ? vidRecord.managementStatus
-          : 'DISCOVERED');
+      vidRecord.isManaged = false;
+      vidRecord.managementStatus = (vidRecord.managementStatus === 'PROCESSING' || vidRecord.managementStatus === 'ENROLLED')
+        ? vidRecord.managementStatus
+        : 'DISCOVERED';
       vidRecord.exclusionReason = undefined;
+    } else {
+      vidRecord.managementScope = 'EXCLUDED';
+      vidRecord.isAmgEligible = false;
+      vidRecord.isManaged = true;
+      if (!isPriv) {
+        vidRecord.managementStatus = 'EXCLUDED';
+        vidRecord.exclusionReason = `Status Privasi: ${(vidRecord.privacyStatus || 'PUBLIC').toUpperCase()}. Video public dan unlisted dikecualikan.`;
+      } else if (isSched) {
+        vidRecord.managementStatus = 'SCHEDULED';
+        vidRecord.exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${vidRecord.publishAt || vidRecord.scheduledPublishAt}). Dikecualikan dari kandidat baru.`;
+      } else if (!isPlaceholderTitle) {
+        vidRecord.managementStatus = 'EXCLUDED';
+        vidRecord.exclusionReason = `Judul video ("${rawTitle}") tidak diawali "Salinan dari A" atau "Copy of A".`;
+      } else if (isAlreadyCompleted) {
+        vidRecord.managementStatus = 'COMPLETED';
+        vidRecord.exclusionReason = 'Video sudah pernah diproses oleh AMG.';
+      }
     }
 
     dbStore.videos.set(vidRecord.id, vidRecord);

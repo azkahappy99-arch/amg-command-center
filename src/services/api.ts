@@ -250,6 +250,11 @@ export function isRealTitle(t: MasterTitle): boolean {
   if (!t) return false;
   const id = t.id || '';
   if (
+    id.startsWith('title-gen-') ||
+    id === 'title-gen-1' ||
+    id === 'title-gen-2' ||
+    id === 'title-gen-3' ||
+    id === 'title-gen-4' ||
     id === 'ayam-t-1' ||
     id === 'ayam-t-2' ||
     id === 'ayam-t-3' ||
@@ -265,6 +270,10 @@ export function isRealTitle(t: MasterTitle): boolean {
   }
   const text = (t.text || '').toLowerCase();
   if (
+    text.includes('suasana relaksasi') ||
+    text.includes('musik relaksasi') ||
+    text.includes('alunan lembut') ||
+    text.includes('kedamaian alami') ||
     text.includes('tidur nyenyak dengan suara hujan') ||
     text.includes('ayam warna-warni lucu') ||
     text.includes('deep asmr whispers') ||
@@ -281,6 +290,12 @@ export function isRealThumbnail(th: MasterThumbnail): boolean {
   if (!th) return false;
   const id = th.id || '';
   if (
+    id.startsWith('thumb-gen-') ||
+    id.startsWith('thumb-default-') ||
+    id === 'thumb-gen-1' ||
+    id === 'thumb-gen-2' ||
+    id === 'thumb-gen-3' ||
+    id === 'thumb-gen-4' ||
     id === 'ayam-th-1' ||
     id === 'ayam-th-2' ||
     id === 'ayam-th-3' ||
@@ -297,6 +312,16 @@ export function isRealThumbnail(th: MasterThumbnail): boolean {
   }
   const url = th.url || '';
   if (url.includes('images.unsplash.com')) {
+    return false;
+  }
+  const name = (th.name || '').toLowerCase();
+  if (
+    name.includes('pemandangan') ||
+    name.includes('hutan pinus') ||
+    name.includes('danau tenang') ||
+    name.includes('suasana alam rindang') ||
+    name.includes('default ambience landscape')
+  ) {
     return false;
   }
   return true;
@@ -1367,8 +1392,28 @@ export const api = {
     return { success: true };
   },
 
-  // Master Thumbnails (Synchronized with Backend)
+  // Master Thumbnails (Synchronized with Backend & Persistent per Channel)
   getMasterThumbnails: async (profileOrChannelId?: string) => {
+    // 1. Direct channel storage inspection for instantaneous zero-latency display
+    let localChanThumbs: MasterThumbnail[] = [];
+    if (profileOrChannelId && profileOrChannelId !== 'ALL') {
+      const cleanId = profileOrChannelId.replace(/^chan-/, '');
+      const raw1 = localStorage.getItem(`amg_master_thumbnails_${profileOrChannelId}`);
+      const raw2 = localStorage.getItem(`amg_master_thumbnails_${cleanId}`);
+      const raw3 = localStorage.getItem(`amg_master_thumbnails_chan-${cleanId}`);
+      const combined = [
+        ...(raw1 ? JSON.parse(raw1) : []),
+        ...(raw2 ? JSON.parse(raw2) : []),
+        ...(raw3 ? JSON.parse(raw3) : []),
+      ];
+      const seen = new Set<string>();
+      localChanThumbs = combined.filter((th) => {
+        if (!th || !th.id || seen.has(th.id) || !isRealThumbnail(th)) return false;
+        seen.add(th.id);
+        return true;
+      });
+    }
+
     try {
       const url = profileOrChannelId && profileOrChannelId !== 'ALL'
         ? `/api/master-thumbnails?profileId=${encodeURIComponent(profileOrChannelId)}`
@@ -1378,13 +1423,37 @@ export const api = {
         const backendThumbs = await res.json();
         if (Array.isArray(backendThumbs)) {
           const clean = backendThumbs.filter(isRealThumbnail);
+          // Merge with any local channel thumbnails
+          for (const lt of localChanThumbs) {
+            if (!clean.some((bt: MasterThumbnail) => bt.id === lt.id)) {
+              clean.push(lt);
+            }
+          }
           setStorageItem(KEYS.THUMBNAILS, clean);
+          if (profileOrChannelId && profileOrChannelId !== 'ALL') {
+            const cleanId = profileOrChannelId.replace(/^chan-/, '');
+            const forThisChan = clean.filter((th: MasterThumbnail) =>
+              th.channelId === profileOrChannelId ||
+              th.channelId === cleanId ||
+              th.channelId === `chan-${cleanId}` ||
+              th.profileId === profileOrChannelId
+            );
+            if (forThisChan.length > 0) {
+              localStorage.setItem(`amg_master_thumbnails_${profileOrChannelId}`, JSON.stringify(forThisChan));
+              localStorage.setItem(`amg_master_thumbnails_${cleanId}`, JSON.stringify(forThisChan));
+            }
+          }
           return clean;
         }
       }
     } catch {}
 
     let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
+    for (const lt of localChanThumbs) {
+      if (!list.some((th) => th.id === lt.id)) {
+        list.push(lt);
+      }
+    }
     setStorageItem(KEYS.THUMBNAILS, list);
     if (!profileOrChannelId || profileOrChannelId === 'ALL') {
       return list;
@@ -1401,7 +1470,7 @@ export const api = {
 
     return list.filter((th) => {
       if (matchingChan) {
-        if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId)) {
+        if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId || th.channelId === `chan-${matchingChan.youtubeChannelId}`)) {
           return true;
         }
         if (matchingChan.blockId && (th.blockId === matchingChan.blockId || th.profileId === matchingChan.blockId)) {
@@ -1419,6 +1488,7 @@ export const api = {
   },
 
   createMasterThumbnail: async (data: Partial<MasterThumbnail> & { channelId?: string }) => {
+    let created: MasterThumbnail;
     try {
       const res = await authFetch('/api/master-thumbnails', {
         method: 'POST',
@@ -1426,52 +1496,74 @@ export const api = {
         body: JSON.stringify(data),
       });
       if (res.ok) {
-        const created = await res.json();
-        const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
-        list.push(created);
-        setStorageItem(KEYS.THUMBNAILS, list);
-        return created;
+        created = await res.json();
+      } else {
+        throw new Error('Backend thumbnail creation failed');
       }
-    } catch {}
+    } catch {
+      const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+      const targetChan = channels.find(
+        (c) =>
+          c.id === data.channelId ||
+          c.youtubeChannelId === data.channelId ||
+          c.id === data.profileId ||
+          c.contentProfileId === data.profileId ||
+          (data.channelId && c.id === `chan-${data.channelId}`)
+      );
 
+      const resolvedProfileId =
+        data.profileId ||
+        data.blockId ||
+        targetChan?.contentProfileId ||
+        targetChan?.blockId ||
+        (targetChan ? `profile-${targetChan.id}` : 'default');
+      const resolvedChannelId = data.channelId || targetChan?.id || '';
+
+      const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
+      created = {
+        id: `thumb-${Date.now()}`,
+        blockId: resolvedProfileId,
+        profileId: resolvedProfileId,
+        channelId: resolvedChannelId,
+        name: data.name || 'Thumbnail',
+        url: data.url || '',
+        orderIndex: list.filter(
+          (th) =>
+            th.profileId === resolvedProfileId ||
+            th.blockId === resolvedProfileId ||
+            (resolvedChannelId && th.channelId === resolvedChannelId)
+        ).length,
+        isActive: data.isActive !== undefined ? data.isActive : true,
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    // Persist into global list and channel-specific persistent key (amg_master_thumbnails_{channelId})
     const list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
-    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
-    const targetChan = channels.find(
-      (c) =>
-        c.id === data.channelId ||
-        c.youtubeChannelId === data.channelId ||
-        c.id === data.profileId ||
-        c.contentProfileId === data.profileId ||
-        (data.channelId && c.id === `chan-${data.channelId}`)
-    );
-
-    const resolvedProfileId =
-      data.profileId ||
-      data.blockId ||
-      targetChan?.contentProfileId ||
-      targetChan?.blockId ||
-      (targetChan ? `profile-${targetChan.id}` : 'default');
-    const resolvedChannelId = data.channelId || targetChan?.id || '';
-
-    const newThumb: MasterThumbnail = {
-      id: `thumb-${Date.now()}`,
-      blockId: resolvedProfileId,
-      profileId: resolvedProfileId,
-      channelId: resolvedChannelId,
-      name: data.name || 'Thumbnail',
-      url: data.url || '',
-      orderIndex: list.filter(
-        (th) =>
-          th.profileId === resolvedProfileId ||
-          th.blockId === resolvedProfileId ||
-          (resolvedChannelId && th.channelId === resolvedChannelId)
-      ).length,
-      isActive: data.isActive !== undefined ? data.isActive : true,
-      createdAt: new Date().toISOString(),
-    };
-    list.push(newThumb);
+    const existingIdx = list.findIndex(th => th.id === created.id);
+    if (existingIdx >= 0) {
+      list[existingIdx] = created;
+    } else {
+      list.push(created);
+    }
     setStorageItem(KEYS.THUMBNAILS, list);
-    return newThumb;
+
+    const chanId = created.channelId || data.channelId;
+    if (chanId) {
+      const cleanId = chanId.replace(/^chan-/, '');
+      const chanKey1 = `amg_master_thumbnails_${chanId}`;
+      const chanKey2 = `amg_master_thumbnails_${cleanId}`;
+      const chanKey3 = `amg_master_thumbnails_chan-${cleanId}`;
+      const existingChan = getStorageItem<MasterThumbnail[]>(chanKey1, []).filter(isRealThumbnail);
+      if (!existingChan.some(th => th.id === created.id)) {
+        existingChan.push(created);
+      }
+      localStorage.setItem(chanKey1, JSON.stringify(existingChan));
+      localStorage.setItem(chanKey2, JSON.stringify(existingChan));
+      localStorage.setItem(chanKey3, JSON.stringify(existingChan));
+    }
+
+    return created;
   },
 
   deleteMasterThumbnail: async (id: string) => {
@@ -1479,8 +1571,24 @@ export const api = {
       await authFetch(`/api/master-thumbnails/${encodeURIComponent(id)}`, { method: 'DELETE' });
     } catch {}
     let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
+    const target = list.find((t) => t.id === id);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.THUMBNAILS, list);
+
+    if (target?.channelId) {
+      const cleanId = target.channelId.replace(/^chan-/, '');
+      for (const k of [`amg_master_thumbnails_${target.channelId}`, `amg_master_thumbnails_${cleanId}`, `amg_master_thumbnails_chan-${cleanId}`]) {
+        try {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+              localStorage.setItem(k, JSON.stringify(arr.filter((th: any) => th.id !== id)));
+            }
+          }
+        } catch {}
+      }
+    }
     return { success: true };
   },
 
@@ -1562,28 +1670,58 @@ export const api = {
     };
   },
 
-  // Videos (Synchronized with Backend)
+  // Videos (Synchronized with Backend & Persistent Frontend State)
   getVideos: async (params?: { channelId?: string; status?: string; isManaged?: boolean; scope?: string }) => {
+    // 1. Instant check from channel-specific persistent key (Anti-Reset Serverless)
+    let localRealVideos: ManagedVideo[] = [];
+    const targetChanId = params?.channelId && params.channelId !== 'ALL' ? params.channelId : undefined;
+    if (targetChanId) {
+      const cleanTargetId = targetChanId.replace(/^chan-/, '');
+      const raw1 = localStorage.getItem(`amg_real_videos_${targetChanId}`);
+      const raw2 = localStorage.getItem(`amg_real_videos_${cleanTargetId}`);
+      const raw3 = localStorage.getItem(`amg_real_videos_chan-${cleanTargetId}`);
+      const storedJson = raw1 || raw2 || raw3;
+      if (storedJson) {
+        try {
+          const parsed = JSON.parse(storedJson);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            localRealVideos = parsed.filter(isRealVideo);
+          }
+        } catch {}
+      }
+    }
+
     try {
-      const url = params?.channelId && params.channelId !== 'ALL'
-        ? `/api/videos?channelId=${encodeURIComponent(params.channelId)}`
+      const url = targetChanId
+        ? `/api/videos?channelId=${encodeURIComponent(targetChanId)}`
         : '/api/videos';
       const res = await authFetch(url);
       if (res.ok) {
         const backendVideos = await res.json();
         if (Array.isArray(backendVideos)) {
-          const clean = backendVideos.filter(isRealVideo);
+          let clean = backendVideos.filter(isRealVideo);
+          // If backend returned empty but local cache has real videos for this channel, preserve local cache
+          if (clean.length === 0 && localRealVideos.length > 0) {
+            clean = localRealVideos;
+          }
           const rawExisting = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
           let mergedVideos: ManagedVideo[];
-          if (params?.channelId && params.channelId !== 'ALL') {
-            const targetChId = params.channelId;
+          if (targetChanId) {
+            const cleanTargetId = targetChanId.replace(/^chan-/, '');
             const otherChannelsVideos = rawExisting.filter(
               (v) =>
-                v.channelId !== targetChId &&
-                v.channelId !== `chan-${targetChId}` &&
-                (!targetChId.startsWith('chan-') || v.channelId !== targetChId.replace('chan-', ''))
+                v.channelId !== targetChanId &&
+                v.channelId !== `chan-${targetChanId}` &&
+                v.channelId !== cleanTargetId &&
+                v.channelId !== `chan-${cleanTargetId}`
             );
             mergedVideos = [...clean, ...otherChannelsVideos];
+            // Persist into channel persistent keys
+            if (clean.length > 0) {
+              localStorage.setItem(`amg_real_videos_${targetChanId}`, JSON.stringify(clean));
+              localStorage.setItem(`amg_real_videos_${cleanTargetId}`, JSON.stringify(clean));
+              localStorage.setItem(`amg_real_videos_chan-${cleanTargetId}`, JSON.stringify(clean));
+            }
           } else {
             mergedVideos = clean;
           }
@@ -1597,19 +1735,29 @@ export const api = {
       }
     } catch {}
 
+    // Fallback: check localRealVideos first, then global storage
+    if (localRealVideos.length > 0) {
+      let list = localRealVideos;
+      if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);
+      if (params?.isManaged !== undefined) list = list.filter((v) => v.isManaged === params.isManaged);
+      if (params?.scope && params.scope !== 'ALL') list = list.filter((v) => v.managementScope === params.scope);
+      return list;
+    }
+
     const raw = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos);
     const clean = raw.filter(isRealVideo);
     if (clean.length !== raw.length) {
       setStorageItem(KEYS.VIDEOS, clean);
     }
     let list = clean;
-    if (params?.channelId && params.channelId !== 'ALL') {
-      const targetId = params.channelId;
+    if (targetChanId) {
+      const cleanTargetId = targetChanId.replace(/^chan-/, '');
       list = list.filter(
         (v) =>
-          v.channelId === targetId ||
-          v.channelId === `chan-${targetId}` ||
-          (targetId.startsWith('chan-') && v.channelId === targetId.replace('chan-', ''))
+          v.channelId === targetChanId ||
+          v.channelId === `chan-${targetChanId}` ||
+          v.channelId === cleanTargetId ||
+          v.channelId === `chan-${cleanTargetId}`
       );
     }
     if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);

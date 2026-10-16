@@ -684,35 +684,44 @@ export async function fetchChannelVideosFromYouTube(
       let managementStatus: VideoManagementStatus = existing ? existing.managementStatus : 'DISCOVERED';
       let exclusionReason: string | undefined = existing?.exclusionReason;
 
-      // STRICT PRIVACY FILTER:
-      // Hanya video berstatus private DAN belum memiliki jadwal publikasi (publishAt kosong/null)
-      if (!isPrivate) {
-        // Video yang statusnya public atau unlisted otomatis dikecualikan/diabaikan dari pipeline otomasi
-        managementScope = 'EXCLUDED';
-        isAmgEligible = false;
-        isManaged = true; // Dikecualikan dari kandidat mentah
-        managementStatus = 'EXCLUDED';
-        exclusionReason = `Status Privasi: ${(privacy || 'PUBLIC').toUpperCase()}. Video public dan unlisted otomatis dikecualikan; hanya video private mentah tanpa jadwal yang diproses otomatis AMG.`;
-      } else if (isScheduled) {
-        // Video yang sudah berstatus scheduled (sudah terjadwal) tidak boleh masuk ke video terdeteksi/antrean baru
-        managementScope = 'EXCLUDED';
-        isAmgEligible = false;
-        isManaged = true; // Dikecualikan karena sudah terjadwal di YouTube
-        managementStatus = 'SCHEDULED';
-        exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari video terdeteksi/antrean baru.`;
-      } else {
-        // Raw private video mentah TANPA jadwal publikasi (privacyStatus === 'private' && !publishAt)
-        // Langsung masuk ke kategori AMG Reguler / INCLUDED
-        const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED';
+      // STRICT CANDIDATE FILTER:
+      // 1. Privacy: 'private'
+      // 2. Judul asli YouTube: diawali 'Salinan dari A' atau 'Copy of A'
+      // 3. Belum memiliki publishAt (belum terjadwal di YouTube)
+      // 4. Belum pernah diproses oleh sistem AMG
+      const rawTitle = v.snippet?.title || '';
+      const isPlaceholderTitle = /^(salinan dari a|copy of a)/i.test(rawTitle.trim());
+      const isAlreadyCompleted = Boolean(
+        existing?.isManaged ||
+        existing?.managementStatus === 'ALREADY_MANAGED' ||
+        (existing?.titleAssigned && existing.titleAssigned.trim() !== '' && existing.titleAssigned !== rawTitle)
+      );
+
+      if (isPrivate && !isScheduled && isPlaceholderTitle && !isAlreadyCompleted) {
         managementScope = 'REGULAR';
         isAmgEligible = true;
-        isManaged = isAlreadyCompleted ? true : false;
-        managementStatus = isAlreadyCompleted
-          ? 'COMPLETED'
-          : (existing?.managementStatus === 'PROCESSING' || existing?.managementStatus === 'ENROLLED'
-            ? existing.managementStatus
-            : 'DISCOVERED');
+        isManaged = false;
+        managementStatus = (existing?.managementStatus === 'PROCESSING' || existing?.managementStatus === 'ENROLLED')
+          ? existing.managementStatus
+          : 'DISCOVERED';
         exclusionReason = undefined;
+      } else {
+        managementScope = 'EXCLUDED';
+        isAmgEligible = false;
+        isManaged = true;
+        if (!isPrivate) {
+          managementStatus = 'EXCLUDED';
+          exclusionReason = `Status Privasi: ${(privacy || 'PUBLIC').toUpperCase()}. Video public dan unlisted dikecualikan.`;
+        } else if (isScheduled) {
+          managementStatus = 'SCHEDULED';
+          exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari kandidat baru.`;
+        } else if (!isPlaceholderTitle) {
+          managementStatus = 'EXCLUDED';
+          exclusionReason = `Judul video ("${rawTitle}") tidak diawali "Salinan dari A" atau "Copy of A".`;
+        } else if (isAlreadyCompleted) {
+          managementStatus = 'COMPLETED';
+          exclusionReason = 'Video sudah pernah diproses oleh sistem AMG.';
+        }
       }
 
       return {
@@ -821,6 +830,12 @@ function updateChannelVideosInStorage(
 
     const mergedVideos = [...newVideos, ...otherChannelsVideos];
     localStorage.setItem('amg_videos', JSON.stringify(mergedVideos));
+
+    // Persist real videos per channel key: amg_real_videos_{channelId}
+    const cleanChanId = youtubeChannelId || channelId.replace(/^chan-/, '');
+    localStorage.setItem(`amg_real_videos_${channelId}`, JSON.stringify(newVideos));
+    localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(newVideos));
+    localStorage.setItem(`amg_real_videos_chan-${cleanChanId}`, JSON.stringify(newVideos));
 
     // Also update channel's videoCount in amg_channels
     const rawChannels = localStorage.getItem('amg_channels');

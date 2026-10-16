@@ -94,17 +94,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return profiles.find((p) => p.id === activeBlockId || p.blockId === activeBlockId) || profiles[0];
   }, [profiles, activeBlockId]);
 
+  // Persistent fallback for real videos per channel (Anti-Reset Serverless)
+  const effectiveVideos = useMemo(() => {
+    if (videos && videos.length > 0) return videos;
+    if (activeChannel) {
+      const cleanId = activeChannel.youtubeChannelId || activeChannel.id.replace(/^chan-/, '');
+      const raw = localStorage.getItem(`amg_real_videos_${activeChannel.id}`) || localStorage.getItem(`amg_real_videos_${cleanId}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        } catch {}
+      }
+    }
+    const rawAll = localStorage.getItem('amg_videos');
+    if (rawAll) {
+      try {
+        const parsed = JSON.parse(rawAll);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {}
+    }
+    return videos;
+  }, [videos, activeChannel]);
+
   // Block-isolated Video Metrics
   const activeBlockVideos = useMemo(() => {
     if (!activeChannel) return [];
-    return videos.filter(
+    return effectiveVideos.filter(
       (v) =>
         v.channelId === activeChannel.id ||
         v.channelId === activeChannel.youtubeChannelId ||
         v.channelId === `chan-${activeChannel.youtubeChannelId}` ||
         v.blockId === activeBlockId
     );
-  }, [videos, activeChannel, activeBlockId]);
+  }, [effectiveVideos, activeChannel, activeBlockId]);
 
   const targetChannelFilter =
     selectedChannelId && selectedChannelId !== 'ALL'
@@ -114,8 +137,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       : activeChannel?.id;
 
   const blockDetectedCount = useMemo(() => {
-    return calculateDetectedVideosCount(videos, channels, profiles, targetChannelFilter);
-  }, [videos, channels, profiles, targetChannelFilter]);
+    return calculateDetectedVideosCount(effectiveVideos, channels, profiles, targetChannelFilter);
+  }, [effectiveVideos, channels, profiles, targetChannelFilter]);
 
   const blockCompletedCount = useMemo(() => {
     return activeBlockVideos.filter((v) => v.managementStatus === 'COMPLETED' || v.isManaged).length;

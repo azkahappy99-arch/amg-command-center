@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "savedAt": "2026-10-16T10:39:18.674Z",
+  "savedAt": "2026-10-16T11:21:46.552Z",
   "channels": [],
   "profiles": [
     [
@@ -143,12 +143,7 @@
           "timezone": "Asia/Jakarta",
           "startPolicy": "CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE"
         },
-        "masterTitleIds": [
-          "title-gen-1",
-          "title-gen-2",
-          "title-gen-3",
-          "title-gen-4"
-        ],
+        "masterTitleIds": [],
         "masterThumbnailIds": [],
         "assignedChannelCount": 0,
         "createdAt": "2026-09-01T00:00:00.000Z",
@@ -156,60 +151,7 @@
       }
     ]
   ],
-  "masterTitles": [
-    [
-      "title-gen-1",
-      {
-        "id": "title-gen-1",
-        "profileId": "block-general",
-        "blockId": "block-general",
-        "text": "Suasana Relaksasi Pagi Penuh Kedamaian - Menenangkan Pikiran",
-        "orderIndex": 0,
-        "isActive": true,
-        "createdAt": "2026-09-01T00:00:00.000Z",
-        "updatedAt": "2026-09-01T00:00:00.000Z"
-      }
-    ],
-    [
-      "title-gen-2",
-      {
-        "id": "title-gen-2",
-        "profileId": "block-general",
-        "blockId": "block-general",
-        "text": "Musik Relaksasi Alam & Ketenangan Jiwa - Terapi Hati",
-        "orderIndex": 1,
-        "isActive": true,
-        "createdAt": "2026-09-01T00:00:00.000Z",
-        "updatedAt": "2026-09-01T00:00:00.000Z"
-      }
-    ],
-    [
-      "title-gen-3",
-      {
-        "id": "title-gen-3",
-        "profileId": "block-general",
-        "blockId": "block-general",
-        "text": "Alunan Lembut Suasana Hening - Istirahat & Relaksasi Maksimal",
-        "orderIndex": 2,
-        "isActive": true,
-        "createdAt": "2026-09-01T00:00:00.000Z",
-        "updatedAt": "2026-09-01T00:00:00.000Z"
-      }
-    ],
-    [
-      "title-gen-4",
-      {
-        "id": "title-gen-4",
-        "profileId": "block-general",
-        "blockId": "block-general",
-        "text": "Kedamaian Alami Suara Alam - Meditasi & Tidur Nyenyak",
-        "orderIndex": 3,
-        "isActive": true,
-        "createdAt": "2026-09-01T00:00:00.000Z",
-        "updatedAt": "2026-09-01T00:00:00.000Z"
-      }
-    ]
-  ],
+  "masterTitles": [],
   "masterThumbnails": [],
   "videos": [],
   "automationBatches": [],
@@ -269,8 +211,8 @@
         "deviceInfo": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
         "ipAddress": "127.0.0.1",
         "createdAt": "2026-10-02T11:17:38.630Z",
-        "expiresAt": "2026-11-15T10:39:18.673Z",
-        "lastActiveAt": "2026-10-16T10:39:18.673Z",
+        "expiresAt": "2026-11-15T11:21:46.551Z",
+        "lastActiveAt": "2026-10-16T11:21:46.551Z",
         "isRevoked": false
       }
     ],
