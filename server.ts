@@ -630,10 +630,14 @@ function isVideoUnmanagedPrivateRaw(v: any, channel?: any): boolean {
   }
 
   // CONDITION C — Title must match placeholder pattern (e.g. "Salinan dari A", "Copy of A", draft, or channel pattern)
-  const patterns = Array.isArray(channel?.eligibleTitlePatterns) ? channel.eligibleTitlePatterns : [];
-  const titleMatch = matchTitlePattern(v.titleBefore || v.title || '', patterns);
-  if (!titleMatch.matched) {
-    return false;
+  const rawTitle = v.titleBefore || v.title || '';
+  const isDirectPlaceholder = /salinan\s+dari\s+a/i.test(rawTitle) || /copy\s+of\s+a/i.test(rawTitle);
+  if (!isDirectPlaceholder) {
+    const patterns = Array.isArray(channel?.eligibleTitlePatterns) ? channel.eligibleTitlePatterns : [];
+    const titleMatch = matchTitlePattern(rawTitle, patterns);
+    if (!titleMatch.matched) {
+      return false;
+    }
   }
 
   // Passes ALL rules: Strictly raw private video waiting to be managed by AMG
@@ -1911,7 +1915,7 @@ app.delete('/api/content-profiles/:id', (req: Request, res: Response) => {
 // ==========================================
 app.get('/api/master-titles', (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
-  const profileId = (req.query.profileId || req.query.blockId) as string;
+  const profileId = (req.query.profileId || req.query.blockId || req.query.channelId) as string;
   let titles = Array.from(dbStore.masterTitles.values());
 
   if (ctx.role === 'USER') {
@@ -1921,7 +1925,16 @@ app.get('/api/master-titles', (req: Request, res: Response) => {
   }
 
   if (profileId && profileId !== 'ALL') {
-    titles = titles.filter(t => t.profileId === profileId || t.blockId === profileId);
+    const rawTarget = String(profileId);
+    const cleanTarget = rawTarget.replace(/^chan-/, '');
+    titles = titles.filter(t =>
+      t.profileId === rawTarget ||
+      t.blockId === rawTarget ||
+      (t as any).channelId === rawTarget ||
+      (t as any).channelId === cleanTarget ||
+      (t as any).channelId === `chan-${cleanTarget}` ||
+      ((t as any).channelId && ((t as any).channelId === `chan-${rawTarget}` || `chan-${(t as any).channelId}` === rawTarget))
+    );
   }
   titles.sort((a, b) => a.orderIndex - b.orderIndex);
   res.json(titles);
@@ -1929,16 +1942,24 @@ app.get('/api/master-titles', (req: Request, res: Response) => {
 
 app.post('/api/master-titles', (req: Request, res: Response) => {
   const ctx = getRequestContext(req);
-  const { profileId, text, orderIndex } = req.body;
-  if (!text) return res.status(400).json({ error: 'Title text is required' });
+  const { profileId, blockId, channelId, text, orderIndex } = req.body;
+  if (!text || !text.trim()) return res.status(400).json({ error: 'Title text is required' });
 
-  const existing = Array.from(dbStore.masterTitles.values()).filter(t => t.profileId === (profileId || 'profile-ayam-warna'));
-  const id = `title-${Date.now()}`;
+  const resolvedProfileId = profileId || blockId || (channelId ? `profile-${channelId}` : 'block-general');
+  const resolvedChannelId = channelId || '';
+  const existing = Array.from(dbStore.masterTitles.values()).filter(t => {
+    if (resolvedChannelId && ((t as any).channelId === resolvedChannelId || (t as any).channelId === `chan-${resolvedChannelId}`)) return true;
+    return t.profileId === resolvedProfileId || t.blockId === resolvedProfileId;
+  });
+
+  const id = `title-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
   const title = {
     id,
     workspaceId: ctx.workspaceId,
-    profileId: profileId || 'profile-ayam-warna',
-    text,
+    profileId: resolvedProfileId,
+    blockId: blockId || resolvedProfileId,
+    channelId: resolvedChannelId,
+    text: text.trim(),
     orderIndex: orderIndex !== undefined ? orderIndex : existing.length,
     isActive: true,
     createdAt: new Date().toISOString(),
@@ -2200,7 +2221,7 @@ app.post('/api/videos/batch-sync', (req: Request, res: Response) => {
     const isPriv = (vidRecord.privacyStatus || 'private').toLowerCase() === 'private';
     const isSched = Boolean(vidRecord.publishAt || vidRecord.scheduledPublishAt);
     const rawTitle = vidRecord.titleBefore || vidRecord.title || '';
-    const isPlaceholderTitle = /^(salinan dari a|copy of a)/i.test(rawTitle.trim());
+    const isPlaceholderTitle = /salinan\s+dari\s+a/i.test(rawTitle) || /copy\s+of\s+a/i.test(rawTitle);
     const isAlreadyCompleted = existing?.managementStatus === 'COMPLETED' || v.managementStatus === 'COMPLETED' || existing?.isManaged === true;
 
     if (isPriv && !isSched && isPlaceholderTitle && !isAlreadyCompleted) {

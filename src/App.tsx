@@ -44,7 +44,7 @@ import {
   ActivityLog,
   AutomationBatch,
 } from './types/index.ts';
-import { api, sanitizeChannel, isRealVideo, isRealThumbnail } from './services/api.ts';
+import { api, sanitizeChannel, isRealVideo, isRealThumbnail, isRealTitle } from './services/api.ts';
 import { initialChannels, initialVideos } from './services/initialSeedData.ts';
 import {
   authorizeAndFetchYouTubeChannel,
@@ -185,7 +185,27 @@ export default function App() {
         }
       }
       if (profilesData) setProfiles(profilesData);
-      if (titlesData) setTitles(titlesData);
+      if (titlesData) {
+        let cleanTitles = titlesData.filter(isRealTitle);
+        const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
+        if (targetChan) {
+          const cleanId = targetChan.replace(/^chan-/, '');
+          const raw1 = localStorage.getItem(`amg_master_titles_${targetChan}`);
+          const raw2 = localStorage.getItem(`amg_master_titles_${cleanId}`);
+          const raw3 = localStorage.getItem(`amg_master_titles_chan-${cleanId}`);
+          const combined: MasterTitle[] = [
+            ...(raw1 ? JSON.parse(raw1) : []),
+            ...(raw2 ? JSON.parse(raw2) : []),
+            ...(raw3 ? JSON.parse(raw3) : []),
+          ].filter(isRealTitle);
+          for (const lt of combined) {
+            if (!cleanTitles.some((t) => t.id === lt.id || (t.text === lt.text && t.channelId === lt.channelId))) {
+              cleanTitles.push(lt);
+            }
+          }
+        }
+        setTitles(cleanTitles);
+      }
       if (thumbsData) {
         let cleanThumbs = thumbsData.filter(isRealThumbnail);
         const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;

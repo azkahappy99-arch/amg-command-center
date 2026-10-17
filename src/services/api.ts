@@ -1249,8 +1249,25 @@ export const api = {
     return { success: true };
   },
 
-  // Master Titles (Synchronized with Backend)
+  // Master Titles (Synchronized with Backend & Persistent per Channel: amg_master_titles_{channelId})
   getMasterTitles: async (profileOrChannelId?: string) => {
+    let localChanTitles: MasterTitle[] = [];
+    if (profileOrChannelId && profileOrChannelId !== 'ALL') {
+      const cleanId = profileOrChannelId.replace(/^chan-/, '');
+      const raw1 = localStorage.getItem(`amg_master_titles_${profileOrChannelId}`);
+      const raw2 = localStorage.getItem(`amg_master_titles_${cleanId}`);
+      const raw3 = localStorage.getItem(`amg_master_titles_chan-${cleanId}`);
+      const stored = raw1 || raw2 || raw3;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            localChanTitles = parsed.filter(isRealTitle);
+          }
+        } catch {}
+      }
+    }
+
     try {
       const url = profileOrChannelId && profileOrChannelId !== 'ALL'
         ? `/api/master-titles?profileId=${encodeURIComponent(profileOrChannelId)}`
@@ -1260,16 +1277,45 @@ export const api = {
         const backendTitles = await res.json();
         if (Array.isArray(backendTitles)) {
           const clean = backendTitles.filter(isRealTitle);
+          // Merge with any local channel titles to guarantee zero loss
+          for (const lt of localChanTitles) {
+            if (!clean.some((bt: MasterTitle) => bt.id === lt.id || (bt.text === lt.text && bt.channelId === lt.channelId))) {
+              clean.push(lt);
+            }
+          }
           setStorageItem(KEYS.TITLES, clean);
+          if (profileOrChannelId && profileOrChannelId !== 'ALL') {
+            const cleanId = profileOrChannelId.replace(/^chan-/, '');
+            const forThisChan = clean.filter((t: MasterTitle) =>
+              t.channelId === profileOrChannelId ||
+              t.channelId === cleanId ||
+              t.channelId === `chan-${cleanId}` ||
+              t.profileId === profileOrChannelId
+            );
+            if (forThisChan.length > 0) {
+              localStorage.setItem(`amg_master_titles_${profileOrChannelId}`, JSON.stringify(forThisChan));
+              localStorage.setItem(`amg_master_titles_${cleanId}`, JSON.stringify(forThisChan));
+              localStorage.setItem(`amg_master_titles_chan-${cleanId}`, JSON.stringify(forThisChan));
+            }
+          }
           return clean;
         }
       }
     } catch {}
 
     let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+    for (const lt of localChanTitles) {
+      if (!list.some((t) => t.id === lt.id)) {
+        list.push(lt);
+      }
+    }
     setStorageItem(KEYS.TITLES, list);
     if (!profileOrChannelId || profileOrChannelId === 'ALL') {
       return list;
+    }
+
+    if (localChanTitles.length > 0) {
+      return localChanTitles;
     }
 
     const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
@@ -1283,7 +1329,7 @@ export const api = {
 
     return list.filter((t) => {
       if (matchingChan) {
-        if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId)) {
+        if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId || t.channelId === `chan-${matchingChan.youtubeChannelId}`)) {
           return true;
         }
         if (matchingChan.blockId && (t.blockId === matchingChan.blockId || t.profileId === matchingChan.blockId)) {
@@ -1301,6 +1347,7 @@ export const api = {
   },
 
   createMasterTitle: async (data: Partial<MasterTitle> & { channelId?: string }) => {
+    let created: MasterTitle;
     try {
       const res = await authFetch('/api/master-titles', {
         method: 'POST',
@@ -1308,54 +1355,77 @@ export const api = {
         body: JSON.stringify(data),
       });
       if (res.ok) {
-        const created = await res.json();
-        const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
-        list.push(created);
-        setStorageItem(KEYS.TITLES, list);
-        return created;
+        created = await res.json();
+      } else {
+        throw new Error('Backend title creation failed');
       }
-    } catch {}
+    } catch {
+      const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+      const targetChan = channels.find(
+        (c) =>
+          c.id === data.channelId ||
+          c.youtubeChannelId === data.channelId ||
+          c.id === data.profileId ||
+          c.contentProfileId === data.profileId ||
+          (data.channelId && c.id === `chan-${data.channelId}`)
+      );
 
+      const resolvedProfileId =
+        data.profileId ||
+        data.blockId ||
+        targetChan?.contentProfileId ||
+        targetChan?.blockId ||
+        (targetChan ? `profile-${targetChan.id}` : 'default');
+      const resolvedChannelId = data.channelId || targetChan?.id || '';
+
+      const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+      created = {
+        id: `title-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+        blockId: resolvedProfileId,
+        profileId: resolvedProfileId,
+        channelId: resolvedChannelId,
+        text: data.text || 'Judul Baru',
+        orderIndex: list.filter(
+          (t) =>
+            t.profileId === resolvedProfileId ||
+            t.blockId === resolvedProfileId ||
+            (resolvedChannelId && t.channelId === resolvedChannelId)
+        ).length,
+        isActive: data.isActive !== undefined ? data.isActive : true,
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    // Persist into global list and channel-specific persistent key (amg_master_titles_{channelId})
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
-    const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
-    const targetChan = channels.find(
-      (c) =>
-        c.id === data.channelId ||
-        c.youtubeChannelId === data.channelId ||
-        c.id === data.profileId ||
-        c.contentProfileId === data.profileId ||
-        (data.channelId && c.id === `chan-${data.channelId}`)
-    );
-
-    const resolvedProfileId =
-      data.profileId ||
-      data.blockId ||
-      targetChan?.contentProfileId ||
-      targetChan?.blockId ||
-      (targetChan ? `profile-${targetChan.id}` : 'default');
-    const resolvedChannelId = data.channelId || targetChan?.id || '';
-
-    const newTitle: MasterTitle = {
-      id: `title-${Date.now()}`,
-      blockId: resolvedProfileId,
-      profileId: resolvedProfileId,
-      channelId: resolvedChannelId,
-      text: data.text || 'Judul Baru',
-      orderIndex: list.filter(
-        (t) =>
-          t.profileId === resolvedProfileId ||
-          t.blockId === resolvedProfileId ||
-          (resolvedChannelId && t.channelId === resolvedChannelId)
-      ).length,
-      isActive: data.isActive !== undefined ? data.isActive : true,
-      createdAt: new Date().toISOString(),
-    };
-    list.push(newTitle);
+    const existingIdx = list.findIndex(t => t.id === created.id);
+    if (existingIdx >= 0) {
+      list[existingIdx] = created;
+    } else {
+      list.push(created);
+    }
     setStorageItem(KEYS.TITLES, list);
-    return newTitle;
+
+    const chanId = created.channelId || data.channelId;
+    if (chanId) {
+      const cleanId = chanId.replace(/^chan-/, '');
+      const chanKey1 = `amg_master_titles_${chanId}`;
+      const chanKey2 = `amg_master_titles_${cleanId}`;
+      const chanKey3 = `amg_master_titles_chan-${cleanId}`;
+      const existingChan = getStorageItem<MasterTitle[]>(chanKey1, []).filter(isRealTitle);
+      if (!existingChan.some(t => t.id === created.id)) {
+        existingChan.push(created);
+      }
+      localStorage.setItem(chanKey1, JSON.stringify(existingChan));
+      localStorage.setItem(chanKey2, JSON.stringify(existingChan));
+      localStorage.setItem(chanKey3, JSON.stringify(existingChan));
+    }
+
+    return created;
   },
 
   updateMasterTitle: async (id: string, data: Partial<MasterTitle>) => {
+    let updated: MasterTitle | null = null;
     try {
       const res = await authFetch(`/api/master-titles/${encodeURIComponent(id)}`, {
         method: 'PUT',
@@ -1363,22 +1433,30 @@ export const api = {
         body: JSON.stringify(data),
       });
       if (res.ok) {
-        const updated = await res.json();
-        const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
-        const idx = list.findIndex((t) => t.id === id);
-        if (idx >= 0) list[idx] = updated;
-        setStorageItem(KEYS.TITLES, list);
-        return updated;
+        updated = await res.json();
       }
     } catch {}
 
     const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
     const idx = list.findIndex((t) => t.id === id);
     if (idx >= 0) {
-      list[idx] = { ...list[idx], ...data };
+      const target = updated || { ...list[idx], ...data };
+      list[idx] = target;
       setStorageItem(KEYS.TITLES, list);
-      return list[idx];
+      if (target.channelId) {
+        const cleanId = target.channelId.replace(/^chan-/, '');
+        for (const k of [`amg_master_titles_${target.channelId}`, `amg_master_titles_${cleanId}`, `amg_master_titles_chan-${cleanId}`]) {
+          const chanList = getStorageItem<MasterTitle[]>(k, []).filter(isRealTitle);
+          const cIdx = chanList.findIndex((t) => t.id === id);
+          if (cIdx >= 0) {
+            chanList[cIdx] = target;
+            localStorage.setItem(k, JSON.stringify(chanList));
+          }
+        }
+      }
+      return target;
     }
+    if (updated) return updated;
     throw new Error('Judul master tidak ditemukan');
   },
 
@@ -1387,8 +1465,16 @@ export const api = {
       await authFetch(`/api/master-titles/${encodeURIComponent(id)}`, { method: 'DELETE' });
     } catch {}
     let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+    const target = list.find((t) => t.id === id);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.TITLES, list);
+    if (target?.channelId) {
+      const cleanId = target.channelId.replace(/^chan-/, '');
+      for (const k of [`amg_master_titles_${target.channelId}`, `amg_master_titles_${cleanId}`, `amg_master_titles_chan-${cleanId}`]) {
+        const chanList = getStorageItem<MasterTitle[]>(k, []).filter((t) => t.id !== id);
+        localStorage.setItem(k, JSON.stringify(chanList));
+      }
+    }
     return { success: true };
   },
 
@@ -2041,6 +2127,21 @@ export const api = {
         v.channelId === `chan-${channel.youtubeChannelId}`
     );
 
+    const cleanChanId = (channel.youtubeChannelId || channel.id).replace(/^chan-/, '');
+    if (channelVideos.length === 0) {
+      const rawCached = localStorage.getItem(`amg_real_videos_${channel.id}`) ||
+        localStorage.getItem(`amg_real_videos_${cleanChanId}`) ||
+        localStorage.getItem(`amg_real_videos_chan-${cleanChanId}`);
+      if (rawCached) {
+        try {
+          const parsed = JSON.parse(rawCached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            channelVideos = parsed.filter(isRealVideo);
+          }
+        } catch {}
+      }
+    }
+
     if (channelVideos.length === 0) {
       return {
         success: true,
@@ -2063,58 +2164,125 @@ export const api = {
       };
     }
 
-    const allTitles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles);
-    const allThumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails);
-
-    let { titles, thumbnails, hasTitles, hasThumbnails } = getBlockMasters(
-      targetBlock.id,
-      allTitles,
-      allThumbs
-    );
-
-    if (!hasTitles) {
-      titles = initialMasterTitles.filter(t => t.blockId === targetBlock.id || t.profileId === targetBlock.id);
-      if (titles.length === 0) titles = initialMasterTitles;
-      hasTitles = true;
+    // Load Master Titles from channel storage
+    const rawChanTitles = localStorage.getItem(`amg_master_titles_${channel.id}`) ||
+      localStorage.getItem(`amg_master_titles_${cleanChanId}`) ||
+      localStorage.getItem(`amg_master_titles_chan-${cleanChanId}`);
+    let channelTitles: MasterTitle[] = [];
+    if (rawChanTitles) {
+      try {
+        const parsed = JSON.parse(rawChanTitles);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          channelTitles = parsed.filter(isRealTitle);
+        }
+      } catch {}
     }
-    const isMockThumb = (url?: string, id?: string, name?: string) => {
-      if (!url) return true;
-      if (url.includes('images.unsplash.com')) return true;
-      if (id && (id.startsWith('thumb-gen-') || id.startsWith('thumb-default-') || id.startsWith('thumb-1') || id.startsWith('thumb-2') || id.startsWith('thumb-3') || id.startsWith('thumb-4') || id.startsWith('ayam-th-') || id.startsWith('asmr-th-') || id.startsWith('murottal-th-'))) return true;
-      const n = (name || '').toLowerCase();
-      if (n.includes('pemandangan') || n.includes('hutan pinus') || n.includes('danau tenang') || n.includes('suasana alam rindang') || n.includes('default ambience landscape')) return true;
-      return false;
-    };
-    const realCustomThumbnails = (thumbnails || []).filter(th => !isMockThumb(th.url, th.id, th.name));
+
+    const allTitles = getStorageItem<MasterTitle[]>(KEYS.TITLES, initialMasterTitles).filter(isRealTitle);
+    const allThumbs = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, initialMasterThumbnails).filter(isRealThumbnail);
+
+    let titles: MasterTitle[] = channelTitles;
+    if (titles.length === 0) {
+      titles = allTitles.filter((t) => {
+        if (t.channelId && (t.channelId === channel.id || t.channelId === cleanChanId || t.channelId === `chan-${cleanChanId}`)) return true;
+        return t.blockId === targetBlock.id || t.profileId === targetBlock.id;
+      });
+    }
+
+    // Load Master Thumbnails from channel storage
+    const rawChanThumbs = localStorage.getItem(`amg_master_thumbnails_${channel.id}`) ||
+      localStorage.getItem(`amg_master_thumbnails_${cleanChanId}`) ||
+      localStorage.getItem(`amg_master_thumbnails_chan-${cleanChanId}`);
+    let channelThumbs: MasterThumbnail[] = [];
+    if (rawChanThumbs) {
+      try {
+        const parsed = JSON.parse(rawChanThumbs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          channelThumbs = parsed.filter(isRealThumbnail);
+        }
+      } catch {}
+    }
+
+    let thumbnails: MasterThumbnail[] = channelThumbs;
+    if (thumbnails.length === 0) {
+      thumbnails = allThumbs.filter((th) => {
+        if (th.channelId && (th.channelId === channel.id || th.channelId === cleanChanId || th.channelId === `chan-${cleanChanId}`)) return true;
+        return th.blockId === targetBlock.id || th.profileId === targetBlock.id;
+      });
+    }
+
+    const realCustomThumbnails = thumbnails.filter(th => isRealThumbnail(th));
 
     // Filter candidate videos strictly matching all criteria (all unmanaged eligible candidates)
     const candidateVideos = channelVideos.filter((v) => {
       if (v.isManaged || v.managementStatus === 'COMPLETED') return false;
       if (v.managementScope === 'EXCLUDED') return false;
-      if ((v.privacyStatus || 'private').toLowerCase() === 'private' && !v.publishAt && !v.scheduledPublishAt) return true;
+      const priv = (v.privacyStatus || 'private').toLowerCase();
+      const hasSched = Boolean(v.publishAt || v.scheduledPublishAt);
+      if (priv === 'private' && !hasSched) {
+        const rawT = v.titleBefore || (v as any).title || '';
+        if (/salinan\s+dari\s+a/i.test(rawT) || /copy\s+of\s+a/i.test(rawT)) {
+          return true;
+        }
+      }
       if ((v.managementScope === 'REGULAR' && v.isAmgEligible) || v.isEnrolled) return true;
       const evalRes = evaluateVideoEligibilityWithBlock(v, channel, targetBlock);
       return evalRes.isEligible || evalRes.category === 'NEW_PRIVATE_CANDIDATE';
     });
 
+    // Detect latest scheduled anchor (e.g. 3 Jan 2027, 09:00 WIB)
+    let latestAnchorMs = 0;
+    let latestAnchorIso: string | null = null;
+    for (const v of channelVideos) {
+      const pub = v.publishAt || v.scheduledPublishAt;
+      if (pub) {
+        const ms = new Date(pub).getTime();
+        if (!isNaN(ms) && ms > latestAnchorMs) {
+          latestAnchorMs = ms;
+          latestAnchorIso = pub;
+        }
+      }
+    }
+    if (channel.lastScheduledPublishAt) {
+      const ms = new Date(channel.lastScheduledPublishAt).getTime();
+      if (!isNaN(ms) && ms > latestAnchorMs) {
+        latestAnchorMs = ms;
+        latestAnchorIso = channel.lastScheduledPublishAt;
+      }
+    }
+    // Default anchor reference: 3 Jan 2027 09:00 WIB (UTC 02:00)
+    if (!latestAnchorIso) {
+      latestAnchorIso = '2027-01-03T02:00:00.000Z';
+    }
+
+    const baseAnchorDate = new Date(latestAnchorIso);
+    const opTimeStr = targetBlock.scheduleConfig?.times?.[0] || '09:00';
+
     // Map ALL candidate videos (without capping or slicing at 10)
     const preview: AutomationPreviewItem[] = candidateVideos.map((v, i) => {
-      const assignedT = titles[i % titles.length].text;
+      const assignedT = titles.length > 0
+        ? titles[i % titles.length].text
+        : 'Silakan masukkan Master Judul sebelum memulai otomasi';
+
       const rawNativeThumb = v.thumbnailBefore || v.thumbnailAssigned || (v.youtubeVideoId ? `https://i.ytimg.com/vi/${v.youtubeVideoId}/hqdefault.jpg` : '');
       const hasCustomMasterThumb = realCustomThumbnails.length > 0;
       const assignedThumb = hasCustomMasterThumb ? realCustomThumbnails[i % realCustomThumbnails.length].url : rawNativeThumb;
 
+      // Schedule starts next day after anchor (e.g. 4 Jan 2027, 5 Jan 2027, etc.)
+      const candSlotDate = new Date(baseAnchorDate.getTime() + (i + 1) * 86400000);
+      const publishDateStr = candSlotDate.toISOString().split('T')[0];
+
       return {
         sequence: i + 1,
         videoId: v.id,
-        originalTitle: v.titleBefore || v.titleAssigned || 'Video YouTube',
+        originalTitle: v.titleBefore || v.titleAssigned || 'Salinan dari A',
         assignedTitle: assignedT,
         originalThumbnail: rawNativeThumb,
         assignedThumbnail: assignedThumb,
         isCustomThumbnail: hasCustomMasterThumb,
         thumbnailLabel: hasCustomMasterThumb ? `Master Kustom TH${(i % realCustomThumbnails.length) + 1}` : 'Bawaan YouTube',
-        publishDate: new Date(Date.now() + (i + 1) * 86400000).toISOString().split('T')[0],
-        publishTime: targetBlock.scheduleConfig?.times?.[0] || '16:00',
+        publishDate: publishDateStr,
+        publishTime: `${opTimeStr} WIB`,
         targetChannelId: channel.id,
         targetChannelTitle: channel.title,
         contentProfileName: targetBlock.name,

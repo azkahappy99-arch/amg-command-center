@@ -86,13 +86,7 @@ export class AutomationEngine {
         }
       }
     }
-    // Fallback pamungkas: Sediakan rotasi judul default agar otomasi tidak pernah terhenti
-    if (titles.length === 0) {
-      titles.push(
-        { id: 'title-default-1', text: 'Relaxing Ambience & Peaceful Soundscape - Deep Calm', orderIndex: 0 },
-        { id: 'title-default-2', text: 'Soothing Nature Soundscape - Sleep & Relaxation', orderIndex: 1 }
-      );
-    }
+    // Note: Do not inject dummy titles. AMG Command Center strictly requires user-defined Master Titles.
 
     // Fetch Master Thumbnails strictly bound to this profile / channel (excluding any mock assets)
     const isMockThumb = (url?: string, id?: string, name?: string) => {
@@ -276,7 +270,7 @@ export class AutomationEngine {
     let scheduleSlots: any[] = [];
 
     if (enrolledRegularVideos.length > 0) {
-      if (thumbnails.length > 0) {
+      if (thumbnails.length > 0 && titles.length > 0) {
         rotationAssignments = generateRotationMatrix(
           titles,
           thumbnails,
@@ -297,9 +291,9 @@ export class AutomationEngine {
     let candidateRotations: any[] = [];
     let candidateSlots: any[] = [];
     if (candidateVideos.length > 0) {
-      const candidateTitleOffset = (startingTitleOffset + enrolledRegularVideos.length) % titles.length;
+      const candidateTitleOffset = titles.length > 0 ? (startingTitleOffset + enrolledRegularVideos.length) % titles.length : 0;
       const candidateThumbOffset = thumbnails.length > 0 ? (startingThumbnailOffset + enrolledRegularVideos.length) % thumbnails.length : 0;
-      if (thumbnails.length > 0) {
+      if (thumbnails.length > 0 && titles.length > 0) {
         candidateRotations = generateRotationMatrix(
           titles,
           thumbnails,
@@ -329,7 +323,7 @@ export class AutomationEngine {
       const rotation = rotationAssignments[i];
       const slot = scheduleSlots[i];
 
-      const assignedTitle = rotation ? rotation.title.text : getTitleForIndex(titles, startingTitleOffset + i).text;
+      const assignedTitle = rotation ? rotation.title.text : (titles.length > 0 ? getTitleForIndex(titles, startingTitleOffset + i).text : 'Menunggu Master Judul');
       const rawNativeThumb = video.thumbnailBefore || video.thumbnailAssigned || (video.youtubeVideoId ? `https://i.ytimg.com/vi/${video.youtubeVideoId}/hqdefault.jpg` : '');
       const hasCustomMasterThumb = Boolean(rotation && rotation.thumbnail && !isMockThumb(rotation.thumbnail.url, rotation.thumbnail.id, rotation.thumbnail.name));
       const assignedThumbnail = hasCustomMasterThumb ? rotation.thumbnail.url : rawNativeThumb;

@@ -24,7 +24,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { Channel, ContentProfile, MasterTitle, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
-import { api } from '../services/api.ts';
+import { api, isRealTitle } from '../services/api.ts';
 import { Phase2AcceptanceModal } from './Phase2AcceptanceModal.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
 import { ChannelEligibilityModal } from './ChannelEligibilityModal.tsx';
@@ -252,9 +252,23 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
   useEffect(() => {
     if (selectedChannelId) {
+      const cleanId = selectedChannelId.replace(/^chan-/, '');
+      const raw1 = localStorage.getItem(`amg_master_titles_${selectedChannelId}`);
+      const raw2 = localStorage.getItem(`amg_master_titles_${cleanId}`);
+      const raw3 = localStorage.getItem(`amg_master_titles_chan-${cleanId}`);
+      const stored = raw1 || raw2 || raw3;
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setChannelTitles(parsed.filter(isRealTitle));
+          }
+        } catch {}
+      }
+
       api.getMasterTitles(selectedChannelId).then((res) => {
         if (Array.isArray(res)) {
-          setChannelTitles(res);
+          setChannelTitles(res.filter(isRealTitle));
         }
       }).catch(() => {});
     }

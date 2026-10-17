@@ -14,7 +14,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { MasterTitle, ContentProfile, Channel } from '../types/index.ts';
-import { api } from '../services/api.ts';
+import { api, isRealTitle } from '../services/api.ts';
 
 interface MasterTitlesViewProps {
   titles: MasterTitle[];
@@ -58,17 +58,63 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
     }
   }, [activeChannel?.id, activeProfile?.id]);
 
-  // Filter titles strictly for the active block / profile - 100% Isolated
+  // Filter titles strictly for the active channel & block - 100% Isolated & Persistent
   const currentBlockId = selectedProfileId || activeProfile?.id || activeChannel?.blockId || activeChannel?.contentProfileId || '';
-  const profileTitles = titles
-    .filter((t) => {
-      const titleBlock = t.blockId || t.profileId;
-      if (currentBlockId) {
-        return titleBlock === currentBlockId;
+
+  // Merge titles from props with direct channel localStorage (amg_master_titles_{channelId})
+  const channelTitlesFromStorage = React.useMemo(() => {
+    if (!activeChannel?.id) return [];
+    const cleanChan = activeChannel.id.replace(/^chan-/, '');
+    const raw1 = localStorage.getItem(`amg_master_titles_${activeChannel.id}`);
+    const raw2 = localStorage.getItem(`amg_master_titles_${cleanChan}`);
+    const raw3 = localStorage.getItem(`amg_master_titles_chan-${cleanChan}`);
+    const stored = raw1 || raw2 || raw3;
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed.filter(isRealTitle);
+      } catch {}
+    }
+    return [];
+  }, [activeChannel?.id, titles]);
+
+  const profileTitles = React.useMemo(() => {
+    const list: MasterTitle[] = [];
+    const seen = new Set<string>();
+
+    // Priority 1: Channel-specific titles from storage
+    for (const t of channelTitlesFromStorage) {
+      if (t && t.id && !seen.has(t.id)) {
+        seen.add(t.id);
+        list.push(t);
       }
-      return false;
-    })
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    }
+
+    // Priority 2: Titles from props
+    for (const t of titles || []) {
+      if (!isRealTitle(t)) continue;
+      if (activeChannel?.id) {
+        const cleanChan = activeChannel.id.replace(/^chan-/, '');
+        const isMatch =
+          t.channelId === activeChannel.id ||
+          t.channelId === cleanChan ||
+          t.channelId === `chan-${cleanChan}` ||
+          (activeChannel.youtubeChannelId && t.channelId === activeChannel.youtubeChannelId);
+        if (isMatch && !seen.has(t.id)) {
+          seen.add(t.id);
+          list.push(t);
+          continue;
+        }
+      }
+      const titleBlock = t.blockId || t.profileId;
+      if (currentBlockId && (titleBlock === currentBlockId || titleBlock === activeProfile?.id) && !seen.has(t.id)) {
+        seen.add(t.id);
+        list.push(t);
+      }
+    }
+
+    return list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  }, [titles, channelTitlesFromStorage, activeChannel?.id, currentBlockId, activeProfile?.id]);
 
   const handleAddTitle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,8 +122,8 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
     setIsAdding(true);
     try {
       await api.createMasterTitle({
-        blockId: currentBlockId,
-        profileId: currentBlockId,
+        blockId: currentBlockId || (activeChannel ? `profile-${activeChannel.id}` : 'block-general'),
+        profileId: currentBlockId || (activeChannel ? `profile-${activeChannel.id}` : 'block-general'),
         channelId: activeChannel?.id,
         text: newTitleText.trim(),
         orderIndex: profileTitles.length,

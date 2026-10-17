@@ -10,7 +10,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { MasterThumbnail, MasterTitle, ContentProfile, Channel } from '../types/index.ts';
-import { api } from '../services/api.ts';
+import { api, isRealThumbnail, isRealTitle } from '../services/api.ts';
 
 interface MasterThumbnailsViewProps {
   thumbnails: MasterThumbnail[];
@@ -60,33 +60,112 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
 
   // Filter thumbnails strictly for the active channel & block - 100% Isolated & Persistent
   const currentBlockId = selectedProfileId || activeProfile?.id || activeChannel?.blockId || activeChannel?.contentProfileId || '';
-  const profileThumbnails = thumbnails
-    .filter((th) => {
-      if (activeChannel?.id && (th.channelId === activeChannel.id || th.channelId === activeChannel.youtubeChannelId)) {
-        return true;
+
+  // Merge thumbnails from props with direct channel localStorage (amg_master_thumbnails_{channelId})
+  const channelThumbsFromStorage = React.useMemo(() => {
+    if (!activeChannel?.id) return [];
+    const cleanChan = activeChannel.id.replace(/^chan-/, '');
+    const raw1 = localStorage.getItem(`amg_master_thumbnails_${activeChannel.id}`);
+    const raw2 = localStorage.getItem(`amg_master_thumbnails_${cleanChan}`);
+    const raw3 = localStorage.getItem(`amg_master_thumbnails_chan-${cleanChan}`);
+    const stored = raw1 || raw2 || raw3;
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed.filter(isRealThumbnail);
+      } catch {}
+    }
+    return [];
+  }, [activeChannel?.id, thumbnails]);
+
+  const profileThumbnails = React.useMemo(() => {
+    const list: MasterThumbnail[] = [];
+    const seen = new Set<string>();
+
+    for (const th of channelThumbsFromStorage) {
+      if (th && th.id && !seen.has(th.id)) {
+        seen.add(th.id);
+        list.push(th);
       }
-      if (activeChannel?.youtubeChannelId && th.channelId === `chan-${activeChannel.youtubeChannelId}`) {
-        return true;
+    }
+
+    for (const th of thumbnails || []) {
+      if (!isRealThumbnail(th)) continue;
+      if (activeChannel?.id) {
+        const cleanChan = activeChannel.id.replace(/^chan-/, '');
+        const isMatch =
+          th.channelId === activeChannel.id ||
+          th.channelId === cleanChan ||
+          th.channelId === `chan-${cleanChan}` ||
+          (activeChannel.youtubeChannelId && th.channelId === activeChannel.youtubeChannelId);
+        if (isMatch && !seen.has(th.id)) {
+          seen.add(th.id);
+          list.push(th);
+          continue;
+        }
       }
       const thumbBlock = th.blockId || th.profileId;
-      if (currentBlockId) {
-        return thumbBlock === currentBlockId;
+      if (currentBlockId && (thumbBlock === currentBlockId || thumbBlock === activeProfile?.id) && !seen.has(th.id)) {
+        seen.add(th.id);
+        list.push(th);
       }
-      return false;
-    })
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    }
 
-  // Filter titles strictly for the active block / profile - 100% Isolated
-  const profileTitles = titles
-    .filter((t) => {
-      const titleBlock = t.blockId || t.profileId;
-      if (currentBlockId) {
-        return titleBlock === currentBlockId;
+    return list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  }, [thumbnails, channelThumbsFromStorage, activeChannel?.id, currentBlockId, activeProfile?.id]);
+
+  // Merge titles from props with direct channel localStorage (amg_master_titles_{channelId})
+  const channelTitlesFromStorage = React.useMemo(() => {
+    if (!activeChannel?.id) return [];
+    const cleanChan = activeChannel.id.replace(/^chan-/, '');
+    const raw1 = localStorage.getItem(`amg_master_titles_${activeChannel.id}`);
+    const raw2 = localStorage.getItem(`amg_master_titles_${cleanChan}`);
+    const raw3 = localStorage.getItem(`amg_master_titles_chan-${cleanChan}`);
+    const stored = raw1 || raw2 || raw3;
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) return parsed.filter(isRealTitle);
+      } catch {}
+    }
+    return [];
+  }, [activeChannel?.id, titles]);
+
+  const profileTitles = React.useMemo(() => {
+    const list: MasterTitle[] = [];
+    const seen = new Set<string>();
+
+    for (const t of channelTitlesFromStorage) {
+      if (t && t.id && !seen.has(t.id)) {
+        seen.add(t.id);
+        list.push(t);
       }
-      return false;
-    })
-    .filter((t) => t.isActive)
-    .sort((a, b) => a.orderIndex - b.orderIndex);
+    }
+
+    for (const t of titles || []) {
+      if (!isRealTitle(t)) continue;
+      if (activeChannel?.id) {
+        const cleanChan = activeChannel.id.replace(/^chan-/, '');
+        const isMatch =
+          t.channelId === activeChannel.id ||
+          t.channelId === cleanChan ||
+          t.channelId === `chan-${cleanChan}` ||
+          (activeChannel.youtubeChannelId && t.channelId === activeChannel.youtubeChannelId);
+        if (isMatch && !seen.has(t.id)) {
+          seen.add(t.id);
+          list.push(t);
+          continue;
+        }
+      }
+      const titleBlock = t.blockId || t.profileId;
+      if (currentBlockId && (titleBlock === currentBlockId || titleBlock === activeProfile?.id) && !seen.has(t.id)) {
+        seen.add(t.id);
+        list.push(t);
+      }
+    }
+
+    return list.filter((t) => t.isActive).sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  }, [titles, channelTitlesFromStorage, activeChannel?.id, currentBlockId, activeProfile?.id]);
 
   // Load rotation matrix strictly for the active channel / profile
   useEffect(() => {

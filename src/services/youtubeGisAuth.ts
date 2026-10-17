@@ -666,7 +666,7 @@ export async function fetchChannelVideosFromYouTube(
     const managedVideos: ManagedVideo[] = detailedItems.map((v: any) => {
       const existing = existingMap.get(v.id) || existingMap.get(`yt-vid-${v.id}`);
       const isHd = v.contentDetails?.definition === 'hd';
-      const privacy = (v.status?.privacyStatus || 'public') as any;
+      const privacy = (v.status?.privacyStatus || 'public').toLowerCase() as any;
       const publishAt = v.status?.publishAt || null;
       const thumb =
         v.snippet?.thumbnails?.maxres?.url ||
@@ -685,15 +685,16 @@ export async function fetchChannelVideosFromYouTube(
       let exclusionReason: string | undefined = existing?.exclusionReason;
 
       // STRICT CANDIDATE FILTER:
-      // 1. Privacy: 'private'
-      // 2. Judul asli YouTube: diawali 'Salinan dari A' atau 'Copy of A'
+      // 1. Privacy: 'private' (case-insensitive)
+      // 2. Judul asli YouTube: diawali 'Salinan dari A' atau 'Copy of A' (flexible regex)
       // 3. Belum memiliki publishAt (belum terjadwal di YouTube)
       // 4. Belum pernah diproses oleh sistem AMG
       const rawTitle = v.snippet?.title || '';
-      const isPlaceholderTitle = /^(salinan dari a|copy of a)/i.test(rawTitle.trim());
+      const isPlaceholderTitle = /salinan\s+dari\s+a/i.test(rawTitle) || /copy\s+of\s+a/i.test(rawTitle);
       const isAlreadyCompleted = Boolean(
         existing?.isManaged ||
         existing?.managementStatus === 'ALREADY_MANAGED' ||
+        existing?.managementStatus === 'COMPLETED' ||
         (existing?.titleAssigned && existing.titleAssigned.trim() !== '' && existing.titleAssigned !== rawTitle)
       );
 
