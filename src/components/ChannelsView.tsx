@@ -1497,14 +1497,14 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                             <td className="py-2.5 px-3">
                               <span
                                 className={`text-[10px] px-2 py-0.5 rounded font-mono uppercase ${
-                                  v.privacyStatus === 'private'
+                                  (v.privacyStatus || '').toLowerCase() === 'private'
                                     ? 'bg-amber-950/80 text-amber-300'
-                                    : v.privacyStatus === 'unlisted'
+                                    : (v.privacyStatus || '').toLowerCase() === 'unlisted'
                                     ? 'bg-blue-950/80 text-blue-300'
                                     : 'bg-emerald-950/80 text-emerald-300'
                                 }`}
                               >
-                                {v.privacyStatus === 'private' ? 'Pribadi' : v.privacyStatus === 'unlisted' ? 'Tidak Publik' : 'Publik'}
+                                {(v.privacyStatus || '').toLowerCase() === 'private' ? 'Pribadi' : (v.privacyStatus || '').toLowerCase() === 'unlisted' ? 'Tidak Publik' : 'Publik'}
                               </span>
                             </td>
                             <td className="py-2.5 px-3 font-mono text-[11px] text-neutral-400">

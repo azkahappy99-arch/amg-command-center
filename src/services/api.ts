@@ -534,7 +534,7 @@ export const api = {
     return {
       ...channel,
       unmanagedVideoCount: videos.filter(
-        (v) => !v.isManaged && v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt
+        (v) => !v.isManaged && (v.privacyStatus || '').toLowerCase() === 'private' && !v.publishAt && !v.scheduledPublishAt
       ).length,
       recentVideos: videos.slice(0, 10),
       recentJobs: jobs.slice(0, 5),
@@ -1412,20 +1412,52 @@ export const api = {
       const chanKey1 = `amg_master_titles_${chanId}`;
       const chanKey2 = `amg_master_titles_${cleanId}`;
       const chanKey3 = `amg_master_titles_chan-${cleanId}`;
-      const existingChan = getStorageItem<MasterTitle[]>(chanKey1, []).filter(isRealTitle);
-      if (!existingChan.some(t => t.id === created.id)) {
+
+      // Combine existing channel titles from all storage keys to prevent overwrite
+      const raw1 = localStorage.getItem(chanKey1);
+      const raw2 = localStorage.getItem(chanKey2);
+      const raw3 = localStorage.getItem(chanKey3);
+      const combined = [
+        ...(raw1 ? JSON.parse(raw1) : []),
+        ...(raw2 ? JSON.parse(raw2) : []),
+        ...(raw3 ? JSON.parse(raw3) : []),
+      ];
+      const seen = new Set<string>();
+      const existingChan: MasterTitle[] = [];
+      for (const t of combined) {
+        if (t && t.id && !seen.has(t.id) && isRealTitle(t)) {
+          seen.add(t.id);
+          existingChan.push(t);
+        }
+      }
+      // Also add any matching from global list
+      for (const t of list) {
+        if (t && t.id && !seen.has(t.id) && (t.channelId === chanId || t.channelId === cleanId || t.channelId === `chan-${cleanId}`)) {
+          seen.add(t.id);
+          existingChan.push(t);
+        }
+      }
+
+      const idxInChan = existingChan.findIndex(t => t.id === created.id);
+      if (idxInChan >= 0) {
+        existingChan[idxInChan] = created;
+      } else {
+        created.orderIndex = existingChan.length;
         existingChan.push(created);
       }
-      localStorage.setItem(chanKey1, JSON.stringify(existingChan));
-      localStorage.setItem(chanKey2, JSON.stringify(existingChan));
-      localStorage.setItem(chanKey3, JSON.stringify(existingChan));
+
+      existingChan.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+      const serialized = JSON.stringify(existingChan);
+      localStorage.setItem(chanKey1, serialized);
+      localStorage.setItem(chanKey2, serialized);
+      localStorage.setItem(chanKey3, serialized);
     }
 
     return created;
   },
 
   updateMasterTitle: async (id: string, data: Partial<MasterTitle>) => {
-    let updated: MasterTitle | null = null;
+    let updatedFromBackend: MasterTitle | null = null;
     try {
       const res = await authFetch(`/api/master-titles/${encodeURIComponent(id)}`, {
         method: 'PUT',
@@ -1433,48 +1465,138 @@ export const api = {
         body: JSON.stringify(data),
       });
       if (res.ok) {
-        updated = await res.json();
+        updatedFromBackend = await res.json();
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[api] updateMasterTitle backend notice:', err);
+    }
 
-    const list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
-    const idx = list.findIndex((t) => t.id === id);
-    if (idx >= 0) {
-      const target = updated || { ...list[idx], ...data };
-      list[idx] = target;
-      setStorageItem(KEYS.TITLES, list);
-      if (target.channelId) {
-        const cleanId = target.channelId.replace(/^chan-/, '');
-        for (const k of [`amg_master_titles_${target.channelId}`, `amg_master_titles_${cleanId}`, `amg_master_titles_chan-${cleanId}`]) {
-          const chanList = getStorageItem<MasterTitle[]>(k, []).filter(isRealTitle);
-          const cIdx = chanList.findIndex((t) => t.id === id);
-          if (cIdx >= 0) {
-            chanList[cIdx] = target;
-            localStorage.setItem(k, JSON.stringify(chanList));
+    // Find the existing item across all storage (global or channel-specific)
+    let existingItem: MasterTitle | null = null;
+    const globalList = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
+    const gIdx = globalList.findIndex((t) => t.id === id);
+    if (gIdx >= 0) {
+      existingItem = globalList[gIdx];
+    }
+
+    if (!existingItem) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('amg_master_titles_')) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            try {
+              const arr = JSON.parse(raw);
+              if (Array.isArray(arr)) {
+                const found = arr.find((t: any) => t && t.id === id);
+                if (found) {
+                  existingItem = found;
+                  break;
+                }
+              }
+            } catch {}
           }
         }
       }
-      return target;
     }
-    if (updated) return updated;
-    throw new Error('Judul master tidak ditemukan');
+
+    const mergedTarget: MasterTitle = updatedFromBackend || {
+      ...(existingItem || {
+        id,
+        blockId: 'block-general',
+        profileId: 'block-general',
+        channelId: '',
+        text: data.text || '',
+        orderIndex: 0,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      }),
+      ...data,
+    };
+
+    // Update global list
+    if (gIdx >= 0) {
+      globalList[gIdx] = mergedTarget;
+    } else {
+      globalList.push(mergedTarget);
+    }
+    setStorageItem(KEYS.TITLES, globalList);
+
+    // Update ALL channel-specific keys where this item exists
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('amg_master_titles_')) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            try {
+              const arr = JSON.parse(raw);
+              if (Array.isArray(arr)) {
+                const itemIdx = arr.findIndex((t: any) => t && t.id === id);
+                if (itemIdx >= 0) {
+                  arr[itemIdx] = mergedTarget;
+                  localStorage.setItem(k, JSON.stringify(arr));
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+
+      const targetChanId = mergedTarget.channelId;
+      if (targetChanId) {
+        const cleanId = targetChanId.replace(/^chan-/, '');
+        for (const k of [`amg_master_titles_${targetChanId}`, `amg_master_titles_${cleanId}`, `amg_master_titles_chan-${cleanId}`]) {
+          const chanRaw = localStorage.getItem(k);
+          const chanList: MasterTitle[] = chanRaw ? JSON.parse(chanRaw) : [];
+          const cIdx = chanList.findIndex((t) => t.id === id);
+          if (cIdx >= 0) {
+            chanList[cIdx] = mergedTarget;
+          } else {
+            chanList.push(mergedTarget);
+          }
+          localStorage.setItem(k, JSON.stringify(chanList));
+        }
+      }
+    } catch {}
+
+    return mergedTarget;
   },
 
   deleteMasterTitle: async (id: string) => {
     try {
       await authFetch(`/api/master-titles/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    } catch {}
+    } catch (err) {
+      console.warn('[api] deleteMasterTitle backend notice:', err);
+    }
+
+    // 1. Remove from global KEYS.TITLES
     let list = getStorageItem<MasterTitle[]>(KEYS.TITLES, []).filter(isRealTitle);
-    const target = list.find((t) => t.id === id);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.TITLES, list);
-    if (target?.channelId) {
-      const cleanId = target.channelId.replace(/^chan-/, '');
-      for (const k of [`amg_master_titles_${target.channelId}`, `amg_master_titles_${cleanId}`, `amg_master_titles_chan-${cleanId}`]) {
-        const chanList = getStorageItem<MasterTitle[]>(k, []).filter((t) => t.id !== id);
-        localStorage.setItem(k, JSON.stringify(chanList));
+
+    // 2. Remove from ALL channel-specific keys in localStorage
+    try {
+      const keysToClean: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('amg_master_titles_')) {
+          keysToClean.push(k);
+        }
       }
-    }
+      for (const k of keysToClean) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          try {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) {
+              localStorage.setItem(k, JSON.stringify(arr.filter((t: any) => t && t.id !== id)));
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
     return { success: true };
   },
 
@@ -1640,41 +1762,188 @@ export const api = {
       const chanKey1 = `amg_master_thumbnails_${chanId}`;
       const chanKey2 = `amg_master_thumbnails_${cleanId}`;
       const chanKey3 = `amg_master_thumbnails_chan-${cleanId}`;
-      const existingChan = getStorageItem<MasterThumbnail[]>(chanKey1, []).filter(isRealThumbnail);
-      if (!existingChan.some(th => th.id === created.id)) {
+
+      // Combine existing channel thumbnails from all storage keys to prevent overwrite
+      const raw1 = localStorage.getItem(chanKey1);
+      const raw2 = localStorage.getItem(chanKey2);
+      const raw3 = localStorage.getItem(chanKey3);
+      const combined = [
+        ...(raw1 ? JSON.parse(raw1) : []),
+        ...(raw2 ? JSON.parse(raw2) : []),
+        ...(raw3 ? JSON.parse(raw3) : []),
+      ];
+      const seen = new Set<string>();
+      const existingChan: MasterThumbnail[] = [];
+      for (const th of combined) {
+        if (th && th.id && !seen.has(th.id) && isRealThumbnail(th)) {
+          seen.add(th.id);
+          existingChan.push(th);
+        }
+      }
+      for (const th of list) {
+        if (th && th.id && !seen.has(th.id) && (th.channelId === chanId || th.channelId === cleanId || th.channelId === `chan-${cleanId}`)) {
+          seen.add(th.id);
+          existingChan.push(th);
+        }
+      }
+
+      const idxInChan = existingChan.findIndex(th => th.id === created.id);
+      if (idxInChan >= 0) {
+        existingChan[idxInChan] = created;
+      } else {
+        created.orderIndex = existingChan.length;
         existingChan.push(created);
       }
-      localStorage.setItem(chanKey1, JSON.stringify(existingChan));
-      localStorage.setItem(chanKey2, JSON.stringify(existingChan));
-      localStorage.setItem(chanKey3, JSON.stringify(existingChan));
+
+      existingChan.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+      const serialized = JSON.stringify(existingChan);
+      localStorage.setItem(chanKey1, serialized);
+      localStorage.setItem(chanKey2, serialized);
+      localStorage.setItem(chanKey3, serialized);
     }
 
     return created;
   },
 
+  updateMasterThumbnail: async (id: string, data: Partial<MasterThumbnail>) => {
+    let updatedFromBackend: MasterThumbnail | null = null;
+    try {
+      const res = await authFetch(`/api/master-thumbnails/${encodeURIComponent(id)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        updatedFromBackend = await res.json();
+      }
+    } catch (err) {
+      console.warn('[api] updateMasterThumbnail backend notice:', err);
+    }
+
+    let existingItem: MasterThumbnail | null = null;
+    const globalList = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
+    const gIdx = globalList.findIndex((th) => th.id === id);
+    if (gIdx >= 0) {
+      existingItem = globalList[gIdx];
+    }
+
+    if (!existingItem) {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('amg_master_thumbnails_')) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            try {
+              const arr = JSON.parse(raw);
+              if (Array.isArray(arr)) {
+                const found = arr.find((th: any) => th && th.id === id);
+                if (found) {
+                  existingItem = found;
+                  break;
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+    }
+
+    const mergedTarget: MasterThumbnail = updatedFromBackend || {
+      ...(existingItem || {
+        id,
+        blockId: 'block-general',
+        profileId: 'block-general',
+        channelId: '',
+        name: data.name || 'Thumbnail',
+        url: data.url || '',
+        orderIndex: 0,
+        isActive: true,
+        createdAt: new Date().toISOString(),
+      }),
+      ...data,
+    };
+
+    if (gIdx >= 0) {
+      globalList[gIdx] = mergedTarget;
+    } else {
+      globalList.push(mergedTarget);
+    }
+    setStorageItem(KEYS.THUMBNAILS, globalList);
+
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('amg_master_thumbnails_')) {
+          const raw = localStorage.getItem(k);
+          if (raw) {
+            try {
+              const arr = JSON.parse(raw);
+              if (Array.isArray(arr)) {
+                const itemIdx = arr.findIndex((th: any) => th && th.id === id);
+                if (itemIdx >= 0) {
+                  arr[itemIdx] = mergedTarget;
+                  localStorage.setItem(k, JSON.stringify(arr));
+                }
+              }
+            } catch {}
+          }
+        }
+      }
+
+      const targetChanId = mergedTarget.channelId;
+      if (targetChanId) {
+        const cleanId = targetChanId.replace(/^chan-/, '');
+        for (const k of [`amg_master_thumbnails_${targetChanId}`, `amg_master_thumbnails_${cleanId}`, `amg_master_thumbnails_chan-${cleanId}`]) {
+          const chanRaw = localStorage.getItem(k);
+          const chanList: MasterThumbnail[] = chanRaw ? JSON.parse(chanRaw) : [];
+          const cIdx = chanList.findIndex((th) => th.id === id);
+          if (cIdx >= 0) {
+            chanList[cIdx] = mergedTarget;
+          } else {
+            chanList.push(mergedTarget);
+          }
+          localStorage.setItem(k, JSON.stringify(chanList));
+        }
+      }
+    } catch {}
+
+    return mergedTarget;
+  },
+
   deleteMasterThumbnail: async (id: string) => {
     try {
       await authFetch(`/api/master-thumbnails/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    } catch {}
+    } catch (err) {
+      console.warn('[api] deleteMasterThumbnail backend notice:', err);
+    }
+
+    // 1. Remove from global KEYS.THUMBNAILS
     let list = getStorageItem<MasterThumbnail[]>(KEYS.THUMBNAILS, []).filter(isRealThumbnail);
-    const target = list.find((t) => t.id === id);
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.THUMBNAILS, list);
 
-    if (target?.channelId) {
-      const cleanId = target.channelId.replace(/^chan-/, '');
-      for (const k of [`amg_master_thumbnails_${target.channelId}`, `amg_master_thumbnails_${cleanId}`, `amg_master_thumbnails_chan-${cleanId}`]) {
-        try {
-          const raw = localStorage.getItem(k);
-          if (raw) {
+    // 2. Remove from ALL channel-specific keys in localStorage
+    try {
+      const keysToClean: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('amg_master_thumbnails_')) {
+          keysToClean.push(k);
+        }
+      }
+      for (const k of keysToClean) {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          try {
             const arr = JSON.parse(raw);
             if (Array.isArray(arr)) {
-              localStorage.setItem(k, JSON.stringify(arr.filter((th: any) => th.id !== id)));
+              localStorage.setItem(k, JSON.stringify(arr.filter((th: any) => th && th.id !== id)));
             }
-          }
-        } catch {}
+          } catch {}
+        }
       }
-    }
+    } catch {}
+
     return { success: true };
   },
 
@@ -2770,7 +3039,7 @@ export const api = {
       if (
         isChanMatch &&
         !v.isManaged &&
-        v.privacyStatus === 'private' &&
+        (v.privacyStatus || '').toLowerCase() === 'private' &&
         !hasPublishAt &&
         v.managementStatus !== 'SCHEDULED' &&
         v.managementStatus !== 'COMPLETED' &&

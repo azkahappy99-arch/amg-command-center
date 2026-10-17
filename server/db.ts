@@ -454,7 +454,7 @@ class DatabaseStore {
         let videoChanged = false;
         if (v.blockId !== 'block-general') { v.blockId = 'block-general'; videoChanged = true; }
         if (v.contentProfileId !== 'block-general') { v.contentProfileId = 'block-general'; videoChanged = true; }
-        if (v.privacyStatus === 'private' && !v.publishAt && !v.scheduledPublishAt) {
+        if ((v.privacyStatus || '').toLowerCase() === 'private' && !v.publishAt && !v.scheduledPublishAt) {
           if (v.managementScope !== 'REGULAR') { v.managementScope = 'REGULAR'; videoChanged = true; }
           if (!v.isAmgEligible) { v.isAmgEligible = true; videoChanged = true; }
           if (!v.isEnrolled) { v.isEnrolled = true; videoChanged = true; }

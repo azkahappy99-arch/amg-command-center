@@ -3,6 +3,7 @@ import {
   Image as ImageIcon,
   Plus,
   Trash2,
+  Edit2,
   RotateCw,
   Upload,
   X,
@@ -50,6 +51,15 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
   const [isAdding, setIsAdding] = useState(false);
   const [matrixData, setMatrixData] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Edit & Delete modal states
+  const [editingModalThumb, setEditingModalThumb] = useState<MasterThumbnail | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editImageBase64, setEditImageBase64] = useState('');
+  const [deletingThumb, setDeletingThumb] = useState<MasterThumbnail | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
 
   // Sync profile when active channel changes
   useEffect(() => {
@@ -252,14 +262,67 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     }
   };
 
-  const handleDelete = async (thumb: MasterThumbnail) => {
-    if (!confirm(`Hapus thumbnail "${thumb.name}"?`)) return;
+  const handleOpenEdit = (thumb: MasterThumbnail) => {
+    if (!thumb) return;
+    setEditingModalThumb(thumb);
+    setEditName(thumb.name || '');
+    setEditImageBase64(thumb.url || '');
+  };
+
+  const handleEditFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Silakan pilih file gambar yang valid (JPG, PNG, WEBP).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (result) {
+        setEditImageBase64(result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveModalEdit = async () => {
+    if (!editingModalThumb) return;
+    if (!editName.trim()) {
+      alert('Label thumbnail tidak boleh kosong');
+      return;
+    }
+    setIsSavingEdit(true);
     try {
-      await api.deleteMasterThumbnail(thumb.id);
+      await api.updateMasterThumbnail(editingModalThumb.id, {
+        name: editName.trim(),
+        url: editImageBase64 || editingModalThumb.url,
+      });
+      setEditingModalThumb(null);
+      onThumbnailsUpdated();
+    } catch (err: any) {
+      alert(err.message || 'Gagal memperbarui thumbnail');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingThumb) return;
+    setIsDeleting(true);
+    try {
+      await api.deleteMasterThumbnail(deletingThumb.id);
+      setDeletingThumb(null);
       onThumbnailsUpdated();
     } catch (err: any) {
       alert(err.message || 'Gagal menghapus thumbnail');
+    } finally {
+      setIsDeleting(false);
     }
+  };
+
+  const handleDelete = (thumb: MasterThumbnail) => {
+    setDeletingThumb(thumb);
   };
 
   return (
@@ -513,13 +576,22 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
 
                 <div className="pt-2 flex items-center justify-between border-t border-neutral-800/60 mt-3">
                   <span className="text-[10px] text-emerald-400 font-medium">Siap</span>
-                  <button
-                    onClick={() => handleDelete(thumb)}
-                    className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
-                    title="Hapus thumbnail"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      onClick={() => handleOpenEdit(thumb)}
+                      className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition cursor-pointer"
+                      title="Ubah label / gambar thumbnail"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(thumb)}
+                      className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
+                      title="Hapus thumbnail"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -607,6 +679,132 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Edit Master Thumbnail Modal */}
+      {editingModalThumb && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-red-500" />
+                Edit Master Thumbnail
+              </h3>
+              <button
+                onClick={() => setEditingModalThumb(null)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-neutral-300 block mb-1 font-medium">Label / Nama Thumbnail</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Masukkan label thumbnail..."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-100 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-neutral-300 block mb-1 font-medium">Pratinjau Gambar</label>
+                <div className="relative aspect-video rounded-xl overflow-hidden border border-neutral-800 bg-neutral-950 mb-2">
+                  <img
+                    src={editImageBase64 || editingModalThumb.url}
+                    alt={editName}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <input
+                  ref={editFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleEditFileChange}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => editFileInputRef.current?.click()}
+                  className="w-full py-2 px-3 rounded-xl border border-dashed border-neutral-700 bg-neutral-950/60 hover:bg-neutral-800 text-xs text-neutral-300 font-medium flex items-center justify-center gap-2 transition cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-neutral-400" />
+                  <span>Ganti File Gambar dari Perangkat</span>
+                </button>
+              </div>
+
+              <p className="text-[10px] text-neutral-500 font-mono">
+                ID Item: {editingModalThumb.id} • Channel: {activeChannel?.title || 'Aktif'}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setEditingModalThumb(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800 transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isSavingEdit || !editName.trim()}
+                onClick={handleSaveModalEdit}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 transition cursor-pointer"
+              >
+                {isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Thumbnail Confirmation Modal */}
+      {deletingThumb && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-500" />
+                Konfirmasi Hapus Thumbnail
+              </h3>
+              <button
+                onClick={() => setDeletingThumb(null)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs text-neutral-300">
+                Apakah Anda yakin ingin menghapus master thumbnail <strong className="text-white">"{deletingThumb.name}"</strong>?
+              </p>
+              <div className="w-full aspect-video rounded-lg overflow-hidden border border-neutral-800 bg-neutral-950">
+                <img src={deletingThumb.url} alt="" className="w-full h-full object-cover" />
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingThumb(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800 transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50 transition cursor-pointer"
+              >
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -162,13 +162,13 @@ export function evaluateVideoEligibility(
 
   // CHECK 1 — PRIVACY STATUS
   // Video MUST be PRIVATE. Public or unlisted videos are permanently excluded from automation.
-  if (video.privacyStatus !== 'private') {
+  if ((video.privacyStatus || '').toLowerCase() !== 'private') {
     return {
       category: 'EXCLUDED',
       isEligible: false,
       isProtected: true,
       amgStatus: 'EXCLUDED',
-      reason: `Non-private video (${video.privacyStatus.toUpperCase()}) cannot be modified or scheduled by AMG.`,
+      reason: `Non-private video (${(video.privacyStatus || 'public').toUpperCase()}) cannot be modified or scheduled by AMG.`,
       eligibilityWindowDays: config.windowDays,
       latestManagedUploadAt: channel.latestManagedUploadAt,
       originalUploadAt: video.originalUploadAt,

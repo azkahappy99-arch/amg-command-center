@@ -12,6 +12,7 @@ import {
   Layers,
   Sparkles,
   AlertTriangle,
+  X,
 } from 'lucide-react';
 import { MasterTitle, ContentProfile, Channel } from '../types/index.ts';
 import { api, isRealTitle } from '../services/api.ts';
@@ -48,8 +49,12 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
   );
   const [newTitleText, setNewTitleText] = useState('');
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null);
+  const [editingModalTitle, setEditingModalTitle] = useState<MasterTitle | null>(null);
+  const [deletingTitle, setDeletingTitle] = useState<MasterTitle | null>(null);
   const [editingText, setEditingText] = useState('');
   const [isAdding, setIsAdding] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Sync profile when active channel changes
   useEffect(() => {
@@ -137,6 +142,46 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
     }
   };
 
+  const handleOpenEdit = (title: MasterTitle, idx?: number) => {
+    const target = title || (idx !== undefined ? profileTitles[idx] : null);
+    if (!target) {
+      console.warn('Judul master tidak ditemukan');
+      return;
+    }
+    setEditingModalTitle(target);
+    setEditingText(target.text || '');
+  };
+
+  const handleSaveModalEdit = async () => {
+    if (!editingModalTitle) return;
+    if (!editingText.trim()) return;
+    setIsSavingEdit(true);
+    try {
+      await api.updateMasterTitle(editingModalTitle.id, { text: editingText.trim() });
+      setEditingModalTitle(null);
+      setEditingText('');
+      onTitlesUpdated();
+    } catch (err: any) {
+      alert(err.message || 'Gagal memperbarui judul master');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingTitle) return;
+    setIsDeleting(true);
+    try {
+      await api.deleteMasterTitle(deletingTitle.id);
+      setDeletingTitle(null);
+      onTitlesUpdated();
+    } catch (err: any) {
+      alert(err.message || 'Gagal menghapus judul master');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleSaveEdit = async (title: MasterTitle) => {
     if (!editingText.trim()) return;
     try {
@@ -167,13 +212,7 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
   };
 
   const handleDelete = async (title: MasterTitle) => {
-    if (!confirm(`Hapus master judul "${title.text}"?`)) return;
-    try {
-      await api.deleteMasterTitle(title.id);
-      onTitlesUpdated();
-    } catch (err: any) {
-      alert(err.message || 'Gagal menghapus judul');
-    }
+    setDeletingTitle(title);
   };
 
   const handleToggleActive = async (title: MasterTitle) => {
@@ -338,18 +377,15 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
                       <ArrowDown className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={() => {
-                        setEditingTitleId(title.id);
-                        setEditingText(title.text);
-                      }}
-                      className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition"
+                      onClick={() => handleOpenEdit(title, idx)}
+                      className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition cursor-pointer"
                       title="Ubah teks judul"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={() => handleDelete(title)}
-                      className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition"
+                      className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
                       title="Hapus judul"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -373,26 +409,31 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
 
           <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
             <p className="text-[11px] text-neutral-400 leading-relaxed">
-              Saat sistem memproses antrean video untuk channel <strong className="text-neutral-200">{activeChannel?.title || 'ini'}</strong>, setiap video akan menerima judul sesuai urutan rotasi deterministik berikut:
+              Saat sistem memproses antrean video untuk channel <strong className="text-neutral-200">{activeChannel?.title || 'ini'}</strong>, setiap video akan menerima judul sesuai urutan rotasi deterministik modulo berikut:
             </p>
 
-            <div className="space-y-1.5 pt-1">
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((seq) => {
-                const assignedTitle =
-                  profileTitles.length > 0
-                    ? profileTitles[(seq - 1) % profileTitles.length]
-                    : null;
+            <div className="space-y-1.5 pt-1 max-h-[480px] overflow-y-auto pr-1">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((seq) => {
+                const assignedIdx = profileTitles.length > 0 ? (seq - 1) % profileTitles.length : -1;
+                const assignedTitle = assignedIdx >= 0 ? profileTitles[assignedIdx] : null;
 
                 return (
                   <div
                     key={seq}
                     className="p-2 rounded-lg bg-neutral-900/70 border border-neutral-800/60 flex items-center justify-between text-xs"
                   >
-                    <span className="font-mono text-neutral-400 text-[11px]">
+                    <span className="font-mono text-neutral-400 text-[11px] shrink-0">
                       Video #{seq}:
                     </span>
                     <span className="font-semibold text-neutral-200 truncate ml-2 text-right">
-                      {assignedTitle ? assignedTitle.text : 'Menunggu penyiapan judul'}
+                      {assignedTitle ? (
+                        <>
+                          <span className="text-red-400 font-mono text-[10px] mr-1.5">[T{assignedIdx + 1}]</span>
+                          {assignedTitle.text}
+                        </>
+                      ) : (
+                        'Menunggu penyiapan judul'
+                      )}
                     </span>
                   </div>
                 );
@@ -401,6 +442,97 @@ export const MasterTitlesView: React.FC<MasterTitlesViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Edit Master Title Modal */}
+      {editingModalTitle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-red-500" />
+                Edit Master Judul
+              </h3>
+              <button
+                onClick={() => setEditingModalTitle(null)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div>
+              <label className="text-xs text-neutral-300 block mb-1 font-medium">Teks Judul</label>
+              <input
+                type="text"
+                value={editingText}
+                onChange={(e) => setEditingText(e.target.value)}
+                placeholder="Masukkan judul..."
+                className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-neutral-100 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none"
+                autoFocus
+              />
+              <p className="text-[10px] text-neutral-500 mt-1.5 font-mono">
+                ID Item: {editingModalTitle.id} • Channel: {activeChannel?.title || 'Aktif'}
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setEditingModalTitle(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800 transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isSavingEdit || !editingText.trim()}
+                onClick={handleSaveModalEdit}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 transition cursor-pointer"
+              >
+                {isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingTitle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl overflow-hidden p-6 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-500" />
+                Konfirmasi Hapus
+              </h3>
+              <button
+                onClick={() => setDeletingTitle(null)}
+                className="p-1 rounded-lg text-neutral-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-neutral-300">
+              Apakah Anda yakin ingin menghapus master judul <strong className="text-white">"{deletingTitle.text}"</strong>?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingTitle(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white bg-neutral-800 transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50 transition cursor-pointer"
+              >
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

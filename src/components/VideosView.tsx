@@ -105,7 +105,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
   };
 
   // Strict Privacy & Schedule Check helpers (Requirements: private && !publishAt)
-  const isVideoPrivate = (v: ManagedVideo) => v.privacyStatus === 'private';
+  const isVideoPrivate = (v: ManagedVideo) => (v.privacyStatus || '').toLowerCase() === 'private';
   const isVideoScheduled = (v: ManagedVideo) =>
     Boolean(
       v.publishAt ||
@@ -184,6 +184,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
     const isPrivate = isVideoPrivate(v);
     const isScheduled = isVideoScheduled(v);
     const isCandidate = isVideoCandidate(v);
+    const privLower = (v.privacyStatus || '').toLowerCase();
 
     const matchesPrivacy =
       privacyFilter === 'ALL'
@@ -191,8 +192,8 @@ export const VideosView: React.FC<VideosViewProps> = ({
         : privacyFilter === 'PRIVATE'
         ? isPrivate
         : privacyFilter === 'PUBLIC'
-        ? v.privacyStatus === 'public'
-        : v.privacyStatus === 'unlisted';
+        ? privLower === 'public'
+        : privLower === 'unlisted';
 
     const matchesScope =
       scopeFilter === 'ALL'
@@ -798,7 +799,7 @@ export const VideosView: React.FC<VideosViewProps> = ({
                               <span>•</span>
                               <span
                                 className={`px-1.5 py-0.2 rounded font-semibold uppercase text-[9px] ${
-                                  video.privacyStatus === 'private'
+                                  (video.privacyStatus || '').toLowerCase() === 'private'
                                     ? 'bg-amber-950/80 text-amber-300 border border-amber-800/40'
                                     : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
                                 }`}

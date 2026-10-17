@@ -600,7 +600,7 @@ export function evaluateChannelScheduleBuffer(
       if (scheduledAt) {
         const schedMs = new Date(scheduledAt).getTime();
         // Video is scheduled in the future and not yet published
-        if (schedMs > nowMs && v.privacyStatus === 'private') {
+        if (schedMs > nowMs && (v.privacyStatus || '').toLowerCase() === 'private') {
           stockCount++;
           // Track highest scheduled date if not set on channel
           if (!exhaustionIso || schedMs > new Date(exhaustionIso).getTime()) {

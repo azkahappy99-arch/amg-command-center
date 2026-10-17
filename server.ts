@@ -1206,7 +1206,7 @@ app.post('/api/channels/:id/sync', async (req: Request, res: Response) => {
                 ev.channelId === `chan-${channel.youtubeChannelId}`)))
       );
 
-      const isPrivate = (v.privacyStatus || 'public') === 'private';
+      const isPrivate = (v.privacyStatus || 'public').toLowerCase() === 'private';
       const publishAt = v.publishAt || null;
       const isScheduled = Boolean(publishAt);
 
@@ -1979,20 +1979,36 @@ app.post('/api/master-titles', (req: Request, res: Response) => {
 });
 
 app.put('/api/master-titles/:id', (req: Request, res: Response) => {
-  const title = dbStore.masterTitles.get(req.params.id);
-  if (!title) return res.status(404).json({ error: 'Title not found' });
-
-  const updated = { ...title, ...req.body };
-  dbStore.masterTitles.set(title.id, updated);
+  const ctx = getRequestContext(req);
+  let title = dbStore.masterTitles.get(req.params.id);
+  if (!title) {
+    const { profileId, blockId, channelId, text, orderIndex, isActive } = req.body;
+    title = {
+      id: req.params.id,
+      workspaceId: ctx.workspaceId,
+      profileId: profileId || blockId || 'block-general',
+      blockId: blockId || profileId || 'block-general',
+      channelId: channelId || '',
+      text: text || '',
+      orderIndex: orderIndex !== undefined ? orderIndex : 0,
+      isActive: isActive !== undefined ? isActive : true,
+      createdAt: new Date().toISOString(),
+    } as any;
+  } else {
+    title = { ...title, ...req.body };
+  }
+  dbStore.masterTitles.set(req.params.id, title as any);
   dbStore.saveToDisk();
-  res.json(updated);
+  res.json(title);
 });
 
 app.delete('/api/master-titles/:id', (req: Request, res: Response) => {
-  const title = dbStore.masterTitles.get(req.params.id);
-  if (!title) return res.status(404).json({ error: 'Title not found' });
-
-  dbStore.masterTitles.delete(title.id);
+  dbStore.masterTitles.delete(req.params.id);
+  for (const prof of dbStore.profiles.values()) {
+    if (prof.masterTitleIds) {
+      prof.masterTitleIds = prof.masterTitleIds.filter(tid => tid !== req.params.id);
+    }
+  }
   dbStore.saveToDisk();
   res.json({ success: true });
 });
@@ -2013,10 +2029,13 @@ app.get('/api/master-thumbnails', (req: Request, res: Response) => {
 
   if (profileId && profileId !== 'ALL') {
     const rawTarget = String(profileId);
+    const cleanTarget = rawTarget.replace(/^chan-/, '');
     thumbs = thumbs.filter(t =>
       t.profileId === rawTarget ||
       t.blockId === rawTarget ||
       t.channelId === rawTarget ||
+      t.channelId === cleanTarget ||
+      t.channelId === `chan-${cleanTarget}` ||
       (t.channelId && (t.channelId === `chan-${rawTarget}` || `chan-${t.channelId}` === rawTarget))
     );
   }
@@ -2029,17 +2048,18 @@ app.post('/api/master-thumbnails', (req: Request, res: Response) => {
   const { profileId, blockId, channelId, name, url, orderIndex } = req.body;
   if (!name || !url) return res.status(400).json({ error: 'Name and URL are required' });
 
-  const resolvedBlock = blockId || profileId || 'block-general';
+  const resolvedBlock = blockId || profileId || (channelId ? `profile-${channelId}` : 'block-general');
+  const resolvedChannelId = channelId || '';
   const existing = Array.from(dbStore.masterThumbnails.values()).filter(t => 
-    t.profileId === resolvedBlock || (channelId && t.channelId === channelId)
+    t.profileId === resolvedBlock || (resolvedChannelId && (t.channelId === resolvedChannelId || t.channelId === `chan-${resolvedChannelId}`))
   );
-  const id = `thumb-${Date.now()}`;
+  const id = `thumb-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
   const thumbnail = {
     id,
     workspaceId: ctx.workspaceId,
     profileId: resolvedBlock,
     blockId: resolvedBlock,
-    channelId: channelId || '',
+    channelId: resolvedChannelId,
     name,
     url,
     orderIndex: orderIndex !== undefined ? orderIndex : existing.length,
@@ -2059,11 +2079,38 @@ app.post('/api/master-thumbnails', (req: Request, res: Response) => {
   res.status(201).json(thumbnail);
 });
 
-app.delete('/api/master-thumbnails/:id', (req: Request, res: Response) => {
-  const thumb = dbStore.masterThumbnails.get(req.params.id);
-  if (!thumb) return res.status(404).json({ error: 'Thumbnail not found' });
+app.put('/api/master-thumbnails/:id', (req: Request, res: Response) => {
+  const ctx = getRequestContext(req);
+  let thumb = dbStore.masterThumbnails.get(req.params.id);
+  if (!thumb) {
+    const { profileId, blockId, channelId, name, url, orderIndex, isActive } = req.body;
+    thumb = {
+      id: req.params.id,
+      workspaceId: ctx.workspaceId,
+      profileId: profileId || blockId || 'block-general',
+      blockId: blockId || profileId || 'block-general',
+      channelId: channelId || '',
+      name: name || 'Thumbnail',
+      url: url || '',
+      orderIndex: orderIndex !== undefined ? orderIndex : 0,
+      isActive: isActive !== undefined ? isActive : true,
+      createdAt: new Date().toISOString(),
+    } as any;
+  } else {
+    thumb = { ...thumb, ...req.body };
+  }
+  dbStore.masterThumbnails.set(req.params.id, thumb as any);
+  dbStore.saveToDisk();
+  res.json(thumb);
+});
 
-  dbStore.masterThumbnails.delete(thumb.id);
+app.delete('/api/master-thumbnails/:id', (req: Request, res: Response) => {
+  dbStore.masterThumbnails.delete(req.params.id);
+  for (const prof of dbStore.profiles.values()) {
+    if (prof.masterThumbnailIds) {
+      prof.masterThumbnailIds = prof.masterThumbnailIds.filter(thid => thid !== req.params.id);
+    }
+  }
   dbStore.saveToDisk();
   res.json({ success: true });
 });

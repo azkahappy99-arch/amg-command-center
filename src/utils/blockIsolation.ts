@@ -98,7 +98,7 @@ export function validateBlockIsolation(params: {
   }
 
   // 6. Privacy Status must be 'private'
-  if (video.privacyStatus !== 'private') {
+  if ((video.privacyStatus || '').toLowerCase() !== 'private') {
     return {
       isValid: false,
       reason: `Status Privasi Tidak Valid: Video "${video.privacyStatus}" (hanya video private yang boleh dikelola AMG).`,
@@ -236,7 +236,7 @@ export function evaluateVideoEligibilityWithBlock(
   }
 
   // C. Privacy Status Ketat (Hanya PRIVATE)
-  if (video.privacyStatus !== 'private') {
+  if ((video.privacyStatus || '').toLowerCase() !== 'private') {
     return {
       category: 'EXCLUDED',
       isEligible: false,
@@ -357,7 +357,7 @@ export function calculateDetectedVideosCount(
   for (const v of videos) {
     // 1. Filter Status Privasi Ketat: Hanya video yang berstatus private (pribadi)
     // Video yang statusnya public atau unlisted otomatis dikecualikan/diabaikan
-    if (v.privacyStatus !== 'private') {
+    if ((v.privacyStatus || '').toLowerCase() !== 'private') {
       continue;
     }
 

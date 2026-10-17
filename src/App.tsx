@@ -280,7 +280,7 @@ export default function App() {
 
         // Auto-Fetch Real YouTube Data saat Channel Terkoneksi (Tanpa Klik Manual)
         if (hasActiveChannels && cleanVids.length === 0 && !isAutoFetchingRef.current) {
-          const storedToken = localStorage.getItem('amg_youtube_access_token');
+          const storedToken = getStoredGisToken() || localStorage.getItem('amg_youtube_access_token');
           if (storedToken && targetChan) {
             isAutoFetchingRef.current = true;
             fetchChannelVideosFromYouTube(storedToken, targetChan)
