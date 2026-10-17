@@ -2121,9 +2121,27 @@ app.delete('/api/master-thumbnails/:id', (req: Request, res: Response) => {
 app.get('/api/rotation/matrix', (req: Request, res: Response) => {
   const count = parseInt((req.query.count as string) || '12', 10);
   const profileId = (req.query.profileId as string) || 'profile-ayam-warna';
+  const rawTarget = String(profileId);
+  const cleanTarget = rawTarget.replace(/^chan-/, '');
 
-  const titles = Array.from(dbStore.masterTitles.values()).filter(t => t.profileId === profileId && t.isActive);
-  const thumbnails = Array.from(dbStore.masterThumbnails.values()).filter(t => t.profileId === profileId && t.isActive);
+  const titles = Array.from(dbStore.masterTitles.values()).filter(t =>
+    t.isActive && (
+      t.profileId === rawTarget ||
+      t.blockId === rawTarget ||
+      (t as any).channelId === rawTarget ||
+      (t as any).channelId === cleanTarget ||
+      (t as any).channelId === `chan-${cleanTarget}`
+    )
+  );
+  const thumbnails = Array.from(dbStore.masterThumbnails.values()).filter(t =>
+    t.isActive && (
+      t.profileId === rawTarget ||
+      t.blockId === rawTarget ||
+      (t as any).channelId === rawTarget ||
+      (t as any).channelId === cleanTarget ||
+      (t as any).channelId === `chan-${cleanTarget}`
+    )
+  );
 
   const matrix = generateRotationMatrix(titles, thumbnails, count, 0);
   res.json({

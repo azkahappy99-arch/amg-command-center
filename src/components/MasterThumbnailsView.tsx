@@ -12,6 +12,12 @@ import {
 } from 'lucide-react';
 import { MasterThumbnail, MasterTitle, ContentProfile, Channel } from '../types/index.ts';
 import { api, isRealThumbnail, isRealTitle } from '../services/api.ts';
+import {
+  compressThumbnailImage,
+  getChannelThumbnailsFromIdb,
+  appendThumbnailToIdb,
+  deleteThumbnailFromIdb,
+} from '../utils/thumbnailStorage.ts';
 
 interface MasterThumbnailsViewProps {
   thumbnails: MasterThumbnail[];
@@ -49,7 +55,9 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
   const [selectedImageBase64, setSelectedImageBase64] = useState<string>('');
   const [selectedFileName, setSelectedFileName] = useState<string>('');
   const [isAdding, setIsAdding] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const [matrixData, setMatrixData] = useState<any[]>([]);
+  const [idbThumbnails, setIdbThumbnails] = useState<MasterThumbnail[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Edit & Delete modal states
@@ -67,6 +75,25 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
       setSelectedProfileId(activeProfile.id);
     }
   }, [activeChannel?.id, activeProfile?.id]);
+
+  // Load channel thumbnails from IndexedDB (High-capacity, prevents QuotaExceededError)
+  useEffect(() => {
+    let isCancelled = false;
+    if (activeChannel?.id) {
+      getChannelThumbnailsFromIdb(activeChannel.id)
+        .then((stored) => {
+          if (!isCancelled && Array.isArray(stored)) {
+            setIdbThumbnails(stored);
+          }
+        })
+        .catch(() => {});
+    } else {
+      setIdbThumbnails([]);
+    }
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeChannel?.id, thumbnails]);
 
   // Filter thumbnails strictly for the active channel & block - 100% Isolated & Persistent
   const currentBlockId = selectedProfileId || activeProfile?.id || activeChannel?.blockId || activeChannel?.contentProfileId || '';
@@ -92,6 +119,15 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     const list: MasterThumbnail[] = [];
     const seen = new Set<string>();
 
+    // 1. IndexedDB thumbnails (First class, high capacity, no 5MB quota limit)
+    for (const th of idbThumbnails) {
+      if (th && th.id && !seen.has(th.id)) {
+        seen.add(th.id);
+        list.push(th);
+      }
+    }
+
+    // 2. Direct channel storage
     for (const th of channelThumbsFromStorage) {
       if (th && th.id && !seen.has(th.id)) {
         seen.add(th.id);
@@ -99,6 +135,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
       }
     }
 
+    // 3. Prop thumbnails
     for (const th of thumbnails || []) {
       if (!isRealThumbnail(th)) continue;
       if (activeChannel?.id) {
@@ -122,7 +159,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     }
 
     return list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
-  }, [thumbnails, channelThumbsFromStorage, activeChannel?.id, currentBlockId, activeProfile?.id]);
+  }, [thumbnails, channelThumbsFromStorage, idbThumbnails, activeChannel?.id, currentBlockId, activeProfile?.id]);
 
   // Merge titles from props with direct channel localStorage (amg_master_titles_{channelId})
   const channelTitlesFromStorage = React.useMemo(() => {
@@ -192,7 +229,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     }
   }, [activeChannel?.id, activeChannel?.contentProfileId, selectedProfileId, thumbnails, titles]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -210,17 +247,27 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
       setNewName(`Thumbnail ${baseTitle.slice(0, 40)}`);
     }
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      if (result) {
-        setSelectedImageBase64(result);
-      }
-    };
-    reader.onerror = () => {
-      alert('Gagal membaca file gambar dari perangkat Anda.');
-    };
-    reader.readAsDataURL(file);
+    setIsCompressing(true);
+    try {
+      // Auto compress using HTML5 Canvas to max 1280px width, quality 0.82 (reduces 5-15MB to ~150-300KB)
+      const compressed = await compressThumbnailImage(file, 1280, 0.82);
+      setSelectedImageBase64(compressed.dataUrl);
+    } catch (err) {
+      console.warn('Canvas compression fallback to standard reader:', err);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        if (result) {
+          setSelectedImageBase64(result);
+        }
+      };
+      reader.onerror = () => {
+        alert('Gagal membaca file gambar dari perangkat Anda.');
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setIsCompressing(false);
+    }
   };
 
   const handleClearImage = () => {
@@ -244,7 +291,7 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
 
     setIsAdding(true);
     try {
-      await api.createMasterThumbnail({
+      const created = await api.createMasterThumbnail({
         blockId: currentBlockId,
         profileId: currentBlockId,
         channelId: activeChannel?.id,
@@ -252,6 +299,13 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
         url: selectedImageBase64,
         orderIndex: profileThumbnails.length,
       });
+
+      // Also persist to IndexedDB for unlimited capacity
+      if (activeChannel?.id) {
+        const updatedList = await appendThumbnailToIdb(activeChannel.id, created);
+        setIdbThumbnails(updatedList);
+      }
+
       setNewName('');
       handleClearImage();
       onThumbnailsUpdated();
@@ -269,21 +323,26 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     setEditImageBase64(thumb.url || '');
   };
 
-  const handleEditFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleEditFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
       alert('Silakan pilih file gambar yang valid (JPG, PNG, WEBP).');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const result = event.target?.result as string;
-      if (result) {
-        setEditImageBase64(result);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressThumbnailImage(file, 1280, 0.82);
+      setEditImageBase64(compressed.dataUrl);
+    } catch (err) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        if (result) {
+          setEditImageBase64(result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSaveModalEdit = async () => {
@@ -294,11 +353,19 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     }
     setIsSavingEdit(true);
     try {
-      await api.updateMasterThumbnail(editingModalThumb.id, {
+      const updated = await api.updateMasterThumbnail(editingModalThumb.id, {
         name: editName.trim(),
         url: editImageBase64 || editingModalThumb.url,
       });
+
+      if (activeChannel?.id) {
+        const updatedList = await appendThumbnailToIdb(activeChannel.id, updated);
+        setIdbThumbnails(updatedList);
+      }
+
       setEditingModalThumb(null);
+      setEditName('');
+      setEditImageBase64('');
       onThumbnailsUpdated();
     } catch (err: any) {
       alert(err.message || 'Gagal memperbarui thumbnail');
@@ -312,6 +379,10 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
     setIsDeleting(true);
     try {
       await api.deleteMasterThumbnail(deletingThumb.id);
+      if (activeChannel?.id) {
+        const remaining = await deleteThumbnailFromIdb(activeChannel.id, deletingThumb.id);
+        setIdbThumbnails(remaining);
+      }
       setDeletingThumb(null);
       onThumbnailsUpdated();
     } catch (err: any) {
@@ -428,7 +499,12 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
             <label className="text-[11px] font-semibold text-neutral-300 uppercase tracking-wide block">
               File Gambar dari Galeri:
             </label>
-            {!selectedImageBase64 ? (
+            {isCompressing ? (
+              <div className="w-full min-h-[44px] sm:min-h-[40px] px-4 py-2.5 rounded-xl border border-dashed border-neutral-700 bg-neutral-900 text-neutral-300 text-xs font-semibold flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                <span>Mengompresi resolusi YouTube...</span>
+              </div>
+            ) : !selectedImageBase64 ? (
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}

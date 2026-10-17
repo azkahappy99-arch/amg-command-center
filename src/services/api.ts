@@ -62,6 +62,13 @@ import {
   isVideoUnmanagedPrivateRaw,
   getChannelScheduledAnchor,
 } from '../utils/scheduleAndUnmanagedUtils.ts';
+import {
+  safeLocalStorageSet,
+  getChannelThumbnailsFromIdb,
+  saveChannelThumbnailsToIdb,
+  appendThumbnailToIdb,
+  deleteThumbnailFromIdb,
+} from '../utils/thumbnailStorage.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -99,7 +106,10 @@ function getStorageItem<T>(key: string, defaultVal: T): T {
 
 function setStorageItem<T>(key: string, val: T): void {
   try {
-    localStorage.setItem(key, JSON.stringify(val));
+    const serialized = JSON.stringify(val);
+    if (!safeLocalStorageSet(key, serialized)) {
+      localStorage.setItem(key, serialized);
+    }
   } catch (err) {
     console.warn(`[LocalStorage] Error writing "${key}":`, err);
   }
@@ -1614,6 +1624,13 @@ export const api = {
         ...(raw2 ? JSON.parse(raw2) : []),
         ...(raw3 ? JSON.parse(raw3) : []),
       ];
+      try {
+        const fromIdb = await getChannelThumbnailsFromIdb(profileOrChannelId);
+        if (Array.isArray(fromIdb) && fromIdb.length > 0) {
+          combined.push(...fromIdb);
+        }
+      } catch {}
+
       const seen = new Set<string>();
       localChanThumbs = combined.filter((th) => {
         if (!th || !th.id || seen.has(th.id) || !isRealThumbnail(th)) return false;
@@ -1647,8 +1664,10 @@ export const api = {
               th.profileId === profileOrChannelId
             );
             if (forThisChan.length > 0) {
-              localStorage.setItem(`amg_master_thumbnails_${profileOrChannelId}`, JSON.stringify(forThisChan));
-              localStorage.setItem(`amg_master_thumbnails_${cleanId}`, JSON.stringify(forThisChan));
+              const str = JSON.stringify(forThisChan);
+              safeLocalStorageSet(`amg_master_thumbnails_${profileOrChannelId}`, str);
+              safeLocalStorageSet(`amg_master_thumbnails_${cleanId}`, str);
+              saveChannelThumbnailsToIdb(profileOrChannelId, forThisChan).catch(() => {});
             }
           }
           return clean;
@@ -1772,6 +1791,11 @@ export const api = {
         ...(raw2 ? JSON.parse(raw2) : []),
         ...(raw3 ? JSON.parse(raw3) : []),
       ];
+      try {
+        const fromIdb = await getChannelThumbnailsFromIdb(chanId);
+        if (Array.isArray(fromIdb)) combined.push(...fromIdb);
+      } catch {}
+
       const seen = new Set<string>();
       const existingChan: MasterThumbnail[] = [];
       for (const th of combined) {
@@ -1797,9 +1821,10 @@ export const api = {
 
       existingChan.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
       const serialized = JSON.stringify(existingChan);
-      localStorage.setItem(chanKey1, serialized);
-      localStorage.setItem(chanKey2, serialized);
-      localStorage.setItem(chanKey3, serialized);
+      safeLocalStorageSet(chanKey1, serialized);
+      safeLocalStorageSet(chanKey2, serialized);
+      safeLocalStorageSet(chanKey3, serialized);
+      saveChannelThumbnailsToIdb(chanId, existingChan).catch(() => {});
     }
 
     return created;
@@ -1882,7 +1907,7 @@ export const api = {
                 const itemIdx = arr.findIndex((th: any) => th && th.id === id);
                 if (itemIdx >= 0) {
                   arr[itemIdx] = mergedTarget;
-                  localStorage.setItem(k, JSON.stringify(arr));
+                  safeLocalStorageSet(k, JSON.stringify(arr));
                 }
               }
             } catch {}
@@ -1902,8 +1927,9 @@ export const api = {
           } else {
             chanList.push(mergedTarget);
           }
-          localStorage.setItem(k, JSON.stringify(chanList));
+          safeLocalStorageSet(k, JSON.stringify(chanList));
         }
+        appendThumbnailToIdb(targetChanId, mergedTarget).catch(() => {});
       }
     } catch {}
 
@@ -1922,7 +1948,7 @@ export const api = {
     list = list.filter((t) => t.id !== id);
     setStorageItem(KEYS.THUMBNAILS, list);
 
-    // 2. Remove from ALL channel-specific keys in localStorage
+    // 2. Remove from ALL channel-specific keys in localStorage & IndexedDB
     try {
       const keysToClean: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -1937,10 +1963,12 @@ export const api = {
           try {
             const arr = JSON.parse(raw);
             if (Array.isArray(arr)) {
-              localStorage.setItem(k, JSON.stringify(arr.filter((th: any) => th && th.id !== id)));
+              safeLocalStorageSet(k, JSON.stringify(arr.filter((th: any) => th && th.id !== id)));
             }
           } catch {}
         }
+        const chanPart = k.replace('amg_master_thumbnails_', '');
+        deleteThumbnailFromIdb(chanPart, id).catch(() => {});
       }
     } catch {}
 
@@ -1956,6 +1984,45 @@ export const api = {
     let thumbs: MasterThumbnail[] = [];
 
     if (profileOrChannelId && profileOrChannelId !== 'ALL') {
+      const cleanId = profileOrChannelId.replace(/^chan-/, '');
+
+      // Load channel specific titles
+      const rawChanTitles =
+        localStorage.getItem(`amg_master_titles_${profileOrChannelId}`) ||
+        localStorage.getItem(`amg_master_titles_${cleanId}`) ||
+        localStorage.getItem(`amg_master_titles_chan-${cleanId}`);
+      if (rawChanTitles) {
+        try {
+          const parsed = JSON.parse(rawChanTitles);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            titles = parsed.filter(isRealTitle);
+          }
+        } catch {}
+      }
+
+      // Load channel specific thumbnails from IndexedDB and localStorage
+      try {
+        const fromIdb = await getChannelThumbnailsFromIdb(profileOrChannelId);
+        if (Array.isArray(fromIdb) && fromIdb.length > 0) {
+          thumbs = fromIdb.filter(isRealThumbnail);
+        }
+      } catch {}
+
+      if (thumbs.length === 0) {
+        const rawChanThumbs =
+          localStorage.getItem(`amg_master_thumbnails_${profileOrChannelId}`) ||
+          localStorage.getItem(`amg_master_thumbnails_${cleanId}`) ||
+          localStorage.getItem(`amg_master_thumbnails_chan-${cleanId}`);
+        if (rawChanThumbs) {
+          try {
+            const parsed = JSON.parse(rawChanThumbs);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              thumbs = parsed.filter(isRealThumbnail);
+            }
+          } catch {}
+        }
+      }
+
       const channels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
       const matchingChan = channels.find(
         (c) =>
@@ -1964,25 +2031,29 @@ export const api = {
           c.contentProfileId === profileOrChannelId
       );
 
-      titles = rawTitles.filter((t) => {
-        if (!t.isActive) return false;
-        if (matchingChan) {
-          if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId)) return true;
-          if (matchingChan.contentProfileId && t.profileId === matchingChan.contentProfileId) return true;
-          if (t.profileId === `profile-${matchingChan.id}` || t.profileId === matchingChan.id) return true;
-        }
-        return t.profileId === profileOrChannelId || t.channelId === profileOrChannelId;
-      });
+      if (titles.length === 0) {
+        titles = rawTitles.filter((t) => {
+          if (!t.isActive) return false;
+          if (matchingChan) {
+            if (t.channelId && (t.channelId === matchingChan.id || t.channelId === matchingChan.youtubeChannelId)) return true;
+            if (matchingChan.contentProfileId && t.profileId === matchingChan.contentProfileId) return true;
+            if (t.profileId === `profile-${matchingChan.id}` || t.profileId === matchingChan.id) return true;
+          }
+          return t.profileId === profileOrChannelId || t.channelId === profileOrChannelId;
+        });
+      }
 
-      thumbs = rawThumbs.filter((th) => {
-        if (!th.isActive) return false;
-        if (matchingChan) {
-          if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId)) return true;
-          if (matchingChan.contentProfileId && th.profileId === matchingChan.contentProfileId) return true;
-          if (th.profileId === `profile-${matchingChan.id}` || th.profileId === matchingChan.id) return true;
-        }
-        return th.profileId === profileOrChannelId || th.channelId === profileOrChannelId;
-      });
+      if (thumbs.length === 0) {
+        thumbs = rawThumbs.filter((th) => {
+          if (!th.isActive) return false;
+          if (matchingChan) {
+            if (th.channelId && (th.channelId === matchingChan.id || th.channelId === matchingChan.youtubeChannelId)) return true;
+            if (matchingChan.contentProfileId && th.profileId === matchingChan.contentProfileId) return true;
+            if (th.profileId === `profile-${matchingChan.id}` || th.profileId === matchingChan.id) return true;
+          }
+          return th.profileId === profileOrChannelId || th.channelId === profileOrChannelId;
+        });
+      }
     } else {
       // If no specific channel/profile is selected, pick the first valid block (never mix across blocks)
       const profiles = getStorageItem<ContentProfile[]>(KEYS.PROFILES, initialProfiles);
@@ -2458,18 +2529,27 @@ export const api = {
       });
     }
 
-    // Load Master Thumbnails from channel storage
-    const rawChanThumbs = localStorage.getItem(`amg_master_thumbnails_${channel.id}`) ||
-      localStorage.getItem(`amg_master_thumbnails_${cleanChanId}`) ||
-      localStorage.getItem(`amg_master_thumbnails_chan-${cleanChanId}`);
+    // Load Master Thumbnails from IndexedDB and channel storage
     let channelThumbs: MasterThumbnail[] = [];
-    if (rawChanThumbs) {
-      try {
-        const parsed = JSON.parse(rawChanThumbs);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          channelThumbs = parsed.filter(isRealThumbnail);
-        }
-      } catch {}
+    try {
+      const fromIdb = await getChannelThumbnailsFromIdb(channel.id);
+      if (Array.isArray(fromIdb) && fromIdb.length > 0) {
+        channelThumbs = fromIdb.filter(isRealThumbnail);
+      }
+    } catch {}
+
+    if (channelThumbs.length === 0) {
+      const rawChanThumbs = localStorage.getItem(`amg_master_thumbnails_${channel.id}`) ||
+        localStorage.getItem(`amg_master_thumbnails_${cleanChanId}`) ||
+        localStorage.getItem(`amg_master_thumbnails_chan-${cleanChanId}`);
+      if (rawChanThumbs) {
+        try {
+          const parsed = JSON.parse(rawChanThumbs);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            channelThumbs = parsed.filter(isRealThumbnail);
+          }
+        } catch {}
+      }
     }
 
     let thumbnails: MasterThumbnail[] = channelThumbs;
