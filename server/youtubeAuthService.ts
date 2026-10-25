@@ -71,7 +71,7 @@ export class YoutubeAuthService {
   private redirectUri: string;
 
   constructor() {
-    this.clientId = process.env.GOOGLE_CLIENT_ID || '';
+    this.clientId = process.env.GOOGLE_CLIENT_ID || '140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com';
     this.clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
     this.redirectUri = process.env.GOOGLE_REDIRECT_URI || (process.env.APP_URL 
       ? `${process.env.APP_URL}/api/auth/youtube/callback`
@@ -82,6 +82,43 @@ export class YoutubeAuthService {
   public getRedirectUri(custom?: string): string {
     if (custom) return custom;
     return this.redirectUri;
+  }
+
+  /**
+   * Resolves credentials across all known aliases:
+   * raw channelId, clean ID, chan- prefixed, or dbStore channel lookup.
+   */
+  public resolveStoredCredentials(channelId: string): StoredCredentials | undefined {
+    if (!channelId) return undefined;
+    let creds = credentialsVault.get(channelId);
+    if (creds) return creds;
+
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace(/^chan-/, '') : channelId;
+    creds = credentialsVault.get(cleanId) || credentialsVault.get(`chan-${cleanId}`);
+    if (creds) return creds;
+
+    // Check dbStore.channels
+    try {
+      const ch = dbStore.channels.get(channelId) || 
+                 dbStore.getChannelByYoutubeId(channelId) || 
+                 dbStore.getChannelByIdOrTitle(channelId);
+      if (ch) {
+        creds = credentialsVault.get(ch.id) ||
+                (ch.youtubeChannelId ? credentialsVault.get(ch.youtubeChannelId) : undefined) ||
+                (ch.youtubeChannelId ? credentialsVault.get(`chan-${ch.youtubeChannelId}`) : undefined);
+        if (creds) return creds;
+      }
+    } catch {}
+
+    // Check fuzzy match across vault
+    const lower = channelId.toLowerCase();
+    for (const [key, val] of credentialsVault.entries()) {
+      if (key.toLowerCase() === lower || key.includes(cleanId) || cleanId.includes(key.replace(/^chan-/, ''))) {
+        return val;
+      }
+    }
+
+    return undefined;
   }
 
   /**
@@ -123,30 +160,34 @@ export class YoutubeAuthService {
    * Exchanges authorization code for Access & Refresh tokens.
    */
   public async exchangeCode(code: string, customRedirectUri?: string): Promise<{ success: boolean; data?: any; error?: string }> {
-    if (!this.clientId || !this.clientSecret) {
+    if (!this.clientId) {
       return {
         success: false,
-        error: 'OAuth client credentials missing (GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET).',
+        error: 'OAuth client credentials missing (GOOGLE_CLIENT_ID).',
       };
     }
 
     const targetRedirect = this.getRedirectUri(customRedirectUri);
 
     try {
+      const bodyParams: Record<string, string> = {
+        code,
+        client_id: this.clientId,
+        redirect_uri: targetRedirect,
+        grant_type: 'authorization_code',
+      };
+      if (this.clientSecret) {
+        bodyParams.client_secret = this.clientSecret;
+      }
+
       const response = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          code,
-          client_id: this.clientId,
-          client_secret: this.clientSecret,
-          redirect_uri: targetRedirect,
-          grant_type: 'authorization_code',
-        }),
+        body: new URLSearchParams(bodyParams),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         return {
           success: false,
           error: errorData.error_description || errorData.error || 'Failed to exchange authorization code.',
@@ -168,82 +209,122 @@ export class YoutubeAuthService {
 
   /**
    * Refreshes access token using stored refresh token.
+   * Can accept channelId or direct refreshToken string.
    */
-  public async refreshAccessToken(channelId: string): Promise<string | null> {
-    const creds = credentialsVault.get(channelId);
-    if (!creds || !creds.refreshToken) {
+  public async refreshAccessToken(channelId?: string, directRefreshToken?: string): Promise<string | null> {
+    const creds = channelId ? this.resolveStoredCredentials(channelId) : undefined;
+    const rToken = directRefreshToken || creds?.refreshToken;
+
+    if (!rToken) {
+      console.warn(`[YoutubeAuthService] No refresh token available to refresh access token for channel: ${channelId}`);
       return null;
     }
 
     try {
+      const bodyParams: Record<string, string> = {
+        client_id: this.clientId,
+        refresh_token: rToken,
+        grant_type: 'refresh_token',
+      };
+      if (this.clientSecret) {
+        bodyParams.client_secret = this.clientSecret;
+      }
+
       const response = await fetch('https://oauth2.googleapis.com/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          client_id: this.clientId,
-          client_secret: this.clientSecret,
-          refresh_token: creds.refreshToken,
-          grant_type: 'refresh_token',
-        }),
+        body: new URLSearchParams(bodyParams),
       });
 
       if (!response.ok) {
-        console.error('Failed to refresh token for channel', channelId);
+        const errorData = await response.json().catch(() => ({}));
+        console.error(`[YoutubeAuthService] Failed to refresh token for channel ${channelId}:`, errorData);
         return null;
       }
 
       const tokenData = await response.json();
-      creds.accessToken = tokenData.access_token;
-      creds.tokenExpiresAt = Date.now() + (tokenData.expires_in || 3600) * 1000;
-      credentialsVault.set(channelId, creds);
-      saveCredentialsToDisk();
+      const newAccessToken = tokenData.access_token;
+      const expiresInSec = tokenData.expires_in || 3600;
+      const newExpiresAt = Date.now() + expiresInSec * 1000;
 
-      return creds.accessToken;
+      const targetId = channelId || creds?.channelId || 'global-youtube';
+      const consolidated: StoredCredentials = {
+        channelId: targetId,
+        accessToken: newAccessToken,
+        refreshToken: tokenData.refresh_token || rToken, // Always preserve refresh_token
+        tokenExpiresAt: newExpiresAt,
+        scope: tokenData.scope || creds?.scope || 'https://www.googleapis.com/auth/youtube.force-ssl',
+        accountEmail: creds?.accountEmail,
+      };
+
+      this.storeCredentials(targetId, consolidated);
+
+      console.log(`[YoutubeAuthService] Successfully refreshed access token for channel "${channelId}" (expires in ${expiresInSec}s)`);
+      return newAccessToken;
     } catch (err) {
-      console.error('Error refreshing access token:', err);
+      console.error('[YoutubeAuthService] Error refreshing access token:', err);
       return null;
     }
   }
 
   /**
    * Stores credentials securely on server.
+   * CRITICAL: Never overwrites an existing valid refreshToken with undefined.
    */
   public storeCredentials(channelId: string, creds: StoredCredentials): void {
-    credentialsVault.set(channelId, creds);
-    const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
-    if (cleanId !== channelId) {
-      credentialsVault.set(cleanId, creds);
-    } else {
-      credentialsVault.set(`chan-${channelId}`, creds);
-    }
+    if (!channelId || !creds) return;
+    const existing = this.resolveStoredCredentials(channelId);
+
+    // CRITICAL: Preserve existing refreshToken if incoming does not supply one!
+    const effectiveRefreshToken = (creds.refreshToken && creds.refreshToken.trim() !== '')
+      ? creds.refreshToken
+      : existing?.refreshToken;
+
+    const consolidated: StoredCredentials = {
+      channelId: creds.channelId || channelId,
+      accessToken: creds.accessToken,
+      refreshToken: effectiveRefreshToken,
+      tokenExpiresAt: creds.tokenExpiresAt || (Date.now() + 3600 * 1000),
+      scope: creds.scope || existing?.scope || 'https://www.googleapis.com/auth/youtube.force-ssl',
+      accountEmail: creds.accountEmail || existing?.accountEmail,
+    };
+
+    credentialsVault.set(channelId, consolidated);
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace(/^chan-/, '') : channelId;
+    credentialsVault.set(cleanId, consolidated);
+    credentialsVault.set(`chan-${cleanId}`, consolidated);
+
+    // Map to dbStore channel record if exists
+    try {
+      const ch = dbStore.channels.get(channelId) || dbStore.getChannelByYoutubeId(channelId);
+      if (ch) {
+        credentialsVault.set(ch.id, consolidated);
+        if (ch.youtubeChannelId) {
+          credentialsVault.set(ch.youtubeChannelId, consolidated);
+          credentialsVault.set(`chan-${ch.youtubeChannelId}`, consolidated);
+        }
+      }
+    } catch {}
+
     saveCredentialsToDisk();
   }
 
   /**
-   * Retrieves active access token for a channel, refreshing if expired.
-   * Resolves channel ID across aliases (e.g. chan-UC..., UC...) and dbStore channels.
+   * Retrieves active access token for a channel, auto-refreshing proactively if expired or expiring soon (< 5m).
    */
   public async getValidAccessToken(channelId: string): Promise<string | null> {
     if (!channelId) return null;
-    let creds = credentialsVault.get(channelId);
-    if (!creds) {
-      const cleanId = channelId.startsWith('chan-') ? channelId.replace('chan-', '') : channelId;
-      creds = credentialsVault.get(cleanId) || credentialsVault.get(`chan-${cleanId}`);
-    }
-    if (!creds) {
-      const channel = dbStore.channels.get(channelId) || dbStore.getChannelByYoutubeId(channelId);
-      if (channel) {
-        creds = credentialsVault.get(channel.id) ||
-                (channel.youtubeChannelId ? credentialsVault.get(channel.youtubeChannelId) : undefined) ||
-                (channel.youtubeChannelId ? credentialsVault.get(`chan-${channel.youtubeChannelId}`) : undefined);
-      }
-    }
+    const creds = this.resolveStoredCredentials(channelId);
     if (!creds) return null;
 
-    // Refresh if expiring in less than 5 minutes
+    // Proactive refresh: if token expires in less than 5 minutes (300,000 ms) or is already expired
     if (Date.now() > creds.tokenExpiresAt - 300000) {
       if (creds.refreshToken) {
-        return await this.refreshAccessToken(channelId);
+        console.log(`[YoutubeAuthService] Access token for channel "${channelId}" is expiring soon or expired. Auto-refreshing proactively...`);
+        const refreshed = await this.refreshAccessToken(channelId);
+        if (refreshed) {
+          return refreshed;
+        }
       }
     }
 
@@ -260,7 +341,7 @@ export class YoutubeAuthService {
     accountEmail?: string;
     expiresAt?: string;
   } {
-    const creds = credentialsVault.get(channelId);
+    const creds = this.resolveStoredCredentials(channelId);
     if (!creds || (!creds.accessToken && !creds.refreshToken)) {
       return { status: 'AUTHORIZATION REQUIRED', isConnected: false, hasRefreshToken: false };
     }
@@ -285,6 +366,9 @@ export class YoutubeAuthService {
 
   public revokeCredentials(channelId: string): void {
     credentialsVault.delete(channelId);
+    const cleanId = channelId.startsWith('chan-') ? channelId.replace(/^chan-/, '') : channelId;
+    credentialsVault.delete(cleanId);
+    credentialsVault.delete(`chan-${cleanId}`);
     saveCredentialsToDisk();
   }
 }

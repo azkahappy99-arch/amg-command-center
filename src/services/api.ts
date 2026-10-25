@@ -384,14 +384,78 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
   return channels;
 }
 
-// Authenticated fetch helper for multi-device cross-synchronization
+// Authenticated fetch helper with automatic 401 token refresh & seamless request retry
+let isRefreshingAuth = false;
+let refreshQueue: Array<(token: string | null) => void> = [];
+
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('amg_auth_token') : null;
+  let token = typeof window !== 'undefined' ? localStorage.getItem('amg_auth_token') : null;
   const headers = new Headers(options.headers || {});
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  return fetch(url, { ...options, headers });
+
+  let res = await fetch(url, { ...options, headers });
+
+  // If 401 Unauthorized occurs on an operational endpoint, attempt automatic session refresh once
+  if (
+    res.status === 401 &&
+    token &&
+    !url.includes('/api/auth/refresh') &&
+    !url.includes('/api/auth/user/login') &&
+    !url.includes('/api/auth/owner/login')
+  ) {
+    if (!isRefreshingAuth) {
+      isRefreshingAuth = true;
+      try {
+        const refreshRes = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ token }),
+        });
+
+        if (refreshRes.ok) {
+          const refreshData = await refreshRes.json();
+          if (refreshData.success && refreshData.token) {
+            token = refreshData.token;
+            localStorage.setItem('amg_auth_token', refreshData.token);
+            if (refreshData.user) {
+              localStorage.setItem('amg_auth_user', JSON.stringify(refreshData.user));
+            }
+            // Notify waiting requests
+            const waiting = [...refreshQueue];
+            refreshQueue = [];
+            waiting.forEach((cb) => cb(token));
+
+            // Retry original request with renewed token
+            headers.set('Authorization', `Bearer ${token}`);
+            res = await fetch(url, { ...options, headers });
+            return res;
+          }
+        }
+      } catch (refreshErr) {
+        console.warn('[authFetch] Auto-refresh session error:', refreshErr);
+      } finally {
+        isRefreshingAuth = false;
+      }
+    } else {
+      // If refresh is already in-flight, wait for it and retry
+      return new Promise<Response>((resolve) => {
+        refreshQueue.push(async (newToken) => {
+          if (newToken) {
+            headers.set('Authorization', `Bearer ${newToken}`);
+          }
+          const retriedRes = await fetch(url, { ...options, headers });
+          resolve(retriedRes);
+        });
+      });
+    }
+  }
+
+  return res;
 }
 
 export const api = {
@@ -959,10 +1023,35 @@ export const api = {
     return { success: true, message: 'Kredensial disimpan di localStorage.' };
   },
 
-  gisSyncChannel: async (data: { channelId?: string; accessToken: string; channelData: any }) => {
+  refreshYouTubeToken: async (channelId?: string) => {
+    try {
+      const storedRefreshToken = localStorage.getItem('amg_youtube_refresh_token') || undefined;
+      const res = await authFetch('/api/auth/youtube/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, refreshToken: storedRefreshToken }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.accessToken) {
+          localStorage.setItem(KEYS.ACCESS_TOKEN, json.accessToken);
+          localStorage.setItem(KEYS.TOKEN_EXPIRES, (Date.now() + 3600 * 1000).toString());
+          return { success: true, accessToken: json.accessToken };
+        }
+      }
+    } catch (err) {
+      console.warn('[api.refreshYouTubeToken] Error refreshing YouTube token:', err);
+    }
+    return { success: false };
+  },
+
+  gisSyncChannel: async (data: { channelId?: string; accessToken: string; channelData: any; refreshToken?: string }) => {
     localStorage.setItem(KEYS.ACCESS_TOKEN, data.accessToken);
     localStorage.setItem(KEYS.TOKEN_EXPIRES, (Date.now() + 3600 * 1000).toString());
     localStorage.setItem(KEYS.CONNECTED_CHANNEL, JSON.stringify(data.channelData));
+    if (data.refreshToken) {
+      localStorage.setItem('amg_youtube_refresh_token', data.refreshToken);
+    }
 
     // Remove from unlinked blacklist because user is explicitly connecting it
     if (data.channelData && data.channelData.id) {
@@ -975,10 +1064,14 @@ export const api = {
 
     // Attempt backend sync in background if server is online with authentication
     try {
+      const effectiveRefreshToken = data.refreshToken || localStorage.getItem('amg_youtube_refresh_token') || undefined;
       await authFetch('/api/auth/youtube/gis-sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          refreshToken: effectiveRefreshToken,
+        }),
       }).catch(() => {});
     } catch {}
 

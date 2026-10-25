@@ -323,6 +323,31 @@ app.post('/api/auth/logout', (req: Request, res: Response) => {
   res.json({ success: true, message: 'Logged out successfully.' });
 });
 
+app.post('/api/auth/refresh', (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  const token = (authHeader && authHeader.startsWith('Bearer '))
+    ? authHeader.substring(7).trim()
+    : req.body?.token;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Token sesi diperlukan untuk memperbarui sesi.' });
+  }
+
+  const result = authService.refreshSession(token);
+  if (!result.success || !result.session || !result.user) {
+    return res.status(401).json({ error: result.error || 'Sesi tidak valid atau telah kedaluwarsa. Silakan login terlebih dahulu.' });
+  }
+
+  res.json({
+    success: true,
+    token: result.session.id,
+    user: authService.sanitizeUser(result.user),
+    workspaceId: result.user.workspaceId,
+    expiresAt: result.session.expiresAt,
+    message: 'Sesi berhasil diperbarui otomatis.',
+  });
+});
+
 app.post('/api/auth/owner/verify-master-key', (req: Request, res: Response) => {
   const sessionData = extractAuthSession(req);
   if (!sessionData || sessionData.user.role !== 'PRIMARY_OWNER') {
@@ -1672,7 +1697,7 @@ app.post('/api/auth/youtube/connect-credentials', async (req: Request, res: Resp
 });
 
 app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
-  const { channelId, accessToken, channelData } = req.body;
+  const { channelId, accessToken, channelData, refreshToken } = req.body;
   if (!accessToken || !channelData || !channelData.id) {
     return res.status(400).json({ error: 'accessToken and channelData with valid channel id are required.' });
   }
@@ -1694,12 +1719,13 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
 
   const targetId = channel ? channel.id : `chan-${channelData.id}`;
 
-  // Securely store credentials in persistent vault
+  // Securely store credentials in persistent vault, preserving any refreshToken
   youtubeAuthService.storeCredentials(targetId, {
     channelId: targetId,
     accessToken,
+    refreshToken: (refreshToken && typeof refreshToken === 'string' && refreshToken.trim() !== '') ? refreshToken : undefined,
     tokenExpiresAt: Date.now() + 3600 * 1000,
-    scope: 'https://www.googleapis.com/auth/youtube.readonly',
+    scope: 'https://www.googleapis.com/auth/youtube.force-ssl',
     accountEmail: channelData.title ? `${channelData.title} (Live GIS)` : 'gis-client@azkamedia.com',
   });
 
@@ -1798,6 +1824,30 @@ app.post('/api/auth/youtube/gis-sync', async (req: Request, res: Response) => {
     success: true,
     channel,
     message: `Channel "${channel.title}" berhasil ditautkan dan tersimpan secara permanen!`,
+  });
+});
+
+app.post('/api/auth/youtube/refresh', async (req: Request, res: Response) => {
+  const { channelId, refreshToken } = req.body || {};
+  if (!channelId && !refreshToken) {
+    return res.status(400).json({ error: 'channelId atau refreshToken diperlukan.' });
+  }
+
+  const refreshedToken = await youtubeAuthService.refreshAccessToken(channelId, refreshToken);
+  if (!refreshedToken) {
+    return res.status(401).json({
+      success: false,
+      error: 'Gagal memperbarui Google OAuth access_token. Refresh token tidak valid atau tidak ditemukan.',
+    });
+  }
+
+  const status = channelId ? youtubeAuthService.getConnectionStatus(channelId) : undefined;
+
+  res.json({
+    success: true,
+    accessToken: refreshedToken,
+    expiresAt: status?.expiresAt || new Date(Date.now() + 3600 * 1000).toISOString(),
+    message: 'Google OAuth token berhasil diperbarui otomatis.',
   });
 });
 
@@ -3138,6 +3188,21 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
+    }
+
+    // Proactive Google OAuth Token Check & Auto-Refresh before batch automation dispatch
+    if (channel) {
+      try {
+        const validToken = await youtubeAuthService.getValidAccessToken(channel.id);
+        if (!validToken) {
+          const refreshed = await youtubeAuthService.refreshAccessToken(channel.id);
+          if (refreshed) {
+            console.log(`[handleStartBatchAutomation] Proactively refreshed Google OAuth token for channel "${channel.title}".`);
+          }
+        }
+      } catch (tokenCheckErr) {
+        console.warn(`[handleStartBatchAutomation] Token pre-check warning for channel "${channel.title}":`, tokenCheckErr);
+      }
     }
 
     // FIX #2: ENFORCE DAILY CAPACITY TARGET (DEFAULT 70, MAX 90) ROLLING 24 HOURS

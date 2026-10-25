@@ -980,7 +980,7 @@ export class AuthService {
   }
 
   /**
-   * Validates a session token. Extends sliding expiration if active.
+   * Validates a session token. Extends sliding expiration on active usage.
    */
   public validateSession(token: string): { user: UserRecord; session: SessionRecord } | null {
     if (!token) return null;
@@ -992,21 +992,42 @@ export class AuthService {
     if (!session || session.isRevoked) return null;
 
     const now = Date.now();
-    if (new Date(session.expiresAt).getTime() < now) {
-      session.isRevoked = true;
-      dbStore.sessions.set(token, session);
-      dbStore.saveToDisk();
-      return null;
+    const sessionExpiresAtMs = new Date(session.expiresAt).getTime();
+
+    // 2-hour grace window for expired sessions to allow seamless auto-renewal if actively accessed
+    const GRACE_PERIOD_MS = 2 * 60 * 60 * 1000;
+    if (sessionExpiresAtMs < now) {
+      if (now - sessionExpiresAtMs > GRACE_PERIOD_MS) {
+        session.isRevoked = true;
+        dbStore.sessions.set(token, session);
+        dbStore.saveToDisk();
+        return null;
+      }
+      // Within grace window: reactivate and slide expiration
+      session.isRevoked = false;
     }
 
     const user = dbStore.users.get(session.userId);
     if (!user || user.status !== 'ACTIVE') return null;
 
-    // Update lastActiveAt
+    // Extend sliding session expiration by 7 days on active usage
     session.lastActiveAt = new Date(now).toISOString();
+    session.expiresAt = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
     dbStore.sessions.set(token, session);
 
     return { user, session };
+  }
+
+  /**
+   * Explicitly refreshes an active session token, sliding expiration by 7 days.
+   */
+  public refreshSession(token: string): { success: boolean; user?: UserRecord; session?: SessionRecord; error?: string } {
+    const validated = this.validateSession(token);
+    if (!validated) {
+      return { success: false, error: 'Sesi tidak valid atau telah kedaluwarsa. Silakan login kembali.' };
+    }
+    dbStore.saveToDisk();
+    return { success: true, user: validated.user, session: validated.session };
   }
 
   /**

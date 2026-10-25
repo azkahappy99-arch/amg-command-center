@@ -446,7 +446,56 @@ export class YouTubeDataService {
   }
 
   /**
-   * Updates video title via YouTube Data API v3.
+   * Executes a YouTube Data API request with automatic 401 token refresh & retry.
+   */
+  public async executeWithAuthRetry<T>(
+    channelId: string,
+    operationName: string,
+    operation: (token: string) => Promise<{ res: Response; data?: any; error?: string }>
+  ): Promise<{ success: boolean; data?: T; error?: string; status?: number }> {
+    let token = await youtubeAuthService.getValidAccessToken(channelId);
+    if (!token) {
+      token = await youtubeAuthService.refreshAccessToken(channelId);
+    }
+    if (!token) {
+      return {
+        success: false,
+        status: 401,
+        error: `Authorization required to perform "${operationName}". Silakan hubungkan kembali channel melalui Google OAuth.`,
+      };
+    }
+
+    let result = await operation(token);
+    if (result.res && result.res.status === 401) {
+      console.warn(`[youtubeDataService] YouTube Data API returned 401 for "${operationName}" (channel: ${channelId}). Refreshing token and retrying...`);
+      const newToken = await youtubeAuthService.refreshAccessToken(channelId);
+      if (newToken) {
+        console.log(`[youtubeDataService] Google OAuth token refreshed. Retrying "${operationName}" now...`);
+        result = await operation(newToken);
+      } else {
+        console.error(`[youtubeDataService] Failed to refresh token for channel ${channelId}.`);
+      }
+    }
+
+    if (!result.res.ok) {
+      const errJson = result.data || await result.res.json().catch(() => ({}));
+      const errMsg = errJson?.error?.message || errJson?.error || result.error || `YouTube API error (${result.res.status})`;
+      return {
+        success: false,
+        status: result.res.status,
+        error: errMsg,
+      };
+    }
+
+    const data = result.data !== undefined ? result.data : await result.res.json().catch(() => ({}));
+    return {
+      success: true,
+      data,
+    };
+  }
+
+  /**
+   * Updates video title via YouTube Data API v3 with automatic 401 auto-refresh & retry.
    */
   public async updateVideoTitle(
     channelId: string,
@@ -460,43 +509,43 @@ export class YouTubeDataService {
       };
     }
 
-    const accessToken = await youtubeAuthService.getValidAccessToken(channelId);
-    if (!accessToken) {
-      return { success: false, error: 'Authorization required to update video title.' };
-    }
-
     try {
-      // First get current snippet to preserve categoryId and description
-      const getRes = await fetch(
-        `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      if (!getRes.ok) {
-        return { success: false, error: 'Failed to retrieve current video snippet before update.' };
-      }
-      const getJson = await getRes.json();
-      if (!getJson.items || getJson.items.length === 0) {
-        return { success: false, error: 'Video not found on YouTube.' };
-      }
+      const retryResult = await this.executeWithAuthRetry(channelId, `updateVideoTitle(${videoId})`, async (token) => {
+        // First get current snippet to preserve categoryId and description
+        const getRes = await fetch(
+          `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!getRes.ok) {
+          const errJson = await getRes.json().catch(() => ({}));
+          return { res: getRes, data: errJson, error: 'Failed to retrieve current video snippet before update.' };
+        }
+        const getJson = await getRes.json();
+        if (!getJson.items || getJson.items.length === 0) {
+          return { res: getRes, error: 'Video not found on YouTube.' };
+        }
 
-      const snippet = getJson.items[0].snippet;
-      snippet.title = newTitle;
+        const snippet = getJson.items[0].snippet;
+        snippet.title = newTitle;
 
-      const updateRes = await fetch('https://www.googleapis.com/youtube/v3/videos?part=snippet', {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          id: videoId,
-          snippet,
-        }),
+        const updateRes = await fetch('https://www.googleapis.com/youtube/v3/videos?part=snippet', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: videoId,
+            snippet,
+          }),
+        });
+
+        const updateJson = await updateRes.json().catch(() => ({}));
+        return { res: updateRes, data: updateJson };
       });
 
-      if (!updateRes.ok) {
-        const errJson = await updateRes.json();
-        return { success: false, error: errJson.error?.message || 'Failed to update video title' };
+      if (!retryResult.success) {
+        return { success: false, error: retryResult.error || 'Failed to update video title' };
       }
 
       return { success: true };
@@ -506,7 +555,7 @@ export class YouTubeDataService {
   }
 
   /**
-   * Sets video thumbnail via YouTube Data API v3.
+   * Sets video thumbnail via YouTube Data API v3 with automatic 401 auto-refresh & retry.
    */
   public async updateVideoThumbnail(
     channelId: string,
@@ -520,35 +569,44 @@ export class YouTubeDataService {
       };
     }
 
-    const accessToken = await youtubeAuthService.getValidAccessToken(channelId);
-    if (!accessToken) {
-      return { success: false, error: 'Authorization required to set video thumbnail.' };
+    // Extract image buffer (supports both data URLs and remote URLs)
+    let buffer: Buffer;
+    try {
+      if (thumbnailUrl.startsWith('data:image/')) {
+        const base64Data = thumbnailUrl.split(',')[1];
+        buffer = Buffer.from(base64Data, 'base64');
+      } else {
+        const imgRes = await fetch(thumbnailUrl);
+        if (!imgRes.ok) {
+          return { success: false, error: `Failed to download master thumbnail from ${thumbnailUrl}` };
+        }
+        const arrayBuffer = await imgRes.arrayBuffer();
+        buffer = Buffer.from(arrayBuffer);
+      }
+    } catch (readErr: any) {
+      return { success: false, error: `Failed to read thumbnail data: ${readErr.message}` };
     }
 
     try {
-      // Fetch thumbnail image buffer
-      const imgRes = await fetch(thumbnailUrl);
-      if (!imgRes.ok) {
-        return { success: false, error: `Failed to download master thumbnail from ${thumbnailUrl}` };
-      }
-      const arrayBuffer = await imgRes.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+      const retryResult = await this.executeWithAuthRetry(channelId, `updateVideoThumbnail(${videoId})`, async (token) => {
+        const uploadRes = await fetch(
+          `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(videoId)}`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'image/jpeg',
+            },
+            body: new Uint8Array(buffer) as any,
+          }
+        );
 
-      const uploadRes = await fetch(
-        `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(videoId)}`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'image/jpeg',
-          },
-          body: buffer,
-        }
-      );
+        const uploadJson = await uploadRes.json().catch(() => ({}));
+        return { res: uploadRes, data: uploadJson };
+      });
 
-      if (!uploadRes.ok) {
-        const errJson = await uploadRes.json();
-        return { success: false, error: errJson.error?.message || 'Failed to upload thumbnail' };
+      if (!retryResult.success) {
+        return { success: false, error: retryResult.error || 'Failed to upload thumbnail' };
       }
 
       return { success: true };
@@ -558,7 +616,7 @@ export class YouTubeDataService {
   }
 
   /**
-   * Sets scheduled publishing time (publishAt) on YouTube.
+   * Sets scheduled publishing time (publishAt) on YouTube with automatic 401 auto-refresh & retry.
    */
   public async scheduleVideo(
     channelId: string,
@@ -572,30 +630,29 @@ export class YouTubeDataService {
       };
     }
 
-    const accessToken = await youtubeAuthService.getValidAccessToken(channelId);
-    if (!accessToken) {
-      return { success: false, error: 'Authorization required to schedule video.' };
-    }
-
     try {
-      const updateRes = await fetch('https://www.googleapis.com/youtube/v3/videos?part=status', {
-        method: 'PUT',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          id: videoId,
-          status: {
-            privacyStatus: 'private',
-            publishAt: publishAtIso,
+      const retryResult = await this.executeWithAuthRetry(channelId, `scheduleVideo(${videoId})`, async (token) => {
+        const updateRes = await fetch('https://www.googleapis.com/youtube/v3/videos?part=status', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
-        }),
+          body: JSON.stringify({
+            id: videoId,
+            status: {
+              privacyStatus: 'private',
+              publishAt: publishAtIso,
+            },
+          }),
+        });
+
+        const updateJson = await updateRes.json().catch(() => ({}));
+        return { res: updateRes, data: updateJson };
       });
 
-      if (!updateRes.ok) {
-        const errJson = await updateRes.json();
-        return { success: false, error: errJson.error?.message || 'Failed to schedule video' };
+      if (!retryResult.success) {
+        return { success: false, error: retryResult.error || 'Failed to schedule video' };
       }
 
       return { success: true };
