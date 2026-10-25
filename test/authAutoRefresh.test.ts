@@ -64,6 +64,9 @@ async function runTests() {
   dbStore.sessions.set(testSessionId, {
     id: testSessionId,
     userId: 'usr-owner-primary',
+    email: 'owner@test.com',
+    role: 'PRIMARY_OWNER',
+    workspaceId: 'ws-owner-primary',
     deviceInfo: 'Test Device',
     ipAddress: '127.0.0.1',
     createdAt: new Date(now - 100000).toISOString(),
@@ -84,6 +87,9 @@ async function runTests() {
   dbStore.sessions.set(expiredSessionId, {
     id: expiredSessionId,
     userId: 'usr-owner-primary',
+    email: 'owner@test.com',
+    role: 'PRIMARY_OWNER',
+    workspaceId: 'ws-owner-primary',
     deviceInfo: 'Test Device',
     ipAddress: '127.0.0.1',
     createdAt: new Date(now - 3600000).toISOString(),

@@ -389,7 +389,11 @@ let isRefreshingAuth = false;
 let refreshQueue: Array<(token: string | null) => void> = [];
 
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  let token = typeof window !== 'undefined' ? localStorage.getItem('amg_auth_token') : null;
+  let token = typeof window !== 'undefined'
+    ? (localStorage.getItem('amg_auth_token') ||
+       localStorage.getItem('amg_youtube_access_token') ||
+       localStorage.getItem('amg_oauth_token'))
+    : null;
   const headers = new Headers(options.headers || {});
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -2805,14 +2809,33 @@ export const api = {
         publishTime?: string;
         scheduledPublishAt?: string;
       }>;
+      authToken?: string;
+      accessToken?: string;
+      refreshToken?: string;
     }
   ) => {
+    // Resolve tokens from payloadOptions or localStorage
+    const effectiveToken =
+      payloadOptions?.authToken ||
+      payloadOptions?.accessToken ||
+      localStorage.getItem('amg_youtube_access_token') ||
+      localStorage.getItem('amg_oauth_token') ||
+      localStorage.getItem('amg_auth_token') ||
+      '';
+
+    const effectiveRefreshToken =
+      payloadOptions?.refreshToken ||
+      localStorage.getItem('amg_youtube_refresh_token') ||
+      '';
+
     // Lightweight payload (< 1 KB) - send channel, profile, batchSize, and candidate videoIds / lightweight execution plan
     const payload: Record<string, any> = {
       channelId,
       profileId,
       batchSize: payloadOptions?.batchSize || 50,
       channelTitle: payloadOptions?.channelTitle,
+      accessToken: effectiveToken || undefined,
+      refreshToken: effectiveRefreshToken || undefined,
     };
     if (Array.isArray(payloadOptions?.videoIds) && payloadOptions.videoIds.length > 0) {
       payload.videoIds = payloadOptions.videoIds;
@@ -2830,12 +2853,19 @@ export const api = {
       '/api/automation/execute',
     ];
 
+    const reqHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (effectiveToken) {
+      reqHeaders['Authorization'] = `Bearer ${effectiveToken}`;
+    }
+
     let lastError: any = null;
     for (const url of endpoints) {
       try {
         const res = await authFetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: reqHeaders,
           body: JSON.stringify(payload),
         });
 
@@ -2876,6 +2906,36 @@ export const api = {
         } else if (res.status === 404 && !isJson) {
           // If the server/proxy returned an HTML 404, try next alternative alias
           continue;
+        } else if (res.status === 401 && effectiveRefreshToken) {
+          // Vercel Serverless auto-refresh fallback
+          try {
+            const rfRes = await fetch('/api/auth/youtube/refresh', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ channelId, refreshToken: effectiveRefreshToken }),
+            });
+            if (rfRes.ok) {
+              const rfData = await rfRes.json();
+              if (rfData.accessToken) {
+                localStorage.setItem(KEYS.ACCESS_TOKEN, rfData.accessToken);
+                reqHeaders['Authorization'] = `Bearer ${rfData.accessToken}`;
+                payload.accessToken = rfData.accessToken;
+                const retryRes = await fetch(url, {
+                  method: 'POST',
+                  headers: reqHeaders,
+                  body: JSON.stringify(payload),
+                });
+                if (retryRes.ok) {
+                  const retryJson = await retryRes.json();
+                  if (retryJson.success) {
+                    return retryJson;
+                  }
+                }
+              }
+            }
+          } catch {}
+          const errJson = isJson ? await res.json().catch(() => ({})) : {};
+          throw new Error(errJson.error || errJson.message || 'Sesi tidak valid');
         } else {
           const errJson = isJson ? await res.json().catch(() => ({})) : {};
           const msg = errJson.error || errJson.message || `Server error (${res.status}): Gagal memulai otomasi batch`;
