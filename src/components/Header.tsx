@@ -1,3 +1,4 @@
+import React, { useMemo } from 'react';
 import { Menu, RefreshCw, Bell, Shield, Radio, CheckCircle, AlertCircle, Crown, User, LogIn } from 'lucide-react';
 import { Channel } from '../types/index.ts';
 import { UserSessionData } from './AuthModal.tsx';
@@ -31,7 +32,42 @@ export const Header: React.FC<HeaderProps> = ({
   isOwnerProvisioned = true,
   onOpenAuth,
 }) => {
-  const activeChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
+  // Offline-First & Anti-Flicker: Direct inspection of localStorage on initial render
+  const effectiveChannels = useMemo(() => {
+    if (channels && channels.length > 0) return channels;
+    try {
+      const stored = localStorage.getItem('amg_channels');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+          const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+          const valid = parsed.filter(
+            (c: Channel) =>
+              !c.isSeeded &&
+              !unlinkedIds.includes(c.id) &&
+              !unlinkedIds.includes(c.youtubeChannelId || '')
+          );
+          if (valid.length > 0) return valid;
+        }
+      }
+    } catch {}
+    return channels;
+  }, [channels]);
+
+  const effectiveSelectedId = useMemo(() => {
+    if (selectedChannelId) return selectedChannelId;
+    try {
+      const stored = localStorage.getItem('amg_active_channel_id') || localStorage.getItem('amg_active_channel');
+      if (stored) return stored;
+      if (effectiveChannels.length > 0) return effectiveChannels[0].id;
+    } catch {}
+    return '';
+  }, [selectedChannelId, effectiveChannels]);
+
+  const activeChannel =
+    effectiveChannels.find((c) => c.id === effectiveSelectedId || c.youtubeChannelId === effectiveSelectedId) ||
+    effectiveChannels[0];
 
   return (
     <header className="sticky top-0 z-30 flex items-center justify-between h-16 w-full max-w-full px-3 sm:px-4 md:px-6 bg-neutral-950/90 backdrop-blur-md border-b border-neutral-800 box-border overflow-hidden">
@@ -51,16 +87,21 @@ export const Header: React.FC<HeaderProps> = ({
             Channel:
           </span>
           <select
-            value={selectedChannelId}
-            onChange={(e) => onSelectChannel(e.target.value)}
+            value={effectiveSelectedId}
+            onChange={(e) => {
+              const val = e.target.value;
+              localStorage.setItem('amg_active_channel_id', val);
+              localStorage.setItem('amg_active_channel', val);
+              onSelectChannel(val);
+            }}
             className="w-full min-w-0 bg-neutral-900 border border-neutral-800 text-neutral-100 text-xs font-semibold rounded-lg px-2 sm:px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-red-500 hover:border-neutral-700 cursor-pointer truncate"
           >
-            {channels.length === 0 ? (
+            {effectiveChannels.length === 0 ? (
               <option value="" className="bg-neutral-900 text-neutral-400">
                 Belum ada channel terhubung
               </option>
             ) : (
-              channels.map((chan) => (
+              effectiveChannels.map((chan) => (
                 <option key={chan.id} value={chan.id} className="bg-neutral-900 text-white">
                   {chan.title} ({chan.status})
                 </option>

@@ -81,10 +81,42 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   isSyncing,
   onGisAuthorize,
 }) => {
+  // Effective Channels with localStorage fallback
+  const effectiveChannels = useMemo(() => {
+    if (channels && channels.length > 0) return channels;
+    try {
+      const stored = localStorage.getItem('amg_channels');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+          const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+          return parsed.filter(
+            (c: Channel) =>
+              !c.isSeeded &&
+              !unlinkedIds.includes(c.id) &&
+              !unlinkedIds.includes(c.youtubeChannelId || '')
+          );
+        }
+      }
+    } catch {}
+    return channels;
+  }, [channels]);
+
+  const effectiveSelectedId = useMemo(() => {
+    if (selectedChannelId) return selectedChannelId;
+    try {
+      const stored = localStorage.getItem('amg_active_channel_id') || localStorage.getItem('amg_active_channel');
+      if (stored) return stored;
+      if (effectiveChannels.length > 0) return effectiveChannels[0].id;
+    } catch {}
+    return '';
+  }, [selectedChannelId, effectiveChannels]);
+
   // Active Channel & Active Block Resolution
   const activeChannel = useMemo(() => {
-    return channels.find((c) => c.id === selectedChannelId) || channels[0];
-  }, [channels, selectedChannelId]);
+    return effectiveChannels.find((c) => c.id === effectiveSelectedId || c.youtubeChannelId === effectiveSelectedId) || effectiveChannels[0];
+  }, [effectiveChannels, effectiveSelectedId]);
 
   const activeBlockId = useMemo(() => {
     return activeChannel?.blockId || activeChannel?.contentProfileId || profiles[0]?.id || '';
@@ -99,7 +131,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     if (videos && videos.length > 0) return videos;
     if (activeChannel) {
       const cleanId = activeChannel.youtubeChannelId || activeChannel.id.replace(/^chan-/, '');
-      const raw = localStorage.getItem(`amg_real_videos_${activeChannel.id}`) || localStorage.getItem(`amg_real_videos_${cleanId}`);
+      const raw = localStorage.getItem(`amg_real_videos_${activeChannel.id}`) ||
+                  localStorage.getItem(`amg_real_videos_${cleanId}`) ||
+                  localStorage.getItem(`amg_real_videos_chan-${cleanId}`);
       if (raw) {
         try {
           const parsed = JSON.parse(raw);
@@ -130,15 +164,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [effectiveVideos, activeChannel, activeBlockId]);
 
   const targetChannelFilter =
-    selectedChannelId && selectedChannelId !== 'ALL'
-      ? selectedChannelId
-      : selectedChannelId === 'ALL'
+    effectiveSelectedId && effectiveSelectedId !== 'ALL'
+      ? effectiveSelectedId
+      : effectiveSelectedId === 'ALL'
       ? 'ALL'
       : activeChannel?.id;
 
   const blockDetectedCount = useMemo(() => {
-    return calculateDetectedVideosCount(effectiveVideos, channels, profiles, targetChannelFilter);
-  }, [effectiveVideos, channels, profiles, targetChannelFilter]);
+    const calculated = calculateDetectedVideosCount(effectiveVideos, effectiveChannels, profiles, targetChannelFilter);
+    if (calculated > 0) return calculated;
+    if (effectiveVideos && effectiveVideos.length > 0) {
+      if (targetChannelFilter && targetChannelFilter !== 'ALL') {
+        const forChan = effectiveVideos.filter(
+          (v) =>
+            v.channelId === targetChannelFilter ||
+            v.channelId === `chan-${targetChannelFilter}` ||
+            (activeChannel && (v.channelId === activeChannel.youtubeChannelId || v.channelId === `chan-${activeChannel.youtubeChannelId}`))
+        );
+        return forChan.length > 0 ? forChan.length : effectiveVideos.length;
+      }
+      return effectiveVideos.length;
+    }
+    return 0;
+  }, [effectiveVideos, effectiveChannels, profiles, targetChannelFilter, activeChannel]);
 
   const blockCompletedCount = useMemo(() => {
     return activeBlockVideos.filter((v) => v.managementStatus === 'COMPLETED' || v.isManaged).length;
@@ -183,7 +231,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Reliable Connected Channel Calculation
   const connectedCount = useMemo(() => {
-    const fromProps = channels.filter(
+    const fromProps = effectiveChannels.filter(
       (c) =>
         c.status === 'CONNECTED' ||
         c.status === 'Connected' ||
@@ -192,7 +240,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         c.status === 'TOKEN EXPIRED'
     ).length;
     return Math.max(fromProps, metrics.connectedChannels || 0);
-  }, [channels, metrics.connectedChannels]);
+  }, [effectiveChannels, metrics.connectedChannels]);
 
   return (
     <div className="space-y-6 overflow-x-hidden max-w-full w-full pb-20 sm:pb-24 lg:pb-8">

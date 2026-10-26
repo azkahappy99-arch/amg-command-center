@@ -52,11 +52,89 @@ import {
   getStoredGisToken,
 } from './services/youtubeGisAuth.ts';
 
+// Offline-First & Anti-Overwrite Helpers
+function getStoredActiveChannelId(): string {
+  try {
+    const activeStored = localStorage.getItem('amg_active_channel_id') || localStorage.getItem('amg_active_channel');
+    if (activeStored) return activeStored;
+    const storedChannelsRaw = localStorage.getItem('amg_channels');
+    if (storedChannelsRaw) {
+      const parsed = JSON.parse(storedChannelsRaw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed[0].id || parsed[0].youtubeChannelId || '';
+      }
+    }
+  } catch {}
+  return '';
+}
+
+function getStoredChannels(): Channel[] {
+  try {
+    const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+    const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+    const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
+
+    const storedChannelsRaw = localStorage.getItem('amg_channels');
+    if (storedChannelsRaw) {
+      const parsed = JSON.parse(storedChannelsRaw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const clean = parsed
+          .filter(
+            (c: Channel) =>
+              !c.isSeeded &&
+              !isUnlinked(c.id) &&
+              !isUnlinked(c.youtubeChannelId) &&
+              !isUnlinked(`chan-${c.youtubeChannelId}`) &&
+              !c.title?.includes('[DEMO FIXTURE]') &&
+              !c.title?.includes('Demo Fixture') &&
+              !c.title?.toLowerCase().includes('fixture')
+          )
+          .map(sanitizeChannel);
+        return clean;
+      }
+    }
+  } catch (e) {
+    console.warn('getStoredChannels error:', e);
+  }
+  return [];
+}
+
+function getStoredVideos(activeChanId?: string): ManagedVideo[] {
+  try {
+    const active = activeChanId || getStoredActiveChannelId();
+    if (active) {
+      const cleanId = active.replace(/^chan-/, '');
+      const raw1 = localStorage.getItem(`amg_real_videos_${active}`);
+      const raw2 = localStorage.getItem(`amg_real_videos_${cleanId}`);
+      const raw3 = localStorage.getItem(`amg_real_videos_chan-${cleanId}`);
+      const raw = raw1 || raw2 || raw3;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const clean = parsed.filter(isRealVideo);
+          if (clean.length > 0) return clean;
+        }
+      }
+    }
+    const rawAll = localStorage.getItem('amg_videos');
+    if (rawAll) {
+      const parsed = JSON.parse(rawAll);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const clean = parsed.filter(isRealVideo);
+        if (clean.length > 0) return clean;
+      }
+    }
+  } catch (e) {
+    console.warn('getStoredVideos error:', e);
+  }
+  return [];
+}
+
 export default function App() {
   const [currentSection, setCurrentSection] = useState<NavSection>('dashboard');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [selectedChannelId, setSelectedChannelId] = useState<string>('');
+  const [selectedChannelId, setSelectedChannelId] = useState<string>(() => getStoredActiveChannelId());
 
   // Authentication & Ownership State
   const [currentUser, setCurrentUser] = useState<UserSessionData | null>(null);
@@ -64,12 +142,12 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const isAutoFetchingRef = useRef(false);
 
-  // Core Data States
-  const [channels, setChannels] = useState<Channel[]>([]);
+  // Core Data States - Initialized offline-first directly from localStorage
+  const [channels, setChannels] = useState<Channel[]>(() => getStoredChannels());
   const [profiles, setProfiles] = useState<ContentProfile[]>([]);
   const [titles, setTitles] = useState<MasterTitle[]>([]);
   const [thumbnails, setThumbnails] = useState<MasterThumbnail[]>([]);
-  const [videos, setVideos] = useState<ManagedVideo[]>([]);
+  const [videos, setVideos] = useState<ManagedVideo[]>(() => getStoredVideos());
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   const [recentBatches, setRecentBatches] = useState<AutomationBatch[]>([]);
@@ -86,20 +164,47 @@ export default function App() {
       errors: number;
     };
     actionRequired: Array<{ id: string; type: 'warning' | 'error' | 'info'; title: string; description: string; link?: string }>;
-  }>({
-    metrics: {
-      totalChannels: 0,
-      connectedChannels: 0,
-      newVideos: 0,
-      hdReady: 0,
-      processing: 0,
-      scheduled: 0,
-      completedVideos: 0,
-      automationJobs: 0,
-      errors: 0,
-    },
-    actionRequired: [],
+  }>(() => {
+    const initialChans = getStoredChannels();
+    const initialVids = getStoredVideos();
+    const connCount = initialChans.filter((c) => c.status === 'CONNECTED' || c.status === 'Connected').length;
+    return {
+      metrics: {
+        totalChannels: initialChans.length,
+        connectedChannels: connCount > 0 ? connCount : (initialChans.length > 0 ? 1 : 0),
+        newVideos: initialVids.length,
+        hdReady: initialVids.filter((v) => v.definition === 'hd').length,
+        processing: initialVids.filter((v) => v.managementStatus === 'PROCESSING').length,
+        scheduled: initialVids.filter((v) => v.managementStatus === 'SCHEDULED').length,
+        completedVideos: initialVids.filter((v) => v.managementStatus === 'COMPLETED').length,
+        automationJobs: 0,
+        errors: 0,
+      },
+      actionRequired: [],
+    };
   });
+
+  const handleSelectChannel = (chanId: string) => {
+    setSelectedChannelId(chanId);
+    if (chanId) {
+      localStorage.setItem('amg_active_channel_id', chanId);
+      localStorage.setItem('amg_active_channel', chanId);
+      const cleanId = chanId.replace(/^chan-/, '');
+      const raw =
+        localStorage.getItem(`amg_real_videos_${chanId}`) ||
+        localStorage.getItem(`amg_real_videos_${cleanId}`) ||
+        localStorage.getItem(`amg_real_videos_chan-${cleanId}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const clean = parsed.filter(isRealVideo);
+            if (clean.length > 0) setVideos(clean);
+          }
+        } catch {}
+      }
+    }
+  };
 
   const loadAllData = async (targetChanId?: string) => {
     setIsRefreshing(true);
@@ -125,12 +230,8 @@ export default function App() {
         api.getActivityLogs().catch(() => []),
       ]);
 
-      if (statsData) {
-        setStats({ metrics: statsData.metrics, actionRequired: statsData.actionRequired });
-        if (statsData.recentBatches) setRecentBatches(statsData.recentBatches);
-      }
       let cleanChannels: Channel[] = [];
-      if (channelsData) {
+      if (channelsData && Array.isArray(channelsData) && channelsData.length > 0) {
         const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
         const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
         const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
@@ -139,51 +240,60 @@ export default function App() {
           .filter((c: Channel) => !isUnlinked(c.id) && !isUnlinked(c.youtubeChannelId) && !isUnlinked(`chan-${c.youtubeChannelId}`))
           .map(sanitizeChannel);
 
-        if (cleanChannels.length === 0) {
-          cleanChannels = [];
-        }
-
-        setChannels(cleanChannels);
         if (cleanChannels.length > 0) {
+          setChannels(cleanChannels);
+          localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
           if (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId)) {
-            setSelectedChannelId(cleanChannels[0].id);
-            localStorage.setItem('amg_active_channel', cleanChannels[0].id);
+            const nextActive = cleanChannels[0].id;
+            setSelectedChannelId(nextActive);
+            localStorage.setItem('amg_active_channel_id', nextActive);
+            localStorage.setItem('amg_active_channel', nextActive);
           }
-        } else {
-          setSelectedChannelId('');
-          localStorage.removeItem('amg_active_channel');
-          localStorage.setItem('amg_channels', JSON.stringify([]));
-          localStorage.setItem('amg_videos', JSON.stringify([]));
-          localStorage.setItem('amg_batches', JSON.stringify([]));
-        }
-        localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
 
-        if (cleanChannels.length === 0) {
-          setStats((prev) => ({
-            ...prev,
-            metrics: {
-              ...prev.metrics,
-              totalChannels: 0,
-              connectedChannels: 0,
-              newVideos: 0,
-              hdReady: 0,
-              processing: 0,
-              scheduled: 0,
-              completedVideos: 0,
-            },
-            actionRequired: [],
-            recentBatches: [],
-          }));
+          // Cache connected channel IDs in localStorage for client resilience
+          const connectedReal = cleanChannels.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
+          try {
+            localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
+          } catch {
+            // ignore
+          }
         }
-
-        // Cache connected channel IDs in localStorage for client resilience
-        const connectedReal = cleanChannels.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
-        try {
-          localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
-        } catch {
-          // ignore
+      } else {
+        // ANTI-OVERWRITE: Backend returned empty [] or error.
+        // DO NOT overwrite localStorage! Preserve existing valid channels in state and localStorage.
+        const localChans = getStoredChannels();
+        if (localChans.length > 0) {
+          cleanChannels = localChans;
+          setChannels((prev) => (prev.length > 0 ? prev : localChans));
+          if (!selectedChannelId) {
+            const nextActive = getStoredActiveChannelId() || localChans[0].id;
+            setSelectedChannelId(nextActive);
+          }
         }
       }
+
+      if (statsData) {
+        setStats((prev) => {
+          const currentChans = cleanChannels.length > 0 ? cleanChannels : getStoredChannels();
+          const currentVids = getStoredVideos(targetChanId || selectedChannelId);
+          return {
+            metrics: {
+              ...statsData.metrics,
+              totalChannels: statsData.metrics.totalChannels > 0 ? statsData.metrics.totalChannels : currentChans.length,
+              connectedChannels:
+                statsData.metrics.connectedChannels > 0
+                  ? statsData.metrics.connectedChannels
+                  : currentChans.filter((c) => c.status === 'CONNECTED' || c.status === 'Connected').length,
+              newVideos: Math.max(statsData.metrics.newVideos, currentVids.length),
+            },
+            actionRequired: statsData.actionRequired || prev.actionRequired,
+          };
+        });
+        if (statsData.recentBatches && statsData.recentBatches.length > 0) {
+          setRecentBatches(statsData.recentBatches);
+        }
+      }
+
       if (profilesData) setProfiles(profilesData);
       if (titlesData) {
         let cleanTitles = titlesData.filter(isRealTitle);
@@ -227,69 +337,83 @@ export default function App() {
         }
         setThumbnails(cleanThumbs);
       }
-      if (videosData) {
+      if (videosData && Array.isArray(videosData) && videosData.length > 0) {
         let cleanVids = videosData.filter(isRealVideo);
-        const hasActiveChannels = (cleanChannels && cleanChannels.length > 0);
-        const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
-        const cleanChanId = targetChan ? targetChan.replace(/^chan-/, '') : '';
-
-        if (!hasActiveChannels) {
-          cleanVids = [];
-          localStorage.setItem('amg_videos', JSON.stringify([]));
-          localStorage.setItem('amg_batches', JSON.stringify([]));
-          localStorage.removeItem('amg_active_channel');
-        } else if (cleanVids.length === 0) {
-          // Check channel-specific persistent key: amg_real_videos_{channelId}
-          if (targetChan) {
-            const raw1 = localStorage.getItem(`amg_real_videos_${targetChan}`);
-            const raw2 = localStorage.getItem(`amg_real_videos_${cleanChanId}`);
-            const raw3 = localStorage.getItem(`amg_real_videos_chan-${cleanChanId}`);
-            const storedJson = raw1 || raw2 || raw3;
-            if (storedJson) {
-              try {
-                const parsed = JSON.parse(storedJson);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                  cleanVids = parsed.filter(isRealVideo);
-                }
-              } catch {}
+        if (cleanVids.length > 0) {
+          // Safe background merge based on unique video ID
+          setVideos((prevVideos) => {
+            const existing = prevVideos && prevVideos.length > 0 ? prevVideos : getStoredVideos(targetChanId || selectedChannelId);
+            const videoMap = new Map<string, ManagedVideo>();
+            for (const ev of existing) {
+              const id = ev.youtubeVideoId || ev.id;
+              if (id) videoMap.set(id, ev);
             }
-          }
-          if (cleanVids.length === 0) {
-            const cachedRaw = localStorage.getItem('amg_videos');
-            if (cachedRaw) {
-              try {
-                const cached = JSON.parse(cachedRaw);
-                if (Array.isArray(cached)) {
-                  cleanVids = cached.filter(isRealVideo);
-                }
-              } catch {}
+            for (const nv of cleanVids) {
+              const id = nv.youtubeVideoId || nv.id;
+              if (id) {
+                const prev = videoMap.get(id);
+                videoMap.set(id, prev ? { ...prev, ...nv } : nv);
+              }
             }
-          }
+            const merged = Array.from(videoMap.values());
+            localStorage.setItem('amg_videos', JSON.stringify(merged));
+            const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
+            if (targetChan) {
+              const cleanChanId = targetChan.replace(/^chan-/, '');
+              const chanVids = merged.filter((v) =>
+                v.channelId === targetChan ||
+                v.channelId === `chan-${targetChan}` ||
+                v.channelId === cleanChanId ||
+                v.channelId === `chan-${cleanChanId}`
+              );
+              if (chanVids.length > 0) {
+                localStorage.setItem(`amg_real_videos_${targetChan}`, JSON.stringify(chanVids));
+                localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(chanVids));
+                localStorage.setItem(`amg_real_videos_chan-${cleanChanId}`, JSON.stringify(chanVids));
+              }
+            }
+            return merged;
+          });
         }
-
-        setVideos(cleanVids);
-        if (cleanVids.length > 0 && hasActiveChannels) {
-          localStorage.setItem('amg_videos', JSON.stringify(cleanVids));
-          if (targetChan) {
-            localStorage.setItem(`amg_real_videos_${targetChan}`, JSON.stringify(cleanVids));
-            localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(cleanVids));
-          }
-        } else {
-          localStorage.setItem('amg_videos', JSON.stringify([]));
+      } else {
+        // ANTI-OVERWRITE: Backend returned empty [] or error!
+        // DO NOT overwrite localStorage with empty []!
+        const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
+        const localExisting = getStoredVideos(targetChan);
+        if (localExisting.length > 0) {
+          setVideos((curr) => (curr.length > 0 ? curr : localExisting));
         }
 
         // Auto-Fetch Real YouTube Data saat Channel Terkoneksi (Tanpa Klik Manual)
-        if (hasActiveChannels && cleanVids.length === 0 && !isAutoFetchingRef.current) {
+        const hasActiveChannels = (cleanChannels && cleanChannels.length > 0) || getStoredChannels().length > 0;
+        const activeChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
+        if (hasActiveChannels && !isAutoFetchingRef.current) {
           const storedToken = getStoredGisToken() || localStorage.getItem('amg_youtube_access_token');
-          if (storedToken && targetChan) {
+          if (storedToken && activeChan) {
             isAutoFetchingRef.current = true;
-            fetchChannelVideosFromYouTube(storedToken, targetChan)
+            fetchChannelVideosFromYouTube(storedToken, activeChan)
               .then((vids) => {
                 if (Array.isArray(vids) && vids.length > 0) {
                   const real = vids.filter(isRealVideo);
-                  setVideos(real);
+                  setVideos((prevVideos) => {
+                    const videoMap = new Map<string, ManagedVideo>();
+                    for (const ev of prevVideos) {
+                      const id = ev.youtubeVideoId || ev.id;
+                      if (id) videoMap.set(id, ev);
+                    }
+                    for (const nv of real) {
+                      const id = nv.youtubeVideoId || nv.id;
+                      if (id) {
+                        const prev = videoMap.get(id);
+                        videoMap.set(id, prev ? { ...prev, ...nv } : nv);
+                      }
+                    }
+                    const merged = Array.from(videoMap.values());
+                    localStorage.setItem('amg_videos', JSON.stringify(merged));
+                    return merged;
+                  });
                   setToastMessage({
-                    text: `Auto-Fetch Berhasil: ${real.length} video riil YouTube berhasil dimuat otomatis!`,
+                    text: `Auto-Fetch Berhasil: ${real.length} video riil YouTube berhasil disinkronkan!`,
                     type: 'success',
                   });
                 }
@@ -303,6 +427,7 @@ export default function App() {
           }
         }
       }
+
       if (notifsData) setNotifications(notifsData);
       if (logsData) setActivityLogs(logsData);
     } catch (err) {
@@ -313,98 +438,47 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Immediate direct localStorage inspection upon mount (100% static, no backend needed)
+    // Immediate direct localStorage inspection upon mount (100% static, zero wait)
     try {
-      const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
-      const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
-      const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
-
       const storedConnectedRaw = localStorage.getItem('amg_youtube_connected_channel');
-      const storedToken = localStorage.getItem('amg_youtube_access_token');
-      const storedChannelsRaw = localStorage.getItem('amg_channels');
+      const realChannels = getStoredChannels();
 
-      if (storedChannelsRaw) {
-        const parsed = JSON.parse(storedChannelsRaw);
-        if (Array.isArray(parsed)) {
-          // Purge fixture mock channels, unlinked channels, and sanitize legacy mock monetization/revenue
-          let realChannels = parsed
-            .filter(
-              (c: Channel) =>
-                !c.isSeeded &&
-                !isUnlinked(c.id) &&
-                !isUnlinked(c.youtubeChannelId) &&
-                !isUnlinked(`chan-${c.youtubeChannelId}`) &&
-                c.id !== 'chan-ayam-warna' &&
-                c.id !== 'chan-suara-alam' &&
-                c.id !== 'chan-murottal' &&
-                c.id !== 'chan-kucing-gemoy' &&
-                !c.title?.includes('[DEMO FIXTURE]') &&
-                !c.title?.includes('Demo Fixture') &&
-                !c.title?.toLowerCase().includes('fixture')
-            )
-            .map(sanitizeChannel);
-
-          if (realChannels.length === 0) {
-            realChannels = [];
+      if (storedConnectedRaw && realChannels.length > 0) {
+        const live = JSON.parse(storedConnectedRaw);
+        if (live && live.id) {
+          const idx = realChannels.findIndex(
+            (c: Channel) =>
+              c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
+          );
+          if (idx >= 0) {
+            realChannels[idx] = sanitizeChannel({
+              ...realChannels[idx],
+              status: 'CONNECTED',
+              title: live.title || realChannels[idx].title,
+              thumbnailUrl: live.thumbnailUrl || realChannels[idx].thumbnailUrl,
+              blockId: 'block-general',
+              contentProfileId: 'block-general',
+              nicheCategory: 'General',
+            });
+            localStorage.setItem('amg_channels', JSON.stringify(realChannels));
+            setChannels(realChannels);
           }
-
-          if (storedConnectedRaw && realChannels.length > 0) {
-            const live = JSON.parse(storedConnectedRaw);
-            if (live && live.id && !isUnlinked(live.id) && !isUnlinked(`chan-${live.id}`)) {
-              const idx = realChannels.findIndex(
-                (c: Channel) =>
-                  c.youtubeChannelId === live.id || c.id === live.id || c.id === `chan-${live.id}`
-              );
-              if (idx >= 0) {
-                realChannels[idx] = sanitizeChannel({
-                  ...realChannels[idx],
-                  status: 'CONNECTED',
-                  title: live.title || realChannels[idx].title,
-                  thumbnailUrl: live.thumbnailUrl || realChannels[idx].thumbnailUrl,
-                  blockId: 'block-general',
-                  contentProfileId: 'block-general',
-                  nicheCategory: 'General',
-                });
-              }
-            }
-          }
-          // Always write back sanitized channels (wiping away any legacy mock revenue & fake YPP)
-          localStorage.setItem('amg_channels', JSON.stringify(realChannels));
-          setChannels(realChannels);
-          if (realChannels.length > 0) {
-            setSelectedChannelId(realChannels[0].id);
-          } else {
-            setSelectedChannelId('');
-          }
-          const connCount = realChannels.filter(
-            (c: Channel) => c.status === 'CONNECTED' || c.status === 'Connected'
-          ).length;
-          setStats((prev) => ({
-            ...prev,
-            metrics: {
-              ...prev.metrics,
-              totalChannels: realChannels.length,
-              connectedChannels: connCount > 0 ? connCount : (storedToken && realChannels.length > 0 ? 1 : 0),
-            },
-          }));
         }
       }
 
-      if (channels.length > 0) {
-        const storedVideosRaw = localStorage.getItem('amg_videos');
-        if (storedVideosRaw) {
-          try {
-            const parsedVids = JSON.parse(storedVideosRaw);
-            if (Array.isArray(parsedVids)) {
-              const clean = parsedVids.filter(isRealVideo);
-              if (clean.length > 0) {
-                setVideos(clean);
-              }
-            }
-          } catch {}
-        }
-      } else {
-        setVideos([]);
+      const initialActive = getStoredActiveChannelId();
+      if (initialActive) {
+        setSelectedChannelId(initialActive);
+      } else if (realChannels.length > 0) {
+        const firstId = realChannels[0].id;
+        setSelectedChannelId(firstId);
+        localStorage.setItem('amg_active_channel_id', firstId);
+        localStorage.setItem('amg_active_channel', firstId);
+      }
+
+      const initialVids = getStoredVideos(initialActive);
+      if (initialVids.length > 0) {
+        setVideos(initialVids);
       }
     } catch (e) {
       console.warn('Initial direct localStorage load:', e);
@@ -560,7 +634,7 @@ export default function App() {
           onToggleMobile={() => setMobileOpen(true)}
           channels={channels}
           selectedChannelId={selectedChannelId}
-          onSelectChannel={setSelectedChannelId}
+          onSelectChannel={handleSelectChannel}
           onRefresh={loadAllData}
           onSyncChannel={handleSyncActiveChannel}
           isRefreshing={isRefreshing}
@@ -585,7 +659,7 @@ export default function App() {
               thumbnails={thumbnails}
               videos={videos}
               selectedChannelId={selectedChannelId}
-              onSelectChannel={setSelectedChannelId}
+              onSelectChannel={handleSelectChannel}
               onNavigate={setCurrentSection}
               onSyncAll={loadAllData}
               onSyncChannel={handleSyncActiveChannel}
@@ -605,15 +679,15 @@ export default function App() {
               videos={videos}
               onChannelUpdated={loadAllData}
               onNavigateToAutomation={(chanId) => {
-                setSelectedChannelId(chanId);
+                handleSelectChannel(chanId);
                 setCurrentSection('automation');
               }}
               onNavigateToTitles={(chanId) => {
-                setSelectedChannelId(chanId);
+                if (chanId) handleSelectChannel(chanId);
                 setCurrentSection('titles');
               }}
               onNavigateToThumbnails={(chanId) => {
-                setSelectedChannelId(chanId);
+                if (chanId) handleSelectChannel(chanId);
                 setCurrentSection('thumbnails');
               }}
             />
@@ -624,7 +698,7 @@ export default function App() {
               videos={videos}
               channels={channels}
               selectedChannelId={selectedChannelId}
-              onSelectChannel={setSelectedChannelId}
+              onSelectChannel={handleSelectChannel}
               onRefresh={loadAllData}
               onSyncChannel={handleSyncActiveChannel}
               isRefreshing={isRefreshing}

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "savedAt": "2026-10-25T14:41:21.307Z",
+  "savedAt": "2026-10-26T05:46:38.540Z",
   "channels": [],
   "profiles": [
     [
@@ -211,8 +211,8 @@
         "deviceInfo": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
         "ipAddress": "127.0.0.1",
         "createdAt": "2026-10-02T11:17:38.630Z",
-        "expiresAt": "2026-11-24T14:41:21.307Z",
-        "lastActiveAt": "2026-10-25T14:41:21.307Z",
+        "expiresAt": "2026-11-25T05:46:38.540Z",
+        "lastActiveAt": "2026-10-26T05:46:38.540Z",
         "isRevoked": false
       }
     ],

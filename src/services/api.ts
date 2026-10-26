@@ -473,6 +473,15 @@ export const api = {
       if (res.ok) {
         const backendStats = await res.json();
         if (backendStats && backendStats.metrics) {
+          const localChannels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+          const localVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []).filter(isRealVideo);
+          if (backendStats.metrics.totalChannels === 0 && localChannels.length > 0) {
+            backendStats.metrics.totalChannels = localChannels.length;
+            backendStats.metrics.connectedChannels = localChannels.filter((c: any) => c.status === 'CONNECTED' || c.status === 'Connected').length;
+          }
+          if (backendStats.metrics.newVideos === 0 && localVideos.length > 0) {
+            backendStats.metrics.newVideos = localVideos.length;
+          }
           return backendStats;
         }
       }
@@ -569,7 +578,7 @@ export const api = {
       const res = await authFetch('/api/channels');
       if (res.ok) {
         const backendChannels = await res.json();
-        if (Array.isArray(backendChannels)) {
+        if (Array.isArray(backendChannels) && backendChannels.length > 0) {
           const sanitized = backendChannels.map(sanitizeChannel);
           setStorageItem(KEYS.CHANNELS, sanitized);
           return sanitized;
@@ -2227,33 +2236,45 @@ export const api = {
           if (clean.length === 0 && localRealVideos.length > 0) {
             clean = localRealVideos;
           }
-          const rawExisting = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
-          let mergedVideos: ManagedVideo[];
-          if (targetChanId) {
-            const cleanTargetId = targetChanId.replace(/^chan-/, '');
-            const otherChannelsVideos = rawExisting.filter(
-              (v) =>
-                v.channelId !== targetChanId &&
-                v.channelId !== `chan-${targetChanId}` &&
-                v.channelId !== cleanTargetId &&
-                v.channelId !== `chan-${cleanTargetId}`
-            );
-            mergedVideos = [...clean, ...otherChannelsVideos];
-            // Persist into channel persistent keys
-            if (clean.length > 0) {
-              localStorage.setItem(`amg_real_videos_${targetChanId}`, JSON.stringify(clean));
-              localStorage.setItem(`amg_real_videos_${cleanTargetId}`, JSON.stringify(clean));
-              localStorage.setItem(`amg_real_videos_chan-${cleanTargetId}`, JSON.stringify(clean));
+          if (clean.length > 0) {
+            const rawExisting = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
+            const videoMap = new Map<string, ManagedVideo>();
+            // Keep all existing videos in map
+            for (const ev of rawExisting) {
+              const id = ev.youtubeVideoId || ev.id;
+              if (id) videoMap.set(id, ev);
             }
-          } else {
-            mergedVideos = clean;
+            // Merge in new/updated videos
+            for (const cv of clean) {
+              const id = cv.youtubeVideoId || cv.id;
+              if (id) {
+                const prev = videoMap.get(id);
+                videoMap.set(id, prev ? { ...prev, ...cv } : cv);
+              }
+            }
+            const mergedVideos = Array.from(videoMap.values());
+            setStorageItem(KEYS.VIDEOS, mergedVideos);
+            if (targetChanId) {
+              const cleanTargetId = targetChanId.replace(/^chan-/, '');
+              const chanVids = mergedVideos.filter(
+                (v) =>
+                  v.channelId === targetChanId ||
+                  v.channelId === `chan-${targetChanId}` ||
+                  v.channelId === cleanTargetId ||
+                  v.channelId === `chan-${cleanTargetId}`
+              );
+              if (chanVids.length > 0) {
+                localStorage.setItem(`amg_real_videos_${targetChanId}`, JSON.stringify(chanVids));
+                localStorage.setItem(`amg_real_videos_${cleanTargetId}`, JSON.stringify(chanVids));
+                localStorage.setItem(`amg_real_videos_chan-${cleanTargetId}`, JSON.stringify(chanVids));
+              }
+            }
+            let list = clean;
+            if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);
+            if (params?.isManaged !== undefined) list = list.filter((v) => v.isManaged === params.isManaged);
+            if (params?.scope && params.scope !== 'ALL') list = list.filter((v) => v.managementScope === params.scope);
+            return list;
           }
-          setStorageItem(KEYS.VIDEOS, mergedVideos);
-          let list = clean;
-          if (params?.status && params.status !== 'ALL') list = list.filter((v) => v.managementStatus === params.status);
-          if (params?.isManaged !== undefined) list = list.filter((v) => v.isManaged === params.isManaged);
-          if (params?.scope && params.scope !== 'ALL') list = list.filter((v) => v.managementScope === params.scope);
-          return list;
         }
       }
     } catch {}

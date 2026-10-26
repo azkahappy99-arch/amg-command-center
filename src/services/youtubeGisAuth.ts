@@ -579,9 +579,8 @@ export async function fetchChannelVideosFromYouTube(
     const rawExisting = localStorage.getItem('amg_videos');
     const totalRemoteVideos = parseInt(channelItem.statistics?.videoCount || '0', 10);
     if (videoIds.length === 0) {
-      // If YouTube reports that channel has videos but none could be fetched, retain existing to avoid data loss
-      if (totalRemoteVideos > 0 && rawExisting) {
-        console.warn(`[youtubeGisAuth] Remote videoCount is ${totalRemoteVideos} but discovery returned 0. Retaining stored videos.`);
+      // Retain existing stored videos to avoid data loss in serverless or quota edge cases
+      if (rawExisting) {
         try {
           const parsedExisting = JSON.parse(rawExisting);
           if (Array.isArray(parsedExisting)) {
@@ -595,7 +594,6 @@ export async function fetchChannelVideosFromYouTube(
           }
         } catch {}
       }
-      updateChannelVideosInStorage(assignedChanId, chanId, chanTitle, []);
       return [];
     }
 
@@ -821,6 +819,10 @@ function updateChannelVideosInStorage(
         )
       : [];
 
+    if (newVideos.length === 0) {
+      return;
+    }
+
     // Keep videos for other channels
     const otherChannelsVideos = cleanExisting.filter(
       (v) =>
@@ -829,14 +831,34 @@ function updateChannelVideosInStorage(
         v.channelId !== `chan-${youtubeChannelId}`
     );
 
-    const mergedVideos = [...newVideos, ...otherChannelsVideos];
+    // Merge new videos with existing videos for this channel by unique videoId
+    const currentChanExisting = cleanExisting.filter(
+      (v) =>
+        v.channelId === channelId ||
+        v.channelId === youtubeChannelId ||
+        v.channelId === `chan-${youtubeChannelId}`
+    );
+    const videoMap = new Map<string, any>();
+    for (const ev of currentChanExisting) {
+      const vidId = ev.youtubeVideoId || ev.id;
+      if (vidId) videoMap.set(vidId, ev);
+    }
+    for (const nv of newVideos) {
+      const vidId = nv.youtubeVideoId || nv.id;
+      if (vidId) {
+        const prev = videoMap.get(vidId);
+        videoMap.set(vidId, prev ? { ...prev, ...nv } : nv);
+      }
+    }
+    const mergedCurrentChanVideos = Array.from(videoMap.values());
+    const mergedVideos = [...mergedCurrentChanVideos, ...otherChannelsVideos];
     localStorage.setItem('amg_videos', JSON.stringify(mergedVideos));
 
     // Persist real videos per channel key: amg_real_videos_{channelId}
     const cleanChanId = youtubeChannelId || channelId.replace(/^chan-/, '');
-    localStorage.setItem(`amg_real_videos_${channelId}`, JSON.stringify(newVideos));
-    localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(newVideos));
-    localStorage.setItem(`amg_real_videos_chan-${cleanChanId}`, JSON.stringify(newVideos));
+    localStorage.setItem(`amg_real_videos_${channelId}`, JSON.stringify(mergedCurrentChanVideos));
+    localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(mergedCurrentChanVideos));
+    localStorage.setItem(`amg_real_videos_chan-${cleanChanId}`, JSON.stringify(mergedCurrentChanVideos));
 
     // Also update channel's videoCount in amg_channels
     const rawChannels = localStorage.getItem('amg_channels');
