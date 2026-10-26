@@ -36,8 +36,29 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function getAppPort(): number {
+  const portArgIdx = process.argv.indexOf('--port');
+  if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+    const val = parseInt(process.argv[portArgIdx + 1], 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  if (process.env.APP_PORT) {
+    const val = parseInt(process.env.APP_PORT, 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  if (process.env.DEFAULT_APP_PORT) {
+    const val = parseInt(process.env.DEFAULT_APP_PORT, 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  if (process.env.PORT && process.env.PORT !== '8080') {
+    const val = parseInt(process.env.PORT, 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  return 3000;
+}
+
+const PORT = getAppPort();
 const app = express();
-const PORT = parseInt(process.env.PORT || '3000', 10);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
