@@ -77,7 +77,11 @@ export class YouTubeDataService {
         title: item.snippet?.title || 'YouTube Channel',
         description: item.snippet?.description || '',
         customUrl: item.snippet?.customUrl,
-        thumbnailUrl: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url,
+        thumbnailUrl:
+          item.snippet?.thumbnails?.high?.url ||
+          item.snippet?.thumbnails?.medium?.url ||
+          item.snippet?.thumbnails?.default?.url ||
+          '',
         uploadPlaylistId: item.contentDetails?.relatedPlaylists?.uploads || '',
         subscriberCount: parseInt(item.statistics?.subscriberCount || '0', 10),
         videoCount: parseInt(item.statistics?.videoCount || '0', 10),
@@ -134,7 +138,11 @@ export class YouTubeDataService {
         title: item.snippet?.title || 'YouTube Channel',
         description: item.snippet?.description || '',
         customUrl: item.snippet?.customUrl,
-        thumbnailUrl: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url,
+        thumbnailUrl:
+          item.snippet?.thumbnails?.high?.url ||
+          item.snippet?.thumbnails?.medium?.url ||
+          item.snippet?.thumbnails?.default?.url ||
+          '',
         uploadPlaylistId: item.contentDetails?.relatedPlaylists?.uploads || '',
         subscriberCount: parseInt(item.statistics?.subscriberCount || '0', 10),
         videoCount: parseInt(item.statistics?.videoCount || '0', 10),

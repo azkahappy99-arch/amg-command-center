@@ -268,12 +268,15 @@ export class Phase3Engine {
 
           // Mark video as managed & completed in database
           if (video) {
-            video.managementStatus = 'COMPLETED';
-            video.amgStatus = 'COMPLETED';
+            video.titleBefore = job.payload.title;
+            video.titleAssigned = job.payload.title;
+            video.publishAt = job.payload.scheduledPublishAt;
+            video.scheduledPublishAt = job.payload.scheduledPublishAt;
+            video.managementStatus = 'SCHEDULED';
+            video.amgStatus = 'SCHEDULED';
             video.isManaged = true;
             video.isAmgManaged = true;
             video.automationBatchId = job.batchId;
-            video.scheduledPublishAt = job.payload.scheduledPublishAt;
             video.taskStatus = {
               title: 'SUCCESS',
               schedule: 'SUCCESS',

@@ -387,8 +387,24 @@ export const VideosView: React.FC<VideosViewProps> = ({
         </button>
       </div>
 
-      {/* Scope Protection Summary Card */}
-      <div className="p-4 rounded-2xl bg-neutral-900/70 border border-neutral-800 text-xs space-y-3">
+      {channels.length === 0 ? (
+        <div className="p-8 sm:p-12 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center mx-auto text-neutral-500">
+            <Film className="w-8 h-8 text-neutral-600" />
+          </div>
+          <div className="space-y-1.5 max-w-md mx-auto">
+            <h3 className="text-base font-bold text-neutral-200">
+              Belum ada channel terhubung. Silakan tautkan channel terlebih dahulu.
+            </h3>
+            <p className="text-xs text-neutral-400">
+              Setelah channel terhubung via Google OAuth atau GIS, AMG Command Center akan mendeteksi video private mentah untuk diotomasi.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Scope Protection Summary Card */}
+          <div className="p-4 rounded-2xl bg-neutral-900/70 border border-neutral-800 text-xs space-y-3">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
@@ -940,6 +956,8 @@ export const VideosView: React.FC<VideosViewProps> = ({
           </table>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };

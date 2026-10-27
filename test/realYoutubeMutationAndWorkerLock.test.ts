@@ -133,8 +133,19 @@ async function runTests() {
   const pJob = dbStore.automationJobs.get(job.id);
   assert(pJob !== undefined && pJob.status === 'completed', 'Persistent job marked as COMPLETED in dbStore.automationJobs');
 
-  // Restore
+  // Restore original method
   (youtubeDataService as any).updateVideoTitleAndSchedule = originalUpdate;
+
+  // Cleanup test entities from dbStore and credentials vault to prevent test data leakage into runtime
+  dbStore.channels.delete(testChannelId);
+  dbStore.videos.delete(testVideoId);
+  dbStore.automationJobs.delete(job.id);
+  dbStore.automationBatches.delete('AMG-BATCH-0001');
+  youtubeAuthService.revokeCredentials(testChannelId);
+  youtubeAuthService.revokeCredentials('UC_TEST_WORKER_01');
+  youtubeAuthService.revokeCredentials('test-worker-01');
+  youtubeAuthService.revokeCredentials('chan-UC_TEST_WORKER_01');
+  dbStore.saveToDisk();
 
   console.log('====================================================');
   console.log(`RESULTS: ${passed} passed, ${failed} failed`);

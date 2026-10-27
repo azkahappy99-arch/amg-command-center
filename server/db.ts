@@ -1347,6 +1347,11 @@ class DatabaseStore {
         id === 'chan-1790528541320' ||
         id === 'chan-1790528541332' ||
         id === 'chan-1791049429497' ||
+        id === 'chan-test-worker-01' ||
+        id.startsWith('chan-test-') ||
+        c.youtubeChannelId === 'UC_TEST_WORKER_01' ||
+        c.title === 'Test Ambience Channel' ||
+        c.title?.toLowerCase().includes('test ambience') ||
         c.title?.includes('[DEMO FIXTURE]') ||
         c.title?.includes('Demo Fixture') ||
         c.title?.toLowerCase().includes('fixture');
@@ -1381,21 +1386,18 @@ class DatabaseStore {
 
       const isFixture =
         v.isSeeded ||
+        id === 'yt-vid-mut-test-101' ||
+        id === 'vid-mut-test-101' ||
+        v.youtubeVideoId === 'vid-mut-test-101' ||
+        v.titleBefore === 'T1 - Suasana Hujan Menenangkan Pengantar Tidur' ||
+        v.titleBefore?.includes('Suasana Hujan Menenangkan Pengantar Tidur') ||
         id.startsWith('vid-m-') ||
         id.startsWith('vid-old-') ||
         id.startsWith('vid-cand-') ||
         id.startsWith('vid-wrong-') ||
         id.startsWith('vid-personal-') ||
         id.startsWith('vid-test-') ||
-        id.startsWith('vid-') ||
-        id === 'vid-1' ||
-        id === 'vid-2' ||
-        id === 'vid-3' ||
-        id === 'vid-4' ||
-        id === 'vid-5' ||
-        id === 'vid-6' ||
-        id === 'vid-7' ||
-        id === 'vid-8' ||
+        id.startsWith('vid-fixture-') ||
         v.titleBefore?.toLowerCase().includes('suara ayam pagi menenangkan') ||
         v.titleBefore?.toLowerCase().includes('[demo fixture]') ||
         v.titleBefore?.includes('[DEMO FIXTURE]') ||
@@ -1410,14 +1412,31 @@ class DatabaseStore {
     for (const [id, b] of this.automationBatches.entries()) {
       const isFixture =
         b.isSeeded ||
+        id === 'AMG-BATCH-0001' ||
         id.startsWith('batch-001') ||
         id.startsWith('batch-002') ||
         b.channelId === 'chan-ayam-warna' ||
-        b.channelId === 'chan-suara-alam';
+        b.channelId === 'chan-suara-alam' ||
+        b.channelId === 'chan-test-worker-01' ||
+        b.channelTitle?.toLowerCase().includes('test ambience');
 
       if (isFixture) {
         this.automationBatches.delete(id);
         removedBatches++;
+      }
+    }
+
+    for (const [id, j] of this.automationJobs.entries()) {
+      const isFixture =
+        id === 'job-test-101' ||
+        j.batchId === 'AMG-BATCH-0001' ||
+        j.channelId === 'chan-test-worker-01' ||
+        j.videoId === 'yt-vid-mut-test-101' ||
+        j.videoId === 'vid-mut-test-101' ||
+        j.channelTitle?.toLowerCase().includes('test ambience');
+
+      if (isFixture) {
+        this.automationJobs.delete(id);
       }
     }
 

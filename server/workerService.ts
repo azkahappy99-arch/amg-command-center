@@ -82,6 +82,10 @@ export class WorkerService {
       throw new Error(`Channel ID ${job.channelId} tidak ditemukan di database.`);
     }
 
+    if (channel.status !== 'CONNECTED' && channel.status !== 'Connected') {
+      throw new Error(`Worker execution rejected: Channel "${channel.title}" is not in CONNECTED state.`);
+    }
+
     // 1. Hard Safety Gate
     const validation = eligibilityService.validateBeforeMutation(video.id, channel.id);
     if (!validation.isValid) {

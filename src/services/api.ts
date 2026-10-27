@@ -118,21 +118,20 @@ function setStorageItem<T>(key: string, val: T): void {
 // Helper to identify and preserve only authentic channels (purge mock fixtures)
 export function isRealChannel(c: Channel): boolean {
   if (!c) return false;
-  if (c.id === 'chan-ayam-yahya' || c.title?.toLowerCase().includes('ayam yahya')) {
-    return true;
-  }
   if (c.isSeeded) return false;
   const id = c.id || '';
+  const ytId = c.youtubeChannelId || '';
+  const title = (c.title || '').toLowerCase();
+
   if (
+    id === 'chan-test-worker-01' ||
+    id.startsWith('chan-test-') ||
+    ytId === 'UC_TEST_WORKER_01' ||
+    title.includes('test ambience') ||
     id === 'chan-ayam-warna' ||
     id === 'chan-suara-alam' ||
     id === 'chan-murottal' ||
-    id === 'chan-kucing-gemoy'
-  ) {
-    return false;
-  }
-  const title = (c.title || '').toLowerCase();
-  if (
+    id === 'chan-kucing-gemoy' ||
     title.includes('demo fixture') ||
     title.includes('[demo fixture]') ||
     title.includes('fixture')
@@ -150,6 +149,20 @@ export function isRealVideo(v: ManagedVideo): boolean {
   const id = v.id || '';
   const yId = v.youtubeVideoId || '';
   const title = v.titleBefore || '';
+  const cId = v.channelId || '';
+  const chanTitle = (v.channelTitle || '').toLowerCase();
+
+  // Test mutation video rejection
+  if (
+    id === 'yt-vid-mut-test-101' ||
+    id === 'vid-mut-test-101' ||
+    yId === 'vid-mut-test-101' ||
+    cId === 'chan-test-worker-01' ||
+    chanTitle.includes('test ambience') ||
+    title.includes('T1 - Suasana Hujan Menenangkan Pengantar Tidur')
+  ) {
+    return false;
+  }
 
   // 1. Strict rejection of any mock AY_YAHYA or fake title remnants
   if (
@@ -201,11 +214,9 @@ export function isRealVideo(v: ManagedVideo): boolean {
   ) {
     return false;
   }
-  const chanTitle = (v.channelTitle || '').toLowerCase();
   if (chanTitle.includes('demo fixture') || chanTitle.includes('fixture')) {
     return false;
   }
-  const cId = v.channelId || '';
   if (
     cId === 'chan-ayam-warna' ||
     cId === 'chan-suara-alam' ||
@@ -779,6 +790,7 @@ export const api = {
         localStorage.setItem('amg_batches', JSON.stringify([]));
         localStorage.setItem('amg_jobs', JSON.stringify([]));
         localStorage.removeItem('amg_active_channel');
+        localStorage.removeItem('amg_active_channel_id');
         localStorage.removeItem('amg_youtube_access_token');
         localStorage.removeItem('amg_youtube_connected_channel');
         localStorage.removeItem('amg_permanent_channel_ids');

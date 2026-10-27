@@ -171,6 +171,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       : activeChannel?.id;
 
   const blockDetectedCount = useMemo(() => {
+    if (effectiveChannels.length === 0) return 0;
     const calculated = calculateDetectedVideosCount(effectiveVideos, effectiveChannels, profiles, targetChannelFilter);
     if (calculated > 0) return calculated;
     if (effectiveVideos && effectiveVideos.length > 0) {
@@ -189,8 +190,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }, [effectiveVideos, effectiveChannels, profiles, targetChannelFilter, activeChannel]);
 
   const blockCompletedCount = useMemo(() => {
+    if (effectiveChannels.length === 0) return 0;
     return activeBlockVideos.filter((v) => v.managementStatus === 'COMPLETED' || v.isManaged).length;
-  }, [activeBlockVideos]);
+  }, [effectiveChannels, activeBlockVideos]);
 
   // Master Revenue and Monetization Aggregation (Real Data Only)
   const revenueSummary = useMemo(() => {
@@ -231,6 +233,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Reliable Connected Channel Calculation
   const connectedCount = useMemo(() => {
+    if (effectiveChannels.length === 0) return 0;
     const fromProps = effectiveChannels.filter(
       (c) =>
         c.status === 'CONNECTED' ||
@@ -239,8 +242,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         c.status === 'RECONNECT REQUIRED' ||
         c.status === 'TOKEN EXPIRED'
     ).length;
-    return Math.max(fromProps, metrics.connectedChannels || 0);
-  }, [effectiveChannels, metrics.connectedChannels]);
+    return fromProps;
+  }, [effectiveChannels]);
 
   return (
     <div className="space-y-6 overflow-x-hidden max-w-full w-full pb-20 sm:pb-24 lg:pb-8">
@@ -414,7 +417,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-neutral-100">
-            {activeBlockVideos.filter((v) => v.definition === 'hd').length || metrics.hdReady}
+            {effectiveChannels.length === 0 ? 0 : (activeBlockVideos.filter((v) => v.definition === 'hd').length || metrics.hdReady)}
           </div>
           <div className="text-[10px] text-emerald-400 mt-1 font-medium">Transcoding Selesai</div>
         </div>
@@ -429,7 +432,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Calendar className="w-3.5 h-3.5 text-purple-400" />
           </div>
           <div className="text-2xl font-bold text-neutral-100">
-            {activeBlockVideos.filter((v) => v.managementStatus === 'SCHEDULED' || v.scheduledPublishAt).length || metrics.scheduled}
+            {effectiveChannels.length === 0 ? 0 : (activeBlockVideos.filter((v) => v.managementStatus === 'SCHEDULED' || v.scheduledPublishAt).length || metrics.scheduled)}
           </div>
           <div className="text-[10px] text-purple-400 mt-1 font-medium">Slot Masa Depan</div>
         </div>
@@ -443,7 +446,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-[11px] font-medium uppercase tracking-wider">Antrean</span>
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
           </div>
-          <div className="text-2xl font-bold text-neutral-100">{metrics.automationJobs}</div>
+          <div className="text-2xl font-bold text-neutral-100">
+            {effectiveChannels.length === 0 ? 0 : metrics.automationJobs}
+          </div>
           <div className="text-[10px] text-cyan-400 mt-1 font-medium">Tercatat</div>
         </div>
 

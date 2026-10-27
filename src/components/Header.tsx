@@ -83,6 +83,20 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Channel Selector */}
         <div className="flex items-center space-x-1.5 sm:space-x-2 min-w-0 flex-1 max-w-[200px] xs:max-w-[240px] sm:max-w-[320px] md:max-w-md">
+          {activeChannel?.thumbnailUrl ? (
+            <img
+              src={activeChannel.thumbnailUrl}
+              alt={activeChannel.title}
+              className="w-7 h-7 rounded-lg object-cover border border-neutral-700/80 shadow shrink-0"
+              onError={(e) => {
+                (e.target as HTMLElement).style.display = 'none';
+              }}
+            />
+          ) : activeChannel ? (
+            <div className="w-7 h-7 rounded-lg bg-neutral-900 border border-neutral-800 flex items-center justify-center shrink-0 text-xs font-bold text-neutral-400">
+              {activeChannel.title ? activeChannel.title.slice(0, 2).toUpperCase() : 'YT'}
+            </div>
+          ) : null}
           <span className="hidden sm:inline-block text-xs font-semibold text-neutral-400 uppercase tracking-wider shrink-0">
             Channel:
           </span>

@@ -1,0 +1,509 @@
+AMG COMMAND CENTER — SURGICAL FIX: ZERO MOCK DATA, REAL YOUTUBE CHANNEL PROFILE, PERSISTENT DATA, DAN OTOMASI NYATA
+
+INSTRUKSI UTAMA
+
+Lakukan audit dan perbaikan langsung pada project AMG Command Center yang sedang terbuka ini.
+
+JANGAN membuat project baru, jangan mengganti aplikasi dengan prototype, jangan melakukan rewrite arsitektur secara menyeluruh, dan jangan merusak fitur yang sudah berjalan benar.
+
+Lakukan perubahan sekecil mungkin berdasarkan hasil audit source code. Pertahankan struktur, desain, autentikasi, database, API, scheduler, worker, sistem antrean, sinkronisasi, serta aturan keamanan yang sudah benar.
+
+Target akhir: AMG Command Center hanya menampilkan data aktual dari database dan YouTube yang benar-benar terhubung. Tidak boleh ada channel, video, avatar, status, antrean, atau hasil otomasi palsu.
+
+Jangan hanya mengubah UI. Telusuri aliran data dari sumber hingga tampilan, termasuk backend, database, API, autentikasi, worker, dan deployment.
+
+---
+
+P0 — 1. HAPUS SELURUH MOCK DATA, DUMMY DATA, DAN AUTO-SEED PALSU
+
+Audit seluruh source code, bukan hanya file yang disebutkan di bawah.
+
+Periksa setidaknya:
+
+- "dbStore.ts"
+- "initialData.ts"
+- "App.tsx"
+- "youtubeDataService.ts"
+- "ChannelCard.tsx"
+- Seluruh komponen Dashboard, Channel, Video, Scheduler, dan Otomasi
+- Seluruh service API, database, autentikasi OAuth, worker, scheduler, fixture, seed, dan fungsi fallback
+- Semua lokasi lain yang membuat, menyimpan, mengembalikan, atau menampilkan data channel/video.
+
+Cari dan hapus data tiruan berikut serta seluruh mekanisme yang menghasilkannya:
+
+- "Test Ambience Channel"
+- "UC_TEST_WORKER_01"
+- "vid-mut-test-101"
+- "T1 - Suasana Hujan Menenangkan..."
+- Video, channel, thumbnail, avatar, queue job, dan status simulasi lainnya yang digunakan sebagai data runtime.
+
+Ketentuan wajib:
+
+1. State awal untuk instalasi baru yang benar-benar belum mempunyai data harus kosong, tanpa data bawaan palsu.
+2. Jika struktur "amg_channels" dan "amg_videos" masih digunakan, jangan isi dengan seed palsu. Gunakan array kosong hanya pada initial state yang memang tepat untuk arsitektur tersebut.
+3. Jangan membuat channel pengganti otomatis ketika channel terakhir dilepas.
+4. Jangan menyuntikkan channel atau video contoh ketika database kosong, API gagal, token kedaluwarsa, atau proses sinkronisasi gagal.
+5. Hapus fallback yang mengubah kegagalan API menjadi data sampel atau status sukses palsu.
+6. Jangan menganggap ID buatan seperti "UC_TEST_WORKER_01" sebagai channel YouTube resmi.
+7. Jangan menganggap video ID palsu sebagai video YouTube yang valid.
+8. Jangan menghapus data pengujian yang diperlukan untuk automated tests secara membabi buta. Test fixture boleh tetap berada dalam lingkungan pengujian yang terisolasi, tetapi tidak boleh masuk ke runtime produksi.
+9. Periksa migrasi database dan data lama agar seed tidak dibuat ulang setelah refresh, restart server, deployment, atau login ulang.
+10. Jangan sekadar menyembunyikan data palsu di frontend. Hapus sumber injeksi di backend, database initialization, service, dan worker.
+
+Jalankan pencarian menyeluruh terhadap string ID dan nama di atas, kemudian telusuri semua jalur kode yang menghasilkan data default atau fallback.
+
+Penting: jangan menghapus seluruh database produksi hanya untuk menghilangkan mock data. Identifikasi dan hapus hanya record palsu yang dapat dipastikan berasal dari seed atau data uji. Pertahankan data channel resmi, konfigurasi, antrean valid, dan data milik user lain.
+
+Jika record tidak bisa dipastikan palsu atau asli, jangan menghapusnya secara otomatis. Laporkan temuan dan lakukan pemeriksaan sebelum perubahan destruktif.
+
+---
+
+P0 — 2. ZERO STATE YANG BENAR SAAT BELUM ADA CHANNEL
+
+Terapkan aturan zero state berdasarkan data persisten dari user yang sedang login.
+
+Jika user belum pernah menghubungkan channel atau sudah melepas seluruh channel miliknya, tampilkan kondisi berikut:
+
+Komponen| Kondisi
+Channel Terhubung| 0
+Video Terdeteksi| 0
+Sudah Dikelola| 0
+Siap HD| 0
+Terjadwal| 0
+Antrean| 0, jika memang tidak ada job aktif milik user
+Header dropdown channel| Belum ada channel terhubung
+Tab Video| Belum ada channel terhubung. Silakan tautkan channel terlebih dahulu.
+Tab Otomasi| State siaga, tanpa job palsu
+Dashboard| Empty state yang bersih dan konsisten
+
+Jangan mengisi statistik dengan angka hardcoded. Semua angka harus dihitung dari data aktual sesuai definisi status yang sudah ada di project.
+
+Bedakan kondisi berikut dengan jelas:
+
+- Belum ada channel.
+- Channel ada tetapi belum selesai disinkronkan.
+- Sinkronisasi sedang berlangsung.
+- Sinkronisasi gagal karena jaringan, OAuth, izin API, atau error server.
+- Channel terhubung tetapi memang belum memiliki video yang memenuhi kriteria.
+- Data lama tersedia tetapi belum berhasil diperbarui.
+
+Jangan menampilkan "0 video" seolah-olah sinkronisasi sukses jika permintaan YouTube sebenarnya gagal.
+
+Aturan saat channel dilepas
+
+Saat user melakukan unlink terhadap satu channel:
+
+1. Validasi autentikasi dan kepemilikan channel di backend.
+2. Hapus atau nonaktifkan hanya koneksi channel yang secara eksplisit dilepas sesuai model data yang digunakan.
+3. Bersihkan referensi channel aktif milik user tersebut jika menunjuk ke channel yang dilepas.
+4. Batalkan atau hentikan job yang belum dieksekusi untuk channel tersebut sesuai aturan worker.
+5. Pastikan worker tidak lagi memproses channel yang telah dilepas.
+6. Pertahankan data milik channel lain dan user lain.
+7. Jangan menghapus konfigurasi atau riwayat yang wajib dipertahankan oleh kebijakan aplikasi.
+8. Setelah seluruh channel milik user dilepas, tampilkan zero state yang benar.
+9. Setelah refresh dan login ulang, kondisi harus tetap konsisten dengan database.
+
+"localStorage" tidak boleh menjadi satu-satunya sumber kebenaran jika aplikasi sudah menggunakan backend/database.
+
+Jika project memang menyimpan cache lokal, bersihkan atau invalidasi hanya key dan cache yang terkait dengan user/channel yang dilepas. Jangan menjalankan "localStorage.clear()" secara membabi buta karena dapat menghapus konfigurasi atau sesi lain yang masih diperlukan.
+
+Jangan menghapus seluruh data OWNER ketika USER melepas channel, atau sebaliknya.
+
+---
+
+P0 — 3. FOTO PROFIL CHANNEL WAJIB MENGGUNAKAN AVATAR ASLI YOUTUBE
+
+Perbaiki proses pengambilan dan penyimpanan profil channel saat OAuth berhasil.
+
+Gunakan respons resmi YouTube Data API v3, termasuk "channels.list" dengan bagian profil yang diperlukan, seperti "snippet".
+
+Ambil avatar berdasarkan prioritas:
+
+1. "snippet.thumbnails.high.url"
+2. "snippet.thumbnails.medium.url"
+3. "snippet.thumbnails.default.url"
+
+Jika ukuran tertentu tidak tersedia, gunakan ukuran berikutnya yang benar-benar tersedia.
+
+Simpan URL avatar aktual ke field yang sesuai dengan skema aplikasi saat ini, misalnya "avatarUrl" atau "thumbnailUrl". Jangan membuat field duplikat jika skema sudah memiliki field kanonis.
+
+Pastikan:
+
+- URL berasal dari respons YouTube untuk channel yang sedang diotorisasi.
+- Identitas channel diverifikasi menggunakan channel ID resmi.
+- Nama, ID, dan avatar berasal dari channel yang sama.
+- Avatar disimpan secara persisten.
+- Avatar tetap tampil setelah refresh, logout-login, dan deployment.
+- Jika URL berubah, sinkronisasi dapat memperbaruinya.
+- Jika API gagal, pertahankan avatar terakhir yang valid dan jangan menggantinya dengan avatar palsu.
+- Jika avatar belum pernah tersedia, gunakan placeholder netral yang jelas bukan foto profil YouTube resmi.
+
+Tampilkan avatar asli pada:
+
+- "ChannelCard.tsx"
+- Header dan dropdown channel
+- Dashboard
+- Daftar channel dan seluruh komponen lain yang menampilkan identitas channel.
+
+Gunakan elemen gambar yang sesuai dengan framework dan standar keamanan project, seperti "<img>" jika aplikasi menggunakan React. Tambahkan penanganan loading/error dan atribut aksesibilitas yang diperlukan.
+
+Hapus penggunaan ikon TV abu-abu, gambar ayam lokal, gambar channel contoh, atau gambar statis lain yang dipakai seolah-olah merupakan avatar resmi channel.
+
+Jangan mengganti avatar dengan gambar lain hanya karena URL YouTube gagal dimuat. Tangani kegagalan secara eksplisit tanpa mengarang profil.
+
+---
+
+P0 — 4. KONEKSI YOUTUBE HARUS MENGHASILKAN DATA CHANNEL ASLI
+
+Saat OAuth berhasil, lakukan validasi channel dan sinkronisasi menggunakan YouTube Data API v3 yang benar-benar tersedia.
+
+Gunakan alur API yang sesuai dengan kebutuhan aplikasi, misalnya:
+
+- "channels.list" untuk identitas, profil, dan uploads playlist.
+- "playlistItems.list" untuk membaca item playlist uploads.
+- "videos.list" untuk mengambil detail video yang diperlukan.
+
+Gunakan pagination hingga seluruh halaman yang relevan selesai dibaca. Jangan berhenti pada 50 item pertama jika masih terdapat halaman berikutnya.
+
+Ketentuan:
+
+1. Pastikan channel ID yang disimpan adalah ID resmi yang dikembalikan YouTube.
+2. Jangan mengandalkan nama channel sebagai identitas unik.
+3. Normalisasi format ID hanya jika format tersebut memang sudah digunakan oleh arsitektur project, tanpa merusak ID kanonis.
+4. Simpan data berdasarkan identitas user dan channel yang benar.
+5. Gunakan upsert atau mekanisme persistensi setara agar sinkronisasi berulang tidak menghasilkan duplikasi.
+6. Jangan mengganti seluruh data dengan hanya hasil halaman pertama.
+7. Jangan menghapus video yang tersimpan hanya karena satu permintaan API gagal.
+8. Jangan menganggap video yang tidak muncul pada satu respons gagal sebagai bukti bahwa video tersebut telah dihapus.
+9. Pertahankan data valid terakhir jika sinkronisasi gagal.
+10. Catat waktu sinkronisasi terakhir, status sinkronisasi, dan error yang benar-benar terjadi sesuai struktur aplikasi.
+
+Jika API mengembalikan "401", "403", quota error, timeout, atau error lain, tampilkan status yang sesuai. Jangan mengubah error menjadi sinkronisasi sukses dengan jumlah video nol.
+
+Jika token OAuth kedaluwarsa atau izin tidak memadai, minta pengguna melakukan reconnect atau otorisasi ulang sesuai alur autentikasi yang tersedia. Jangan menghapus record channel permanen hanya karena token tidak valid.
+
+Sinkronisasi otomatis
+
+Ketika channel berhasil ditautkan, jalankan sinkronisasi profil dan daftar video secara otomatis melalui service sinkronisasi yang sudah ada.
+
+Sinkronisasi boleh dipicu oleh:
+
+- OAuth berhasil.
+- Event koneksi channel berhasil disimpan.
+- Refresh data dashboard bila memang diperlukan.
+- Mekanisme refresh berkala yang sudah digunakan oleh aplikasi.
+
+Hindari menjalankan permintaan sinkronisasi ganda secara bersamaan. Gunakan mekanisme deduplikasi, status sinkronisasi, atau locking yang sesuai dengan arsitektur project.
+
+Tombol sinkronisasi manual boleh tetap tersedia sebagai fungsi tambahan. Namun, user tidak boleh diwajibkan menekan tombol manual hanya agar data awal muncul setelah channel berhasil dihubungkan.
+
+Penting: sinkronisasi otomatis hanya membaca dan memperbarui data aktual. Sinkronisasi tidak boleh langsung mengubah judul, memasang thumbnail, atau menjadwalkan publikasi semua video tanpa melewati aturan eligibility dan mekanisme otomasi AMG yang sudah ada.
+
+---
+
+P0 — 5. JANGAN MERUSAK ATURAN ELIGIBILITY DAN BATAS PENJADWALAN AMG
+
+Sebelum mengubah logika video, audit dan pertahankan service eligibility, schedule reconciliation, dan aturan manajemen video yang sudah ada.
+
+Jangan membuat filter kandidat baru yang bertentangan dengan service kanonis.
+
+Pertahankan ketentuan berikut:
+
+1. Hanya video dari channel yang benar-benar dimiliki atau diotorisasi untuk dikelola oleh user terkait yang boleh diproses.
+2. Status privasi video harus berasal dari data YouTube aktual.
+3. Video private atau video dengan judul placeholder, seperti "Salinan dari A" dan "Copy of A", bukan otomatis berarti boleh diproses.
+4. Video hanya menjadi kandidat jika seluruh aturan eligibility AMG yang berlaku telah terpenuhi.
+5. Periksa apakah judul, thumbnail, atau jadwal perlu diperbaiki sesuai kriteria yang sudah ada.
+6. Hormati batas "latestScheduledPublishAt" yang valid untuk channel dan blok terkait.
+7. Jangan menggunakan tanggal batas yang di-hardcode, termasuk tanggal contoh seperti "2027-01-03".
+8. Jangan memasukkan kembali video yang sudah dijadwalkan secara valid atau berada di luar rentang pengelolaan.
+9. Jangan memproses video yang sudah berada dalam queue, sedang berjalan, atau sudah selesai, kecuali aturan retry/reconciliation secara eksplisit mengizinkannya.
+10. Setiap channel/blok harus memakai konfigurasi Master Title, Master Thumbnail, dan jadwal miliknya sendiri.
+11. Jangan mengambil konfigurasi dari channel atau blok lain.
+12. Jangan menganggap semua video private sebagai kandidat.
+13. Jangan mengubah video publik atau video lain di luar cakupan manajemen yang disetujui oleh aturan AMG.
+
+Jangan menghapus perlindungan yang sudah ada demi membuat jumlah kandidat terlihat lebih banyak.
+
+---
+
+P0 — 6. WORKER OTOMASI HANYA BOLEH MEMPROSES CHANNEL RESMI YANG VALID
+
+Audit jalur eksekusi penuh:
+
+Tombol otomasi → API backend → autentikasi → validasi ownership → eligibility → antrean persisten → worker → YouTube Data API → rekonsiliasi hasil → dashboard.
+
+Worker hanya boleh menjalankan pekerjaan jika:
+
+- Channel terdaftar dan masih terhubung dalam database.
+- Channel ID terverifikasi sebagai channel YouTube yang benar.
+- User memiliki hak mengelola channel tersebut.
+- OAuth token valid dan memiliki scope yang diperlukan.
+- Video benar-benar berasal dari channel tersebut.
+- Job memenuhi aturan eligibility AMG.
+- Job belum selesai atau tidak sedang diproses oleh worker lain.
+- Konfigurasi judul, thumbnail, dan jadwal valid.
+- Semua prasyarat operasi yang diperlukan telah terpenuhi.
+
+Jangan mengandalkan pemeriksaan frontend saja. Seluruh pemeriksaan ownership dan izin harus dilakukan di backend.
+
+Jika tidak ada channel resmi yang terhubung, worker tidak boleh mengeksekusi job channel/video apa pun.
+
+Jika token invalid atau channel sudah dilepas:
+
+- Hentikan pemrosesan yang terdampak.
+- Tandai status job sesuai hasil sebenarnya.
+- Simpan alasan kegagalan.
+- Jangan menghapus data channel lain.
+- Jangan melaporkan keberhasilan palsu.
+
+Jangan pernah mengizinkan data test, dummy ID, atau queue job palsu masuk ke worker produksi.
+
+---
+
+P0 — 7. EKSEKUSI YOUTUBE HARUS NYATA DAN DAPAT DIVERIFIKASI
+
+Pertahankan fitur otomasi yang sudah ada dan pastikan seluruh operasi benar-benar dijalankan menggunakan YouTube Data API v3.
+
+Untuk perubahan metadata:
+
+- Gunakan "videos.update" dengan metode HTTP dan format payload yang sesuai dengan dokumentasi resmi YouTube Data API v3.
+- Pertahankan metadata yang tidak sedang diubah.
+- Jangan mengirim bagian metadata kosong yang dapat menghapus data tanpa sengaja.
+- Pastikan judul dan deskripsi mengikuti aturan API yang berlaku.
+
+Untuk thumbnail:
+
+- Gunakan "thumbnails.set" dengan metode HTTP dan format unggahan binary/multipart yang sesuai.
+- Pastikan worker benar-benar dapat mengakses file thumbnail.
+- Jangan menganggap URL lokal, path komputer, atau file frontend otomatis dapat diakses oleh backend.
+- Validasi file, format, ukuran, dan respons API.
+- Jangan melaporkan thumbnail berhasil jika upload atau respons API gagal.
+
+Untuk jadwal publikasi:
+
+- Gunakan field dan metode API yang sesuai dengan dokumentasi YouTube.
+- Pastikan video berada pada status privasi yang sesuai dengan persyaratan penjadwalan.
+- Gunakan tanggal dan zona waktu dari konfigurasi jadwal yang valid.
+- Jangan mengarang tanggal atau mengasumsikan jadwal berhasil hanya karena job telah dibuat.
+
+Jangan membuat endpoint, metode HTTP, payload, atau field API yang tidak didukung dokumentasi resmi.
+
+Konsistensi status
+
+Gunakan status yang membedakan tahapan sebenarnya, misalnya:
+
+- "PENDING"
+- "QUEUED"
+- "RUNNING"
+- "SUCCESS"
+- "PARTIAL_SUCCESS"
+- "FAILED"
+- "RETRYING"
+
+Sesuaikan dengan enum/status yang sudah digunakan di project; jangan mengganti nama status secara menyeluruh jika tidak diperlukan.
+
+"SUCCESS" hanya boleh dicatat setelah operasi yang diwajibkan berhasil dan hasilnya sudah disimpan.
+
+Jika judul berhasil tetapi thumbnail gagal, catat hasil parsial atau status kegagalan yang sesuai. Jangan menyatakan semua operasi sukses.
+
+Jika API berhasil tetapi penyimpanan hasil di backend gagal, lakukan rekonsiliasi yang aman dan jangan membuat klaim keberhasilan yang tidak dapat diverifikasi.
+
+Gunakan retry yang idempoten, backoff, logging, dan pencegahan duplikasi sesuai arsitektur yang ada.
+
+Batch dan skala
+
+Pertahankan kemampuan pemrosesan batch hingga 50 video per batch hanya jika sesuai dengan batas dan implementasi aktual yang sudah ada.
+
+Jangan mengirim permintaan paralel tanpa batas. Hormati quota YouTube, rate limit, kapasitas worker, retry, dan pembatasan yang sudah diterapkan.
+
+Untuk ratusan atau ribuan channel:
+
+- Proses berdasarkan user, channel, dan job yang terisolasi.
+- Gunakan antrean persisten.
+- Cegah satu channel mengganggu channel lainnya.
+- Pastikan kegagalan satu job tidak menyebabkan seluruh batch diklaim berhasil.
+- Jangan mengklaim sistem siap untuk skala besar sebelum worker, penyimpanan, dan deployment benar-benar mendukungnya.
+
+Jangan mengaktifkan otomasi massal hanya untuk membuktikan tombol berfungsi. Validasi satu channel dan satu video yang aman terlebih dahulu.
+
+---
+
+P0 — 8. DATABASE, PERSISTENSI, DAN ISOLASI OWNER/USER
+
+Audit sumber kebenaran data yang sebenarnya. Jika project sudah memakai backend/database, jangan memindahkan sumber kebenaran ke "localStorage".
+
+Pertahankan aturan:
+
+- Hanya role yang sudah ada dan diizinkan: "OWNER" dan "USER".
+- Jangan membuat role "ADMIN".
+- Jangan mengubah mekanisme login yang sudah benar.
+- Data channel OWNER tidak boleh masuk ke dashboard USER.
+- USER hanya dapat mengakses channel, video, konfigurasi, dan job miliknya.
+- USER baru memulai dengan data kosong miliknya sendiri.
+- OWNER tidak boleh kehilangan channel atau konfigurasi karena user lain mendaftar, menghubungkan channel, atau melepas channel.
+- Semua query, update, delete, dan job harus divalidasi berdasarkan identitas dan ownership di backend.
+
+Pertahankan identitas kanonis channel dan video. Jangan menggunakan "deviceId" sebagai "userId", "channelId", atau "blockId".
+
+Pastikan:
+
+- Channel tetap tersimpan setelah refresh.
+- Channel tetap tersimpan setelah logout-login.
+- Channel tidak hilang saat server restart atau deployment.
+- Data baru ditambahkan atau di-upsert, bukan mengganti seluruh data tanpa alasan.
+- Token kedaluwarsa tidak menghapus channel.
+- Hanya tindakan unlink yang sah yang menghapus koneksi channel terkait.
+
+Jika penyimpanan saat ini memakai file lokal atau memori proses, periksa apakah penyimpanan tersebut benar-benar persisten di deployment produksi. Jangan menganggap filesystem lokal atau memori worker Vercel sebagai database permanen.
+
+Jika ada prasyarat infrastruktur yang belum tersedia, laporkan dengan jelas. Jangan membuat tampilan palsu seolah-olah database atau worker produksi sudah aktif.
+
+---
+
+P1 — 9. DASHBOARD HARUS MENAMPILKAN STATUS AKTUAL
+
+Pastikan angka dan status pada Dashboard, Channel, Video, Scheduler, dan Otomasi berasal dari sumber data kanonis yang sama.
+
+Jangan menghitung data berbeda di setiap komponen dengan aturan yang saling bertentangan.
+
+Definisikan setiap metrik berdasarkan status aktual dan aturan yang sudah ada. Jangan mengarang definisi "Sudah Dikelola", "Siap HD", "Terjadwal", atau "Antrean" hanya untuk mengisi kartu statistik.
+
+Saat sinkronisasi atau otomasi berjalan:
+
+- Tampilkan status proses yang sebenarnya.
+- Perbarui UI setelah perubahan backend terkonfirmasi.
+- Gunakan invalidasi cache, refetch, atau mekanisme state yang sesuai dengan arsitektur saat ini.
+- Jangan mengandalkan reload halaman sebagai satu-satunya mekanisme konsistensi.
+- Jangan menaikkan angka hanya karena tombol ditekan.
+- Jangan mengurangi angka hanya karena permintaan API gagal.
+- Jangan menampilkan notifikasi sukses sebelum backend memberikan hasil sukses yang nyata.
+
+Jika tidak ada data, tampilkan zero state. Jika data belum dapat dipastikan karena error, tampilkan status error atau data terakhir yang valid dengan penanda yang jelas.
+
+---
+
+P0 — 10. TESTING DAN VERIFIKASI WAJIB
+
+Tambahkan atau perbarui pengujian tanpa menghapus test yang sudah valid.
+
+A. Mock data dan zero state
+
+- Instalasi baru tidak menghasilkan channel atau video dummy.
+- Tidak ada "Test Ambience Channel" atau "UC_TEST_WORKER_01" pada runtime.
+- Tidak ada "vid-mut-test-101" pada runtime.
+- Channel terakhir dilepas → dashboard user menampilkan zero state.
+- Refresh dan login ulang tidak memunculkan mock data kembali.
+- Error API tidak membuat data sampel.
+- Data milik user lain tidak ikut terhapus.
+
+B. Avatar
+
+- Avatar berasal dari respons YouTube yang benar.
+- Prioritas high → medium → default berfungsi.
+- Avatar tersimpan dan bertahan setelah refresh.
+- Jika avatar tidak tersedia, placeholder netral digunakan.
+- Avatar channel tidak tertukar antar-channel.
+
+C. Sinkronisasi
+
+- Sinkronisasi berjalan setelah koneksi berhasil.
+- Pagination bekerja.
+- Tidak ada duplikasi setelah sinkronisasi berulang.
+- Kegagalan API mempertahankan data valid terakhir.
+- Error 401/403 tidak dilaporkan sebagai nol video yang sukses.
+- Tombol manual tetap berfungsi jika memang sudah tersedia.
+
+D. Eligibility dan scheduler
+
+- Batas jadwal menggunakan data aktual per channel/blok.
+- Tidak ada tanggal batas yang di-hardcode.
+- Video yang sudah dijadwalkan dengan valid tidak diproses ulang tanpa alasan.
+- Video private/placeholder tidak otomatis menjadi kandidat tanpa memenuhi seluruh aturan.
+- Konfigurasi Master Title dan Master Thumbnail tidak tertukar antar-channel.
+
+E. Worker dan YouTube
+
+- Tanpa channel resmi → tidak ada eksekusi.
+- Tanpa izin OAuth yang valid → tidak ada klaim sukses.
+- Ownership divalidasi di backend.
+- Judul, thumbnail, dan jadwal diverifikasi secara terpisah.
+- Kegagalan parsial ditampilkan secara jujur.
+- Job tidak dieksekusi dua kali akibat race condition.
+- Status dashboard cocok dengan hasil backend.
+- Semua operasi yang mengubah video menggunakan API YouTube yang sah.
+
+F. Keamanan dan persistensi
+
+- OWNER dan USER tetap terisolasi.
+- Channel tidak hilang setelah refresh, login ulang, dan restart yang relevan.
+- Unlink satu channel tidak menghapus channel lain.
+- Tidak ada secret OAuth atau credential server yang terekspos di frontend.
+- Queue dan worker produksi menggunakan penyimpanan serta mekanisme eksekusi yang benar-benar tersedia.
+
+Jalankan test suite yang relevan, TypeScript, lint, dan production build sesuai konfigurasi project. Jangan menyatakan test lulus jika belum dijalankan.
+
+Jika memungkinkan, lakukan pengujian API langsung hanya dengan otorisasi yang memang tersedia. Jangan membuat token palsu atau mengklaim sudah menguji YouTube live jika token tidak tersedia.
+
+---
+
+ATURAN PELAKSANAAN
+
+1. Audit source code dan petakan sumber mock data terlebih dahulu.
+2. Identifikasi sumber kebenaran untuk channel, video, profil, queue, scheduler, dan worker.
+3. Tunjukkan file serta fungsi yang benar-benar perlu diubah.
+4. Terapkan perbaikan secara bertahap, mulai dari penghapusan mock runtime dan zero state.
+5. Lanjutkan ke avatar asli, sinkronisasi otomatis, lalu validasi worker dan operasi YouTube.
+6. Pertahankan semua fitur yang sudah sesuai.
+7. Jangan melakukan refactor besar tanpa bukti bahwa hal tersebut diperlukan.
+8. Jangan menghapus atau mereset database produksi untuk menyederhanakan implementasi.
+9. Jangan mengubah tampilan agar terlihat sukses jika backend belum sukses.
+10. Jangan membuat mock channel atau mock video baru untuk menggantikan data yang dihapus.
+11. Jangan menjalankan operasi destruktif atau otomasi massal tanpa validasi.
+12. Jangan berhenti setelah mengubah UI. Pastikan aliran data backend dan persistensi benar-benar diperiksa.
+13. Jika ada perubahan skema database, gunakan migrasi yang aman dan kompatibel dengan data valid yang sudah ada.
+14. Setelah setiap kelompok perubahan, jalankan pengujian relevan dan periksa diff.
+15. Jangan menimpa perubahan pengguna yang tidak terkait dengan masalah ini.
+
+FORMAT LAPORAN AKHIR
+
+Setelah selesai, berikan laporan berdasarkan bukti:
+
+1. COMPLETED AND TESTED
+
+Daftar perubahan yang benar-benar diterapkan dan pengujiannya benar-benar lulus.
+
+2. IMPLEMENTED BUT NOT LIVE-VERIFIED
+
+Perubahan kode yang sudah dibuat tetapi belum diverifikasi terhadap YouTube API live atau lingkungan produksi.
+
+3. BLOCKED
+
+Masalah yang membutuhkan konfigurasi, credential, scope OAuth, database, worker, cron, atau infrastruktur yang belum tersedia.
+
+4. NOT IMPLEMENTED
+
+Pekerjaan yang belum selesai. Jelaskan alasan dan file terkait.
+
+5. FILES CHANGED
+
+Daftar file yang diubah beserta alasan perubahan.
+
+6. TEST RESULTS
+
+Tampilkan hasil aktual untuk test suite, TypeScript, lint, dan production build. Jangan mengarang angka.
+
+7. LIVE VALIDATION CHECKLIST
+
+Berikan langkah aman untuk memverifikasi:
+
+- Zero state ketika tidak ada channel.
+- Avatar resmi YouTube.
+- Sinkronisasi otomatis setelah channel dihubungkan.
+- Persistensi setelah refresh.
+- Tidak ada data palsu setelah unlink.
+- Eksekusi otomasi yang benar-benar mengubah YouTube.
+
+KRITERIA SELESAI: tidak ada mock runtime; zero state akurat; profil channel berasal dari YouTube; sinkronisasi otomatis memakai data aktual; data persisten dan terisolasi; worker hanya memproses channel resmi yang valid; status UI mencerminkan hasil operasi nyata; dan tidak ada fitur lama yang rusak.
+
+Mulai dengan audit dan perbaikan pada project yang sedang terbuka ini. Jangan membuat project baru.

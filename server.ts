@@ -28,6 +28,7 @@ import {
   validateBeforeMutation,
 } from './server/eligibilityService.js';
 import { phase3Engine } from './server/phase3Engine.js';
+import { workerService } from './server/workerService.js';
 import { authService } from './server/authService.js';
 import type { AutomationBatch, ManagedVideo } from './src/types/index.js';
 
@@ -1227,6 +1228,12 @@ const handleUnlinkChannelPermanently = (targetId: string) => {
   youtubeAuthService.revokeCredentials(targetId);
   if (targetId.startsWith('chan-')) {
     youtubeAuthService.revokeCredentials(targetId.replace('chan-', ''));
+  }
+
+  // Release any active worker lock
+  workerService.releaseWorkerLock(targetId);
+  if (targetId.startsWith('chan-')) {
+    workerService.releaseWorkerLock(targetId.replace('chan-', ''));
   }
 
   dbStore.logActivity({

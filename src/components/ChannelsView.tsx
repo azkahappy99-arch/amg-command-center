@@ -949,10 +949,13 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                                 src={channel.thumbnailUrl}
                                 alt={channel.title}
                                 className="w-12 h-12 rounded-xl object-cover border border-neutral-700/80 shadow shrink-0"
+                                onError={(e) => {
+                                  (e.target as HTMLElement).style.display = 'none';
+                                }}
                               />
                             ) : (
-                              <div className="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700/80 flex items-center justify-center text-neutral-400 shrink-0">
-                                <Tv className="w-6 h-6 text-neutral-500" />
+                              <div className="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700/80 flex items-center justify-center text-sm font-bold text-neutral-300 shrink-0">
+                                {channel.title ? channel.title.slice(0, 2).toUpperCase() : 'YT'}
                               </div>
                             )}
                             <div className="min-w-0 flex-1">

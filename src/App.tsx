@@ -44,7 +44,7 @@ import {
   ActivityLog,
   AutomationBatch,
 } from './types/index.ts';
-import { api, sanitizeChannel, isRealVideo, isRealThumbnail, isRealTitle } from './services/api.ts';
+import { api, sanitizeChannel, isRealChannel, isRealVideo, isRealThumbnail, isRealTitle } from './services/api.ts';
 import { initialChannels, initialVideos } from './services/initialSeedData.ts';
 import {
   authorizeAndFetchYouTubeChannel,
@@ -81,13 +81,10 @@ function getStoredChannels(): Channel[] {
         const clean = parsed
           .filter(
             (c: Channel) =>
-              !c.isSeeded &&
+              isRealChannel(c) &&
               !isUnlinked(c.id) &&
               !isUnlinked(c.youtubeChannelId) &&
-              !isUnlinked(`chan-${c.youtubeChannelId}`) &&
-              !c.title?.includes('[DEMO FIXTURE]') &&
-              !c.title?.includes('Demo Fixture') &&
-              !c.title?.toLowerCase().includes('fixture')
+              !isUnlinked(`chan-${c.youtubeChannelId}`)
           )
           .map(sanitizeChannel);
         return clean;
@@ -171,12 +168,12 @@ export default function App() {
     return {
       metrics: {
         totalChannels: initialChans.length,
-        connectedChannels: connCount > 0 ? connCount : (initialChans.length > 0 ? 1 : 0),
-        newVideos: initialVids.length,
-        hdReady: initialVids.filter((v) => v.definition === 'hd').length,
-        processing: initialVids.filter((v) => v.managementStatus === 'PROCESSING').length,
-        scheduled: initialVids.filter((v) => v.managementStatus === 'SCHEDULED').length,
-        completedVideos: initialVids.filter((v) => v.managementStatus === 'COMPLETED').length,
+        connectedChannels: connCount,
+        newVideos: initialChans.length === 0 ? 0 : initialVids.length,
+        hdReady: initialChans.length === 0 ? 0 : initialVids.filter((v) => v.definition === 'hd').length,
+        processing: initialChans.length === 0 ? 0 : initialVids.filter((v) => v.managementStatus === 'PROCESSING').length,
+        scheduled: initialChans.length === 0 ? 0 : initialVids.filter((v) => v.managementStatus === 'SCHEDULED').length,
+        completedVideos: initialChans.length === 0 ? 0 : initialVids.filter((v) => v.managementStatus === 'COMPLETED').length,
         automationJobs: 0,
         errors: 0,
       },
@@ -275,16 +272,22 @@ export default function App() {
       if (statsData) {
         setStats((prev) => {
           const currentChans = cleanChannels.length > 0 ? cleanChannels : getStoredChannels();
-          const currentVids = getStoredVideos(targetChanId || selectedChannelId);
+          const currentVids = currentChans.length === 0 ? [] : getStoredVideos(targetChanId || selectedChannelId);
           return {
             metrics: {
               ...statsData.metrics,
-              totalChannels: statsData.metrics.totalChannels > 0 ? statsData.metrics.totalChannels : currentChans.length,
+              totalChannels: currentChans.length === 0 ? 0 : (statsData.metrics.totalChannels > 0 ? statsData.metrics.totalChannels : currentChans.length),
               connectedChannels:
-                statsData.metrics.connectedChannels > 0
-                  ? statsData.metrics.connectedChannels
-                  : currentChans.filter((c) => c.status === 'CONNECTED' || c.status === 'Connected').length,
-              newVideos: Math.max(statsData.metrics.newVideos, currentVids.length),
+                currentChans.length === 0
+                  ? 0
+                  : (statsData.metrics.connectedChannels > 0
+                      ? statsData.metrics.connectedChannels
+                      : currentChans.filter((c) => c.status === 'CONNECTED' || c.status === 'Connected').length),
+              newVideos: currentChans.length === 0 ? 0 : Math.max(statsData.metrics.newVideos, currentVids.length),
+              hdReady: currentChans.length === 0 ? 0 : statsData.metrics.hdReady,
+              scheduled: currentChans.length === 0 ? 0 : statsData.metrics.scheduled,
+              completedVideos: currentChans.length === 0 ? 0 : statsData.metrics.completedVideos,
+              automationJobs: currentChans.length === 0 ? 0 : statsData.metrics.automationJobs,
             },
             actionRequired: statsData.actionRequired || prev.actionRequired,
           };
