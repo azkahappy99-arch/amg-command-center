@@ -14,7 +14,8 @@
     "test:candidacy": "tsx test/youtubeSyncAndCandidacy.test.ts",
     "test:auth": "tsx test/authAutoRefresh.test.ts",
     "test:persistence": "tsx test/offlineFirstPersistence.test.ts",
-    "test": "tsx test/scheduler.test.ts && tsx test/youtubeSyncAndCandidacy.test.ts && tsx test/authAutoRefresh.test.ts && tsx test/offlineFirstPersistence.test.ts"
+    "test:mutation": "tsx test/realYoutubeMutationAndWorkerLock.test.ts",
+    "test": "tsx test/scheduler.test.ts && tsx test/youtubeSyncAndCandidacy.test.ts && tsx test/authAutoRefresh.test.ts && tsx test/offlineFirstPersistence.test.ts && tsx test/realYoutubeMutationAndWorkerLock.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

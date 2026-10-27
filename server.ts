@@ -3557,6 +3557,35 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       `[handleStartBatchAutomation] Menjalankan Kloter 1 sebanyak ${planToExecute.length} video (dari total ${allCandidates.length} video kandidat di dbStore internal). Sisa ${Math.max(0, allCandidates.length - planToExecute.length)} video akan ditarik otomatis oleh Phase 3 Worker secara berantai.`
     );
 
+    // Kunci Tunggal Antrean (Single Active Worker & Anti-Duplicate Batch):
+    // Jangan pernah membuat batch baru jika batch sebelumnya masih dalam status 'RUNNING' pada channel ini!
+    const existingRunningBatch = Array.from(dbStore.automationBatches.values()).find(
+      (b) =>
+        (b.channelId === channel.id || b.channelId === channel.youtubeChannelId || b.channelId === channelId) &&
+        b.status === 'running' &&
+        b.completedCount < b.detectedCount
+    );
+
+    if (existingRunningBatch) {
+      const lastHb = existingRunningBatch.lastHeartbeatAt
+        ? new Date(existingRunningBatch.lastHeartbeatAt).getTime()
+        : new Date(existingRunningBatch.startedAt).getTime();
+      const isStale = Date.now() - lastHb > 15 * 60 * 1000;
+      if (!isStale) {
+        console.log(
+          `[handleStartBatchAutomation] Kunci Antrean Tunggal: Batch ${existingRunningBatch.batchNumber} sedang aktif (${existingRunningBatch.completedCount}/${existingRunningBatch.detectedCount} selesai). Mengunci single-queue state tanpa membuat batch duplikat.`
+        );
+        return res.status(200).json({
+          success: true,
+          batchId: existingRunningBatch.id,
+          batch: existingRunningBatch,
+          totalEnrolled: existingRunningBatch.detectedCount,
+          kloterSize: existingRunningBatch.detectedCount,
+          message: `Batch ${existingRunningBatch.batchNumber} sedang berjalan aktif (${existingRunningBatch.completedCount}/${existingRunningBatch.detectedCount} video selesai). Mengunci single-worker queue.`,
+        });
+      }
+    }
+
     batchId = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
     const batch: AutomationBatch = {
       id: batchId,
@@ -3847,7 +3876,44 @@ app.post('/api/automation/batches/:id/delete', handleDeleteBatchById);
 // 11. QUEUE & JOBS
 // ==========================================
 app.get('/api/queue', (req: Request, res: Response) => {
-  const jobs = Array.from(dbStore.automationJobs.values()).reverse();
+  // Sync in-memory Phase 3 queue jobs into persistent dbStore.automationJobs
+  try {
+    const memoryJobs = phase3Engine.getQueueJobs();
+    for (const mj of memoryJobs) {
+      const v = dbStore.getVideoById(mj.videoId) || dbStore.videos.get(mj.videoId);
+      const ch = dbStore.getChannelByIdOrTitle(mj.channelId) || dbStore.getChannelByYoutubeId(mj.channelId);
+      const existing = dbStore.automationJobs.get(mj.id);
+      if (!existing) {
+        dbStore.automationJobs.set(mj.id, {
+          id: mj.id,
+          batchId: mj.batchId,
+          videoId: mj.videoId,
+          videoTitle: mj.payload?.title || v?.titleAssigned || v?.titleBefore || 'Video YouTube',
+          channelId: mj.channelId,
+          channelTitle: ch?.title || mj.channelId,
+          jobType: 'apply_title',
+          status: (mj.status.toLowerCase() as any) || 'pending',
+          startedAt: mj.createdAt,
+          retryCount: mj.retryCount || 0,
+        });
+      } else {
+        existing.status = (mj.status.toLowerCase() as any) || existing.status;
+        if (mj.lastError) existing.lastError = mj.lastError;
+        if (ch && !existing.channelTitle) existing.channelTitle = ch.title;
+        dbStore.automationJobs.set(mj.id, existing);
+      }
+    }
+  } catch (syncErr) {
+    console.warn('[Queue Route] Job sync notice:', syncErr);
+  }
+
+  const jobs = Array.from(dbStore.automationJobs.values()).map((j) => {
+    if (!j.channelTitle) {
+      const ch = dbStore.getChannelByIdOrTitle(j.channelId) || dbStore.getChannelByYoutubeId(j.channelId);
+      if (ch) j.channelTitle = ch.title;
+    }
+    return j;
+  }).reverse();
   res.json(jobs);
 });
 

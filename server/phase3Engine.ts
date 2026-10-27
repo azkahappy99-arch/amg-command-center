@@ -2,6 +2,7 @@ import { dbStore } from './db.js';
 import { eligibilityService } from './eligibilityService.js';
 import { youtubeService } from './youtubeService.js';
 import { youtubeDataService } from './youtubeDataService.js';
+import { workerService } from './workerService.js';
 import { Phase3AutomationJob, MetadataSnapshot, AutomationJob, AutomationBatch, ManagedVideo } from '../src/types/index.js';
 
 export class Phase3Engine {
@@ -11,6 +12,10 @@ export class Phase3Engine {
   private lastHeartbeatAt: number = Date.now();
   private retryTimer: NodeJS.Timeout | null = null;
   private lastActiveChannelId?: string;
+
+  public getQueueJobs(): Phase3AutomationJob[] {
+    return this.queue;
+  }
 
   public async enqueueBatchJobs(
     batchId: string,
@@ -1142,23 +1147,11 @@ export class Phase3Engine {
       };
     }
 
-    let thumbUpdated = false;
-
     try {
-      // A. YouTube Title & Schedule Metadata (16:00 WIB)
-      await youtubeService.updateVideoMetadata(job.videoId, {
-        title: job.payload.title,
-        description: job.payload.description,
-        tags: job.payload.tags,
-        scheduledPublishAt: job.payload.scheduledPublishAt,
-      });
-
-      // B. YouTube Thumbnail
-      if (job.payload.thumbnailUrl && !job.payload.thumbnailUrl.startsWith('data:image')) {
-        const thumbRes = await youtubeService.setThumbnail(job.videoId, job.payload.thumbnailUrl);
-        thumbUpdated = thumbRes.success;
-      } else {
-        thumbUpdated = true;
+      // Execute real YouTube Data API v3 mutation (Title PUT snippet,status & Thumbnail POST upload)
+      const mutResult = await workerService.executeRealJobMutation(job);
+      if (!mutResult.success) {
+        throw new Error(mutResult.error || 'Gagal memutasi video di YouTube Data API v3.');
       }
 
       job.status = 'COMPLETED';
@@ -1169,30 +1162,11 @@ export class Phase3Engine {
       if (pJob) {
         pJob.status = 'completed';
         pJob.completedAt = new Date().toISOString();
+        pJob.videoTitle = mutResult.videoTitle;
         dbStore.automationJobs.set(job.id, pJob);
       }
 
-      // Update video in dbStore
-      const video = dbStore.getVideoById(job.videoId) || dbStore.videos.get(job.videoId);
-      if (video) {
-        video.managementStatus = 'COMPLETED';
-        video.amgStatus = 'COMPLETED';
-        video.isManaged = true;
-        video.isAmgManaged = true;
-        video.automationBatchId = activeBatch.id;
-        video.scheduledPublishAt = job.payload.scheduledPublishAt;
-        video.titleAssigned = job.payload.title;
-        if (job.payload.thumbnailUrl) video.thumbnailAssigned = job.payload.thumbnailUrl;
-        video.taskStatus = {
-          title: 'SUCCESS',
-          schedule: 'SUCCESS',
-          thumbnail: thumbUpdated ? 'SUCCESS' : 'SKIPPED',
-        };
-        video.updatedAt = new Date().toISOString();
-        dbStore.videos.set(video.id, video);
-      }
-
-      // Update batch counters
+      // Update batch counters based strictly on successful mutation
       activeBatch.processedCount = (activeBatch.processedCount || 0) + 1;
       activeBatch.completedCount = (activeBatch.completedCount || 0) + 1;
       activeBatch.scheduledCount = (activeBatch.scheduledCount || 0) + 1;

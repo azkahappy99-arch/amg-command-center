@@ -497,6 +497,91 @@ export class YouTubeDataService {
   /**
    * Updates video title via YouTube Data API v3 with automatic 401 auto-refresh & retry.
    */
+  /**
+   * Updates video title AND scheduled publication time in a single unified YouTube Data API v3 PUT request:
+   * PUT https://www.googleapis.com/youtube/v3/videos?part=snippet,status
+   * With automatic 401 token refresh and retry.
+   */
+  public async updateVideoTitleAndSchedule(
+    channelId: string,
+    videoId: string,
+    params: {
+      title: string;
+      publishAtIso: string;
+      categoryId?: string;
+      description?: string;
+      tags?: string[];
+    }
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (AMG_READ_ONLY_MODE) {
+      return {
+        success: false,
+        error: 'AMG READ-ONLY SAFETY LOCK: Modifying YouTube video metadata is strictly prohibited during Phase 1 testing.',
+      };
+    }
+
+    try {
+      const retryResult = await this.executeWithAuthRetry(channelId, `updateVideoTitleAndSchedule(${videoId})`, async (token) => {
+        // First retrieve current video snippet to preserve categoryId and description
+        let existingSnippet: any = {
+          title: params.title,
+          categoryId: params.categoryId || '22',
+          description: params.description || '',
+          tags: params.tags || [],
+        };
+
+        const getRes = await fetch(
+          `https://www.googleapis.com/youtube/v3/videos?part=snippet,status&id=${encodeURIComponent(videoId)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+
+        if (getRes.ok) {
+          const getJson = await getRes.json().catch(() => ({}));
+          if (getJson.items && getJson.items.length > 0) {
+            const fetched = getJson.items[0].snippet || {};
+            existingSnippet = {
+              ...fetched,
+              title: params.title,
+              categoryId: fetched.categoryId || params.categoryId || '22',
+            };
+            if (params.description !== undefined) existingSnippet.description = params.description;
+            if (params.tags !== undefined) existingSnippet.tags = params.tags;
+          }
+        }
+
+        const updateRes = await fetch('https://www.googleapis.com/youtube/v3/videos?part=snippet,status', {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            id: videoId,
+            snippet: existingSnippet,
+            status: {
+              privacyStatus: 'private',
+              publishAt: params.publishAtIso,
+            },
+          }),
+        });
+
+        const updateJson = await updateRes.json().catch(() => ({}));
+        return { res: updateRes, data: updateJson };
+      });
+
+      if (!retryResult.success) {
+        return { success: false, error: retryResult.error || 'Failed to update video title and schedule in YouTube API' };
+      }
+
+      return { success: true, data: retryResult.data };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Network error updating video title and schedule' };
+    }
+  }
+
+  /**
+   * Updates video title via YouTube Data API v3 with automatic 401 auto-refresh & retry.
+   */
   public async updateVideoTitle(
     channelId: string,
     videoId: string,
@@ -556,11 +641,12 @@ export class YouTubeDataService {
 
   /**
    * Sets video thumbnail via YouTube Data API v3 with automatic 401 auto-refresh & retry.
+   * Supports base64 data URLs, remote URLs, and binary Buffers.
    */
   public async updateVideoThumbnail(
     channelId: string,
     videoId: string,
-    thumbnailUrl: string
+    thumbnailUrlOrBuffer: string | Buffer
   ): Promise<{ success: boolean; error?: string }> {
     if (AMG_READ_ONLY_MODE) {
       return {
@@ -569,19 +655,32 @@ export class YouTubeDataService {
       };
     }
 
-    // Extract image buffer (supports both data URLs and remote URLs)
+    // Extract image buffer (supports data URLs, remote URLs, and raw Buffer)
     let buffer: Buffer;
+    let contentType = 'image/jpeg';
     try {
-      if (thumbnailUrl.startsWith('data:image/')) {
-        const base64Data = thumbnailUrl.split(',')[1];
-        buffer = Buffer.from(base64Data, 'base64');
-      } else {
-        const imgRes = await fetch(thumbnailUrl);
-        if (!imgRes.ok) {
-          return { success: false, error: `Failed to download master thumbnail from ${thumbnailUrl}` };
+      if (Buffer.isBuffer(thumbnailUrlOrBuffer)) {
+        buffer = thumbnailUrlOrBuffer;
+      } else if (typeof thumbnailUrlOrBuffer === 'string') {
+        if (thumbnailUrlOrBuffer.startsWith('data:image/')) {
+          const mimeMatch = thumbnailUrlOrBuffer.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,/);
+          if (mimeMatch && mimeMatch[1]) {
+            contentType = mimeMatch[1];
+          }
+          const base64Data = thumbnailUrlOrBuffer.split(',')[1];
+          buffer = Buffer.from(base64Data, 'base64');
+        } else {
+          const imgRes = await fetch(thumbnailUrlOrBuffer);
+          if (!imgRes.ok) {
+            return { success: false, error: `Failed to download master thumbnail from ${thumbnailUrlOrBuffer}` };
+          }
+          const ct = imgRes.headers.get('content-type');
+          if (ct) contentType = ct;
+          const arrayBuffer = await imgRes.arrayBuffer();
+          buffer = Buffer.from(arrayBuffer);
         }
-        const arrayBuffer = await imgRes.arrayBuffer();
-        buffer = Buffer.from(arrayBuffer);
+      } else {
+        return { success: false, error: 'Invalid thumbnail data provided.' };
       }
     } catch (readErr: any) {
       return { success: false, error: `Failed to read thumbnail data: ${readErr.message}` };
@@ -595,7 +694,7 @@ export class YouTubeDataService {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`,
-              'Content-Type': 'image/jpeg',
+              'Content-Type': contentType,
             },
             body: new Uint8Array(buffer) as any,
           }

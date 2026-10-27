@@ -49,36 +49,66 @@ export class YouTubeService {
       };
     }
 
-    // Call live YouTube Data API
+    // Call live YouTube Data API v3
     try {
-      if (metadata.title) {
-        const titleRes = await youtubeDataService.updateVideoTitle(channel.id, video.youtubeVideoId, metadata.title);
-        if (!titleRes.success) {
-          return { success: false, error: `Gagal memperbarui judul di YouTube API: ${titleRes.error}` };
+      if (metadata.title && metadata.scheduledPublishAt) {
+        const unifiedRes = await youtubeDataService.updateVideoTitleAndSchedule(channel.id, video.youtubeVideoId, {
+          title: metadata.title,
+          publishAtIso: metadata.scheduledPublishAt,
+          description: metadata.description,
+          tags: metadata.tags,
+        });
+        if (!unifiedRes.success) {
+          return { success: false, error: `Gagal memperbarui judul dan jadwal di YouTube API: ${unifiedRes.error}` };
         }
-      }
-      if (metadata.scheduledPublishAt) {
-        const schedRes = await youtubeDataService.scheduleVideo(channel.id, video.youtubeVideoId, metadata.scheduledPublishAt);
-        if (!schedRes.success) {
-          return { success: false, error: `Gagal menjadwalkan publikasi di YouTube API: ${schedRes.error}` };
+      } else {
+        if (metadata.title) {
+          const titleRes = await youtubeDataService.updateVideoTitle(channel.id, video.youtubeVideoId, metadata.title);
+          if (!titleRes.success) {
+            return { success: false, error: `Gagal memperbarui judul di YouTube API: ${titleRes.error}` };
+          }
+        }
+        if (metadata.scheduledPublishAt) {
+          const schedRes = await youtubeDataService.scheduleVideo(channel.id, video.youtubeVideoId, metadata.scheduledPublishAt);
+          if (!schedRes.success) {
+            return { success: false, error: `Gagal menjadwalkan publikasi di YouTube API: ${schedRes.error}` };
+          }
         }
       }
     } catch (err: any) {
       return { success: false, error: `Exception saat memanggil YouTube Data API: ${err.message}` };
     }
 
-    // ONLY commit to database after YouTube API mutation succeeds
+    // ONLY commit to database after YouTube API mutation succeeds (200 OK)
+    // Sesuai Perbaikan Wajib #2:
+    // - Ubah judul video di memori lokal (amg_videos) dari 'Salinan dari A' menjadi Master Judul yang baru diterapkan
+    // - Ubah status publikasi menjadi target jadwal
+    // - Pindahkan video dari tab 'Video Mentah / Perlu Tindakan' ke tab 'Video Terjadwal' (managementStatus = 'SCHEDULED')
     if (metadata.title !== undefined) {
+      video.titleBefore = metadata.title;
+      (video as any).title = metadata.title;
       video.titleAssigned = metadata.title;
+    }
+    if (metadata.scheduledPublishAt !== undefined) {
+      video.publishAt = metadata.scheduledPublishAt;
+      video.scheduledPublishAt = metadata.scheduledPublishAt;
+      video.privacyStatus = 'private';
+      video.managementStatus = 'SCHEDULED';
+      video.managementScope = 'EXCLUDED';
+      video.isManaged = true;
+      video.isAmgManaged = true;
+      channel.lastScheduledPublishAt = metadata.scheduledPublishAt;
+      channel.latestManagedScheduledAt = metadata.scheduledPublishAt;
+      channel.lastScheduledVideoTitle = metadata.title || video.titleBefore;
+      channel.lastScheduledVideoId = video.youtubeVideoId || video.id;
+      dbStore.channels.set(channel.id, channel);
     }
     if (metadata.privacyStatus !== undefined) {
       video.privacyStatus = metadata.privacyStatus as any;
     }
-    if (metadata.scheduledPublishAt !== undefined) {
-      video.scheduledPublishAt = metadata.scheduledPublishAt;
-    }
     video.updatedAt = new Date().toISOString();
     dbStore.videos.set(video.id, video);
+    dbStore.saveToDisk();
 
     return { success: true };
   }

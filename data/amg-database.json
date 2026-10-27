@@ -1,7 +1,24 @@
 {
   "version": 1,
-  "savedAt": "2026-10-26T06:09:54.128Z",
-  "channels": [],
+  "savedAt": "2026-10-27T09:42:04.220Z",
+  "channels": [
+    [
+      "chan-test-worker-01",
+      {
+        "id": "chan-test-worker-01",
+        "title": "Test Ambience Channel",
+        "youtubeChannelId": "UC_TEST_WORKER_01",
+        "status": "CONNECTED",
+        "contentProfileId": "profile-test",
+        "lastScheduledPublishAt": "2027-01-04T09:00:00.000Z",
+        "createdAt": "2026-10-27T09:42:04.219Z",
+        "updatedAt": "2026-10-27T09:42:04.219Z",
+        "latestManagedScheduledAt": "2027-01-04T09:00:00.000Z",
+        "lastScheduledVideoTitle": "T1 - Suasana Hujan Menenangkan Pengantar Tidur",
+        "lastScheduledVideoId": "vid-mut-test-101"
+      }
+    ]
+  ],
   "profiles": [
     [
       "profile-ayam-warna",
@@ -153,9 +170,60 @@
   ],
   "masterTitles": [],
   "masterThumbnails": [],
-  "videos": [],
+  "videos": [
+    [
+      "yt-vid-mut-test-101",
+      {
+        "id": "yt-vid-mut-test-101",
+        "youtubeVideoId": "vid-mut-test-101",
+        "channelId": "chan-test-worker-01",
+        "channelTitle": "Test Ambience Channel",
+        "titleBefore": "T1 - Suasana Hujan Menenangkan Pengantar Tidur",
+        "titleAssigned": "T1 - Suasana Hujan Menenangkan Pengantar Tidur",
+        "thumbnailBefore": "https://i.ytimg.com/vi/vid-mut-test-101/hqdefault.jpg",
+        "thumbnailAssigned": "",
+        "originalUploadAt": "2026-10-01T10:00:00.000Z",
+        "processingStatus": "processed",
+        "privacyStatus": "private",
+        "managementStatus": "SCHEDULED",
+        "managementScope": "EXCLUDED",
+        "isAmgEligible": true,
+        "isManaged": true,
+        "isEnrolled": true,
+        "createdAt": "2026-10-27T09:42:04.219Z",
+        "updatedAt": "2026-10-27T09:42:04.220Z",
+        "title": "T1 - Suasana Hujan Menenangkan Pengantar Tidur",
+        "publishAt": "2027-01-04T09:00:00.000Z",
+        "scheduledPublishAt": "2027-01-04T09:00:00.000Z",
+        "isAmgManaged": true,
+        "automationBatchId": "AMG-BATCH-0001",
+        "taskStatus": {
+          "title": "SUCCESS",
+          "schedule": "SUCCESS",
+          "thumbnail": "SKIPPED"
+        }
+      }
+    ]
+  ],
   "automationBatches": [],
-  "automationJobs": [],
+  "automationJobs": [
+    [
+      "job-test-101",
+      {
+        "id": "job-test-101",
+        "batchId": "AMG-BATCH-0001",
+        "videoId": "yt-vid-mut-test-101",
+        "videoTitle": "T1 - Suasana Hujan Menenangkan Pengantar Tidur",
+        "channelId": "chan-test-worker-01",
+        "channelTitle": "Test Ambience Channel",
+        "jobType": "apply_title",
+        "status": "completed",
+        "startedAt": "2026-10-27T09:40:36.535Z",
+        "retryCount": 0,
+        "completedAt": "2026-10-27T09:42:04.220Z"
+      }
+    ]
+  ],
   "errorLogs": [],
   "activityLogs": [
     {
@@ -211,8 +279,8 @@
         "deviceInfo": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
         "ipAddress": "127.0.0.1",
         "createdAt": "2026-10-02T11:17:38.630Z",
-        "expiresAt": "2026-11-25T06:09:54.128Z",
-        "lastActiveAt": "2026-10-26T06:09:54.128Z",
+        "expiresAt": "2026-11-26T09:42:04.217Z",
+        "lastActiveAt": "2026-10-27T09:42:04.217Z",
         "isRevoked": false
       }
     ],

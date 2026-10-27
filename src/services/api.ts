@@ -2985,6 +2985,74 @@ export const api = {
       });
       if (res.ok) {
         const json = await res.json();
+
+        // 1. Sinkronisasi Data Lokal Setelah Mutasi Berhasil (Requirement #2):
+        // Update video di memori lokal (amg_videos) dari 'Salinan dari A' menjadi Master Judul yang baru diterapkan,
+        // ubah status publikasi menjadi target jadwal (16:00 WIB), dan pindahkan ke Video Terjadwal (SCHEDULED).
+        if (json.video) {
+          const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
+          const vIdx = rawVideos.findIndex(
+            (v) =>
+              v.id === json.video.id ||
+              v.youtubeVideoId === json.video.id ||
+              v.id === `yt-${json.video.id}` ||
+              (typeof json.video.id === 'string' && json.video.id.startsWith('yt-') && v.youtubeVideoId === json.video.id.replace('yt-', ''))
+          );
+          if (vIdx >= 0) {
+            const updatedVid: ManagedVideo = {
+              ...rawVideos[vIdx],
+              titleBefore: json.video.title,
+              titleAssigned: json.video.title,
+              publishAt: json.video.scheduledPublishAt,
+              scheduledPublishAt: json.video.scheduledPublishAt,
+              privacyStatus: 'private',
+              managementStatus: 'SCHEDULED',
+              managementScope: 'EXCLUDED',
+              isManaged: true,
+              isAmgManaged: true,
+              taskStatus: {
+                title: 'SUCCESS',
+                schedule: 'SUCCESS',
+                thumbnail: 'SUCCESS',
+              },
+              updatedAt: new Date().toISOString(),
+            };
+            rawVideos[vIdx] = updatedVid;
+            setStorageItem(KEYS.VIDEOS, rawVideos);
+
+            // Perbarui penyimpanan persisten channel amg_real_videos_${channelId}
+            const targetChanId = updatedVid.channelId || channelId;
+            if (targetChanId) {
+              const cleanId = targetChanId.replace(/^chan-/, '');
+              const chanVids = rawVideos.filter(
+                (v) =>
+                  v.channelId === targetChanId ||
+                  v.channelId === `chan-${targetChanId}` ||
+                  v.channelId === cleanId ||
+                  v.channelId === `chan-${cleanId}`
+              );
+              if (chanVids.length > 0) {
+                localStorage.setItem(`amg_real_videos_${targetChanId}`, JSON.stringify(chanVids));
+                localStorage.setItem(`amg_real_videos_${cleanId}`, JSON.stringify(chanVids));
+                localStorage.setItem(`amg_real_videos_chan-${cleanId}`, JSON.stringify(chanVids));
+              }
+
+              // Update anchor channel di amg_channels
+              const rawChannels = getStorageItem<Channel[]>(KEYS.CHANNELS, []);
+              const cIdx = rawChannels.findIndex(
+                (c) => c.id === targetChanId || c.youtubeChannelId === targetChanId || c.id === `chan-${targetChanId}`
+              );
+              if (cIdx >= 0) {
+                rawChannels[cIdx].lastScheduledPublishAt = json.video.scheduledPublishAt;
+                rawChannels[cIdx].latestManagedScheduledAt = json.video.scheduledPublishAt;
+                rawChannels[cIdx].lastScheduledVideoTitle = json.video.title;
+                rawChannels[cIdx].lastScheduledVideoId = json.video.id;
+                setStorageItem(KEYS.CHANNELS, rawChannels);
+              }
+            }
+          }
+        }
+
         if (json.batch) {
           // Update local batch storage so UI updates instantly
           const batches = getStorageItem<AutomationBatch[]>(KEYS.BATCHES, initialAutomationBatches);
@@ -3143,8 +3211,22 @@ export const api = {
     }
   },
 
-  // Queue
-  getQueue: async () => getStorageItem<AutomationJob[]>(KEYS.JOBS, initialAutomationJobs),
+  // Queue (Synchronized with live backend Phase 3 worker)
+  getQueue: async () => {
+    try {
+      const res = await authFetch('/api/queue');
+      if (res.ok) {
+        const backendJobs = await res.json();
+        if (Array.isArray(backendJobs)) {
+          setStorageItem(KEYS.JOBS, backendJobs);
+          return backendJobs;
+        }
+      }
+    } catch (e) {
+      console.warn('[api.getQueue] Backend queue fetch error, fallback to storage:', e);
+    }
+    return getStorageItem<AutomationJob[]>(KEYS.JOBS, initialAutomationJobs);
+  },
   pauseQueue: async () => ({ success: true, message: 'Antrean dijeda.' }),
   resumeQueue: async () => ({ success: true, message: 'Antrean dilanjutkan.' }),
 

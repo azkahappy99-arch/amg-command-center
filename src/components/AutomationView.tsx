@@ -141,9 +141,20 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       if (inFlight) return;
       inFlight = true;
       try {
-        const currentRunning = batchesRef.current.find(
-          (b) => b.status === 'running' || (b.status as string) === 'BERJALAN'
-        );
+        // Enforce Single Active Worker: Pick the single running batch for this channel
+        const currentRunning =
+          batchesRef.current.find(
+            (b) =>
+              (b.channelId === selectedChannelId || b.channelId === selectedChannel?.youtubeChannelId) &&
+              (b.status === 'running' || (b.status as string) === 'BERJALAN') &&
+              b.completedCount < b.detectedCount
+          ) ||
+          batchesRef.current.find(
+            (b) =>
+              (b.status === 'running' || (b.status as string) === 'BERJALAN') &&
+              b.completedCount < b.detectedCount
+          );
+
         if (!currentRunning) {
           inFlight = false;
           return;
@@ -180,8 +191,10 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
           if (res.video && res.batch) {
             setExecutionMessage(
-              `[Worker Phase 3] Memproses ${res.batch.batchNumber}: ${res.batch.completedCount}/${res.batch.detectedCount} video selesai... Video "${res.video.title}" berhasil dijadwalkan jam 16:00 WIB.`
+              `[Worker Phase 3] Memproses ${res.batch.batchNumber}: ${res.batch.completedCount}/${res.batch.detectedCount} video selesai... Video "${res.video.title}" berhasil dimutasi & dijadwalkan jam 16:00 WIB.`
             );
+            // Sinkronisasi realtime ke katalog video & dashboard
+            onAutomationTriggered();
           }
 
           if (res.chainedNextBatch) {
@@ -299,6 +312,23 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       alert('Silakan masukkan Master Judul sebelum memulai otomasi');
       return;
     }
+
+    // Kunci Tunggal Antrean (Single Active Worker & Anti-Duplicate Batch):
+    // Jangan pernah membuat batch baru jika batch sebelumnya masih dalam status 'RUNNING'!
+    const runningBatch = batches.find(
+      (b) =>
+        (b.channelId === selectedChannelId || b.channelId === selectedChannel?.youtubeChannelId) &&
+        (b.status === 'running' || (b.status as string) === 'BERJALAN') &&
+        b.completedCount < b.detectedCount
+    );
+    if (runningBatch) {
+      setExecutionMessage(
+        `Batch ${runningBatch.batchNumber} sedang berjalan aktif (${runningBatch.completedCount}/${runningBatch.detectedCount} video selesai). Mengunci single-worker queue tanpa membuat batch duplikat.`
+      );
+      setShowConfirmModal(false);
+      return;
+    }
+
     setIsExecuting(true);
     setShowConfirmModal(false);
     try {
@@ -315,7 +345,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           videoId: cleanId,
           title: item.assignedTitle || item.originalTitle,
           assignedTitle: item.assignedTitle || item.originalTitle,
-          assignedThumbnail: (item.isCustomThumbnail && item.assignedThumbnail && !item.assignedThumbnail.includes('images.unsplash.com') && !item.assignedThumbnail.startsWith('data:image')) ? item.assignedThumbnail : '',
+          assignedThumbnail: (item.isCustomThumbnail && item.assignedThumbnail && !item.assignedThumbnail.includes('images.unsplash.com')) ? item.assignedThumbnail : '',
           publishDate: item.publishDate,
           publishTime: item.publishTime,
         };
