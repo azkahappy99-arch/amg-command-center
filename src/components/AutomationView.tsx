@@ -23,9 +23,10 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { Channel, ContentProfile, MasterTitle, MasterThumbnail, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
+import { Channel, ContentProfile, MasterTitle, MasterThumbnail, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary, ManagedVideo } from '../types/index.ts';
 import { api, isRealTitle } from '../services/api.ts';
 import { getThumbnailDataById, getChannelThumbnailsFromIdb } from '../utils/thumbnailStorage.ts';
+import { workerClient } from '../services/workerClient.ts';
 import { Phase2AcceptanceModal } from './Phase2AcceptanceModal.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
 import { ChannelEligibilityModal } from './ChannelEligibilityModal.tsx';
@@ -143,6 +144,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
     const executeNextStep = async () => {
       if (inFlight) return;
+      // Jangan jalankan polling backend jika worker client-side sedang aktif memproses video langsung ke YouTube API
+      if (workerClient.getIsRunning()) return;
       inFlight = true;
       try {
         // Enforce Single Active Worker: Pick the single running batch for this channel
@@ -345,9 +348,17 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
     // Kunci Tunggal Antrean (Single Active Worker & Anti-Duplicate Batch):
     // Jangan pernah membuat batch baru jika batch sebelumnya masih dalam status 'RUNNING'!
+    if (workerClient.getIsRunning()) {
+      setExecutionMessage(
+        'Worker sedang aktif memproses antrean video secara serial. Tunggu hingga kloter saat ini selesai.'
+      );
+      setShowConfirmModal(false);
+      return;
+    }
+
     const runningBatch = batches.find(
       (b) =>
-        (b.channelId === selectedChannelId || b.channelId === selectedChannel?.youtubeChannelId) &&
+        (b.channelId === selectedChannelId || b.channelId === selectedChannel?.youtubeChannelId || b.channelId === pureChannelId) &&
         (b.status === 'running' || (b.status as string) === 'BERJALAN') &&
         b.completedCount < b.detectedCount
     );
@@ -361,169 +372,173 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
     setIsExecuting(true);
     setShowConfirmModal(false);
+
     try {
-      // Gunakan seluruh item kandidat yang tersedia di pratinjau (tidak terkunci oleh status batch sebelumnya)
-      const itemsToRun = candidateItems;
-      const candidateVideoIds = itemsToRun.map((v) => {
-        const rawId = v.videoId || (v as any).id || '';
-        return rawId.replace(/^yt-vid-|^yt-/, '');
-      });
-      const masterTitlesList = channelTitles.map((t) => t.text).filter(Boolean);
-      const selectedThumbnailIdsList = channelThumbnails.map((th) => th.id).filter(Boolean);
-      const publishStartDate = itemsToRun[0]?.publishDate || new Date(Date.now() + 86400000).toISOString().split('T')[0];
+      // 1. Ambil video kandidat dari storage lokal atau pratinjau (Salinan dari A / kandidat aktif)
+      let candidateVideosToProcess: ManagedVideo[] = [];
+      try {
+        const rawVids = localStorage.getItem('amg_videos');
+        if (rawVids) {
+          const parsed: ManagedVideo[] = JSON.parse(rawVids);
+          if (Array.isArray(parsed)) {
+            const cleanTargetChan = pureChannelId || selectedChannelId.replace(/^chan-/, '');
+            candidateVideosToProcess = parsed.filter((v) => {
+              const isMatch =
+                v.channelId === selectedChannelId ||
+                v.channelId === cleanTargetChan ||
+                v.channelId === `chan-${cleanTargetChan}`;
+              if (!isMatch) return false;
 
-      // Ambil token otorisasi langsung dari credential channel yang tersimpan
-      let authToken: string | undefined = undefined;
-      let refreshToken: string | undefined = undefined;
+              const isPriv = (v.privacyStatus || '').toLowerCase() === 'private';
+              const hasPublishAt = Boolean(v.publishAt || (v as any).status?.publishAt);
+              const isAlreadyManaged =
+                v.isManaged ||
+                v.managementStatus === 'SCHEDULED' ||
+                v.managementStatus === 'COMPLETED';
+              const rawT = (v.titleBefore || v.titleAssigned || '').toLowerCase();
+              const isSalinan =
+                rawT.startsWith('salinan dari') ||
+                rawT.startsWith('copy of') ||
+                rawT.includes('salinan dari') ||
+                rawT.includes('copy of');
 
-      if ((selectedChannel as any)?.accessToken) {
-        authToken = (selectedChannel as any).accessToken;
-      }
-      if (!authToken) {
-        authToken = localStorage.getItem('amg_oauth_token') || undefined;
-      }
-      if (!authToken) {
-        authToken = localStorage.getItem('amg_youtube_access_token') || undefined;
-      }
-      if (!authToken) {
-        try {
-          const rawChannels = localStorage.getItem('amg_channels');
-          if (rawChannels) {
-            const parsed = JSON.parse(rawChannels);
-            if (Array.isArray(parsed)) {
-              const ch = parsed.find(
-                (c: any) =>
-                  c.id === selectedChannelId ||
-                  c.youtubeChannelId === selectedChannelId ||
-                  `chan-${c.youtubeChannelId}` === selectedChannelId
+              return (
+                isPriv &&
+                !hasPublishAt &&
+                !isAlreadyManaged &&
+                (isSalinan || candidateItems.some((ci) => ci.videoId === v.id || ci.videoId === v.youtubeVideoId))
               );
-              if (ch) {
-                authToken = ch.accessToken || ch.token || ch.connectionDetails?.accessToken;
-                refreshToken = ch.refreshToken || ch.connectionDetails?.refreshToken;
-              }
-            }
+            });
           }
-        } catch {}
-      }
-      if (!authToken) {
-        authToken = localStorage.getItem('amg_auth_token') || undefined;
-      }
-      if (!refreshToken) {
-        refreshToken = (selectedChannel as any)?.refreshToken || localStorage.getItem('amg_youtube_refresh_token') || undefined;
-      }
-
-      // Pastikan token tersimpan di storage untuk konsistensi request
-      if (authToken) {
-        if (!localStorage.getItem('amg_auth_token')) {
-          localStorage.setItem('amg_auth_token', authToken);
         }
-        if (!localStorage.getItem('amg_youtube_access_token')) {
-          localStorage.setItem('amg_youtube_access_token', authToken);
-        }
+      } catch (readErr) {
+        console.warn('[AutomationView] Error membaca amg_videos:', readErr);
       }
 
-      // Rampingkan Payload Inisialisasi Batch: Zero base64, payload < 5KB
-      const res = await api.startBatchAutomation(pureChannelId || selectedChannelId, selectedProfile?.id, {
-        batchSize: 50,
-        channelTitle: selectedChannel?.title,
-        videoIds: candidateVideoIds,
-        masterTitles: masterTitlesList,
-        selectedThumbnailIds: selectedThumbnailIdsList,
-        publishStartDate,
-        intervalDays: 1,
-        authToken,
-        accessToken: authToken,
-        refreshToken,
-      });
-      if (res.success) {
-        const batchNum = res.batch?.batchNumber || res.batchId || 'AMG-BATCH';
-        const totalCount = res.totalEnrolled || itemsToRun.length;
-        const kloterCount = res.kloterSize || Math.min(50, totalCount);
-        const remainingCount = Math.max(0, totalCount - kloterCount);
-
-        const newRunningBatch: AutomationBatch = res.batch || {
-          id: res.batchId,
-          batchNumber: batchNum,
+      // Jika kosong di local list, fallback ke candidateItems
+      if (candidateVideosToProcess.length === 0 && candidateItems.length > 0) {
+        candidateVideosToProcess = candidateItems.map((item) => ({
+          id: item.videoId,
+          youtubeVideoId: item.videoId.replace(/^yt-vid-|^yt-/, ''),
           channelId: pureChannelId || selectedChannelId,
-          channelTitle: selectedChannel?.title || 'YouTube Channel',
-          profileId: selectedProfile?.id || 'profile-default',
-          profileName: selectedProfile?.name || 'Standard AMG Schedule (Kloter 1)',
-          isDryRun: false,
-          status: 'running',
-          startedAt: new Date().toISOString(),
-          lastHeartbeatAt: new Date().toISOString(),
-          detectedCount: kloterCount,
-          processedCount: 0,
-          scheduledCount: 0,
-          completedCount: 0,
-          failedCount: 0,
-        };
-
-        // Otomatis gantikan batch lama yang macet/sedang berjalan agar antrean langsung aktif untuk batch baru
-        setBatches((prev) => [
-          newRunningBatch,
-          ...prev
-            .filter((b) => b.id !== newRunningBatch.id && b.batchNumber !== batchNum)
-            .map((b) =>
-              b.status === 'running' || (b.status as string) === 'BERJALAN'
-                ? { ...b, status: 'completed' as const, completedAt: b.completedAt || new Date().toISOString() }
-                : b
-            ),
-        ]);
-
-        setExecutionMessage(
-          `Batch ${batchNum} (Kloter 1: ${kloterCount} video) berhasil diluncurkan ke antrean Phase 3 Worker untuk total ${totalCount} video! ${
-            remainingCount > 0
-              ? `Sisa ${remainingCount} video otomatis berlanjut ke Kloter 2 (auto-chaining).`
-              : 'Pemrosesan berantai aktif.'
-          }`
-        );
-        onAutomationTriggered();
-        fetchBatches();
+          channelTitle: selectedChannel?.title || item.targetChannelTitle || 'YouTube Channel',
+          titleBefore: item.originalTitle || 'Salinan dari A',
+          titleAssigned: item.assignedTitle || '',
+          thumbnailBefore: item.originalThumbnail || '',
+          thumbnailAssigned: item.assignedThumbnail || '',
+          originalUploadAt: item.uploadedAt || new Date().toISOString(),
+          processingStatus: 'processed',
+          privacyStatus: 'private',
+          managementStatus: 'READY',
+          managementScope: 'REGULAR',
+          isAmgEligible: true,
+          isManaged: false,
+          retryCount: 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }));
       }
+
+      if (candidateVideosToProcess.length === 0) {
+        setExecutionMessage('Tidak ada video kandidat baru (Salinan dari A) yang siap diotomasi.');
+        setIsExecuting(false);
+        return;
+      }
+
+      const totalCount = candidateVideosToProcess.length;
+      const batchNum = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
+
+      // Inisialisasi Batch di state antrean lokal
+      const newRunningBatch: AutomationBatch = {
+        id: batchNum,
+        batchNumber: batchNum,
+        channelId: pureChannelId || selectedChannelId,
+        channelTitle: selectedChannel?.title || 'YouTube Channel',
+        profileId: selectedProfile?.id || 'profile-default',
+        profileName: selectedProfile?.name || 'Direct Client Serial Execution',
+        isDryRun: false,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        lastHeartbeatAt: new Date().toISOString(),
+        detectedCount: totalCount,
+        processedCount: 0,
+        scheduledCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+      };
+
+      setBatches((prev) => [
+        newRunningBatch,
+        ...prev
+          .filter((b) => b.id !== newRunningBatch.id)
+          .map((b) =>
+            b.status === 'running' || (b.status as string) === 'BERJALAN'
+              ? { ...b, status: 'completed' as const, completedAt: b.completedAt || new Date().toISOString() }
+              : b
+          ),
+      ]);
+
+      setExecutionMessage(
+        `[Worker Phase 3] Memulai pemrosesan antrean serial untuk ${totalCount} video kandidat langsung ke YouTube API...`
+      );
+      onAutomationTriggered();
+
+      // Eksekusi Client-Side Serial Worker langsung ke YouTube Data API v3 (Direct API)
+      workerClient
+        .executeBatchSerial(
+          selectedChannel,
+          candidateVideosToProcess,
+          channelTitles,
+          channelThumbnails,
+          {
+            onProgress: (prog) => {
+              setExecutionMessage(prog.message);
+              setBatches((prev) =>
+                prev.map((b) =>
+                  b.id === newRunningBatch.id
+                    ? {
+                        ...b,
+                        completedCount: prog.completedCount,
+                        processedCount: prog.completedCount,
+                        scheduledCount: prog.completedCount,
+                        lastHeartbeatAt: new Date().toISOString(),
+                      }
+                    : b
+                )
+              );
+            },
+            onVideoCompleted: () => {
+              onAutomationTriggered();
+            },
+            onBatchFinished: (finishedBatch) => {
+              setIsExecuting(false);
+              setBatches((prev) =>
+                prev.map((b) => (b.id === newRunningBatch.id ? finishedBatch : b))
+              );
+              setExecutionMessage(
+                `Semua batch otomasi telah SELESAI diproses (${finishedBatch.completedCount}/${finishedBatch.detectedCount} video)! Seluruh jadwal tayang jam 16:00 WIB aktif.`
+              );
+              onAutomationTriggered();
+              if (pureChannelId || selectedChannelId) {
+                fetchPreview(pureChannelId || selectedChannelId);
+              }
+            },
+            onError: (err) => {
+              setIsExecuting(false);
+              console.error('[AutomationView] Worker error:', err);
+              setExecutionMessage(`Peringatan antrean worker: ${err.message}`);
+            },
+          }
+        )
+        .catch((err) => {
+          setIsExecuting(false);
+          console.error('[AutomationView] Client worker execution failed:', err);
+          setExecutionMessage(`Eksekusi antrean terhenti: ${err.message}`);
+        });
     } catch (err: any) {
-      const errMsg = err?.message || 'Gagal memulai otomasi batch';
-      const isAuthError =
-        errMsg.toLowerCase().includes('sesi') ||
-        errMsg.toLowerCase().includes('login') ||
-        errMsg.toLowerCase().includes('unauthorized') ||
-        errMsg.toLowerCase().includes('401');
-
-      const isChannelConnected =
-        selectedChannel?.status === 'CONNECTED' ||
-        selectedChannel?.status === 'Connected' ||
-        selectedChannel?.status === 'Ready';
-
-      // Bypass blocking alert jika channel aktif sudah terhubung (status CONNECTED)
-      if (isAuthError && isChannelConnected) {
-        console.warn('[AutomationView] Sesi bypass aktif untuk channel terhubung. Menginisialisasi batch mandiri:', err);
-        const fallbackBatchNum = `AMG-BATCH-${Date.now().toString().slice(-4)}`;
-        const fallbackBatch: AutomationBatch = {
-          id: fallbackBatchNum,
-          batchNumber: fallbackBatchNum,
-          channelId: selectedChannelId,
-          channelTitle: selectedChannel?.title || 'YouTube Channel',
-          profileId: selectedProfile?.id || 'profile-default',
-          profileName: selectedProfile?.name || 'Standard AMG Schedule',
-          isDryRun: false,
-          status: 'running',
-          startedAt: new Date().toISOString(),
-          lastHeartbeatAt: new Date().toISOString(),
-          detectedCount: candidateItems.length,
-          processedCount: 0,
-          scheduledCount: 0,
-          completedCount: 0,
-          failedCount: 0,
-        };
-        setBatches((prev) => [fallbackBatch, ...prev]);
-        setExecutionMessage(`Batch ${fallbackBatchNum} berhasil dimulai di background channel "${selectedChannel?.title}".`);
-        onAutomationTriggered();
-        fetchBatches();
-      } else {
-        alert(errMsg);
-      }
-    } finally {
       setIsExecuting(false);
+      console.error('[AutomationView] Setup error:', err);
+      setExecutionMessage(`Gagal memulai otomasi: ${err.message}`);
     }
   };
 
