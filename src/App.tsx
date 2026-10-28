@@ -44,7 +44,15 @@ import {
   ActivityLog,
   AutomationBatch,
 } from './types/index.ts';
-import { api, sanitizeChannel, isRealChannel, isRealVideo, isRealThumbnail, isRealTitle } from './services/api.ts';
+import {
+  api,
+  sanitizeChannel,
+  isRealChannel,
+  isRealVideo,
+  isRealThumbnail,
+  isRealTitle,
+  purgeMockDataFromLocalStorage,
+} from './services/api.ts';
 import { initialChannels, initialVideos } from './services/initialSeedData.ts';
 import {
   authorizeAndFetchYouTubeChannel,
@@ -52,18 +60,26 @@ import {
   getStoredGisToken,
 } from './services/youtubeGisAuth.ts';
 
+// Run immediate purge check of any leftover mock or test IDs
+if (typeof window !== 'undefined') {
+  purgeMockDataFromLocalStorage();
+}
+
 // Offline-First & Anti-Overwrite Helpers
 function getStoredActiveChannelId(): string {
   try {
-    const activeStored = localStorage.getItem('amg_active_channel_id') || localStorage.getItem('amg_active_channel');
-    if (activeStored) return activeStored;
-    const storedChannelsRaw = localStorage.getItem('amg_channels');
-    if (storedChannelsRaw) {
-      const parsed = JSON.parse(storedChannelsRaw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed[0].id || parsed[0].youtubeChannelId || '';
-      }
+    const validChans = getStoredChannels();
+    if (validChans.length === 0) {
+      return '';
     }
+    const activeStored = localStorage.getItem('amg_active_channel_id') || localStorage.getItem('amg_active_channel');
+    if (activeStored) {
+      const match = validChans.find(
+        (c) => c.id === activeStored || c.youtubeChannelId === activeStored || `chan-${c.youtubeChannelId}` === activeStored
+      );
+      if (match) return match.id;
+    }
+    return validChans[0]?.id || '';
   } catch {}
   return '';
 }
@@ -98,6 +114,10 @@ function getStoredChannels(): Channel[] {
 
 function getStoredVideos(activeChanId?: string): ManagedVideo[] {
   try {
+    const validChans = getStoredChannels();
+    if (validChans.length === 0) {
+      return [];
+    }
     const active = activeChanId || getStoredActiveChannelId();
     if (active) {
       const cleanId = active.replace(/^chan-/, '');

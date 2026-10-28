@@ -313,3 +313,14 @@ export function safeLocalStorageSet(key: string, value: string): boolean {
     return false;
   }
 }
+
+/**
+ * Retrieves raw thumbnail image (dataUrl / base64) by thumbnail ID from IndexedDB.
+ */
+export async function getThumbnailDataById(thumbnailId: string): Promise<string | null> {
+  if (!thumbnailId) return null;
+  const asset = await idbGet<string>(`amg_thumb_asset_${thumbnailId}`);
+  if (asset) return asset;
+  return null;
+}
+

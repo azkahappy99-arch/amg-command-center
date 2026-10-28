@@ -661,14 +661,52 @@ class DatabaseStore {
       if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
       }
+
+      // Strictly filter out any test fixture or mock channels/videos from ever being written to disk
+      const safeChannels = Array.from(this.channels.entries()).filter(([id, c]) => {
+        if (!c || c.isSeeded) return false;
+        const ytId = c.youtubeChannelId || '';
+        const title = (c.title || '').toLowerCase();
+        return (
+          !id.startsWith('chan-test-') &&
+          !id.startsWith('chan-payload-test-') &&
+          id !== 'chan-valid-01' &&
+          !ytId.startsWith('UC_TEST_') &&
+          !ytId.startsWith('UC_VALID_') &&
+          !title.includes('valid relaxing ambience') &&
+          !title.includes('test ambience') &&
+          !title.includes('fixture')
+        );
+      });
+
+      const safeVideos = Array.from(this.videos.entries()).filter(([id, v]) => {
+        if (!v || v.isSeeded) return false;
+        const yId = v.youtubeVideoId || '';
+        const title = (v.titleBefore || '').toLowerCase();
+        const cId = v.channelId || '';
+        const cTitle = (v.channelTitle || '').toLowerCase();
+        return (
+          !id.startsWith('yt-vid-serial-test-') &&
+          !id.startsWith('vid-test-') &&
+          id !== 'yt-vid-mut-test-101' &&
+          !yId.startsWith('serial-test-') &&
+          !yId.startsWith('vid-mut-test-') &&
+          !cId.startsWith('chan-payload-test-') &&
+          cId !== 'chan-valid-01' &&
+          !cTitle.includes('valid relaxing ambience') &&
+          !cTitle.includes('test ambience') &&
+          !title.includes('suasana hujan menenangkan pengantar tidur')
+        );
+      });
+
       const serialized = {
         version: 1,
         savedAt: new Date().toISOString(),
-        channels: Array.from(this.channels.entries()),
+        channels: safeChannels,
         profiles: Array.from(this.profiles.entries()),
         masterTitles: Array.from(this.masterTitles.entries()),
         masterThumbnails: Array.from(this.masterThumbnails.entries()),
-        videos: Array.from(this.videos.entries()),
+        videos: safeVideos,
         automationBatches: Array.from(this.automationBatches.entries()),
         automationJobs: Array.from(this.automationJobs.entries()),
         errorLogs: Array.from(this.errorLogs.entries()),
@@ -1348,9 +1386,16 @@ class DatabaseStore {
         id === 'chan-1790528541332' ||
         id === 'chan-1791049429497' ||
         id === 'chan-test-worker-01' ||
+        id === 'chan-valid-01' ||
         id.startsWith('chan-test-') ||
+        id.startsWith('chan-payload-test-') ||
         c.youtubeChannelId === 'UC_TEST_WORKER_01' ||
+        c.youtubeChannelId === 'UC_VALID_01' ||
+        c.youtubeChannelId?.startsWith('UC_TEST_') ||
+        c.youtubeChannelId?.startsWith('UC_VALID_') ||
         c.title === 'Test Ambience Channel' ||
+        c.title === 'Valid Relaxing Ambience' ||
+        c.title?.toLowerCase().includes('valid relaxing ambience') ||
         c.title?.toLowerCase().includes('test ambience') ||
         c.title?.includes('[DEMO FIXTURE]') ||
         c.title?.includes('Demo Fixture') ||
@@ -1388,9 +1433,16 @@ class DatabaseStore {
         v.isSeeded ||
         id === 'yt-vid-mut-test-101' ||
         id === 'vid-mut-test-101' ||
+        id === 'yt-vid-serial-test-01' ||
         v.youtubeVideoId === 'vid-mut-test-101' ||
+        v.youtubeVideoId === 'serial-test-01' ||
+        v.youtubeVideoId?.startsWith('serial-test-') ||
+        v.titleBefore === 'Salinan dari Video Asli' ||
         v.titleBefore === 'T1 - Suasana Hujan Menenangkan Pengantar Tidur' ||
         v.titleBefore?.includes('Suasana Hujan Menenangkan Pengantar Tidur') ||
+        v.channelTitle?.toLowerCase().includes('valid relaxing ambience') ||
+        v.channelId?.startsWith('chan-payload-test-') ||
+        v.channelId === 'chan-valid-01' ||
         id.startsWith('vid-m-') ||
         id.startsWith('vid-old-') ||
         id.startsWith('vid-cand-') ||
@@ -1418,6 +1470,9 @@ class DatabaseStore {
         b.channelId === 'chan-ayam-warna' ||
         b.channelId === 'chan-suara-alam' ||
         b.channelId === 'chan-test-worker-01' ||
+        b.channelId === 'chan-valid-01' ||
+        b.channelId?.startsWith('chan-payload-test-') ||
+        b.channelTitle?.toLowerCase().includes('valid relaxing ambience') ||
         b.channelTitle?.toLowerCase().includes('test ambience');
 
       if (isFixture) {

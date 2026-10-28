@@ -23,8 +23,9 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
-import { Channel, ContentProfile, MasterTitle, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
+import { Channel, ContentProfile, MasterTitle, MasterThumbnail, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary } from '../types/index.ts';
 import { api, isRealTitle } from '../services/api.ts';
+import { getThumbnailDataById, getChannelThumbnailsFromIdb } from '../utils/thumbnailStorage.ts';
 import { Phase2AcceptanceModal } from './Phase2AcceptanceModal.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
 import { ChannelEligibilityModal } from './ChannelEligibilityModal.tsx';
@@ -52,6 +53,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     initialChannelId || channels[0]?.id || ''
   );
   const [channelTitles, setChannelTitles] = useState<MasterTitle[]>([]);
+  const [channelThumbnails, setChannelThumbnails] = useState<MasterThumbnail[]>([]);
   const [previewItems, setPreviewItems] = useState<AutomationPreviewItem[]>([]);
   const [scopeSummary, setScopeSummary] = useState<AutomationScopeSummary | null>(null);
   const [batches, setBatches] = useState<AutomationBatch[]>([]);
@@ -193,6 +195,25 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
             setExecutionMessage(
               `[Worker Phase 3] Memproses ${res.batch.batchNumber}: ${res.batch.completedCount}/${res.batch.detectedCount} video selesai... Video "${res.video.title}" berhasil dimutasi & dijadwalkan jam 16:00 WIB.`
             );
+
+            // Unggah Thumbnail Secara Serial Per Video (IndexedDB -> Direct Upload: 1 request per video)
+            if (channelThumbnails.length > 0) {
+              const videoSeq = Math.max(0, (res.batch.completedCount || 1) - 1);
+              const assignedThumb = channelThumbnails[videoSeq % channelThumbnails.length];
+              if (assignedThumb && assignedThumb.id) {
+                try {
+                  const binaryData = await getThumbnailDataById(assignedThumb.id);
+                  const cleanVidId = (res.video.id || (res.video as any).youtubeVideoId || '').replace(/^yt-vid-|^yt-/, '');
+                  if (binaryData && cleanVidId) {
+                    await api.uploadVideoThumbnail(cleanVidId, binaryData, selectedChannelId);
+                    console.log(`[Serial Thumbnail] Berhasil mengunggah thumbnail Master (${assignedThumb.name || (assignedThumb as any).label || assignedThumb.id}) untuk video ${cleanVidId}`);
+                  }
+                } catch (thumbUploadErr: any) {
+                  console.warn('[Serial Thumbnail] Notifikasi upload thumbnail serial:', thumbUploadErr.message);
+                }
+              }
+            }
+
             // Sinkronisasi realtime ke katalog video & dashboard
             onAutomationTriggered();
           }
@@ -284,6 +305,13 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           setChannelTitles(res.filter(isRealTitle));
         }
       }).catch(() => {});
+
+      // Load active channel's Master Thumbnails from IndexedDB
+      getChannelThumbnailsFromIdb(selectedChannelId).then((thumbs) => {
+        if (Array.isArray(thumbs) && thumbs.length > 0) {
+          setChannelThumbnails(thumbs);
+        }
+      }).catch(() => {});
     }
   }, [selectedChannelId]);
 
@@ -338,18 +366,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         const rawId = v.videoId || (v as any).id || '';
         return rawId.replace(/^yt-vid-|^yt-/, '');
       });
-      const lightweightPlan = itemsToRun.map((item) => {
-        const rawId = item.videoId || (item as any).id || '';
-        const cleanId = rawId.replace(/^yt-vid-|^yt-/, '');
-        return {
-          videoId: cleanId,
-          title: item.assignedTitle || item.originalTitle,
-          assignedTitle: item.assignedTitle || item.originalTitle,
-          assignedThumbnail: (item.isCustomThumbnail && item.assignedThumbnail && !item.assignedThumbnail.includes('images.unsplash.com')) ? item.assignedThumbnail : '',
-          publishDate: item.publishDate,
-          publishTime: item.publishTime,
-        };
-      });
+      const masterTitlesList = channelTitles.map((t) => t.text).filter(Boolean);
+      const selectedThumbnailIdsList = channelThumbnails.map((th) => th.id).filter(Boolean);
+      const publishStartDate = itemsToRun[0]?.publishDate || new Date(Date.now() + 86400000).toISOString().split('T')[0];
 
       // Ambil token otorisasi langsung dari credential channel yang tersimpan
       let authToken: string | undefined = undefined;
@@ -401,11 +420,15 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         }
       }
 
+      // Rampingkan Payload Inisialisasi Batch: Zero base64, payload < 5KB
       const res = await api.startBatchAutomation(selectedChannelId, selectedProfile?.id, {
         batchSize: 50,
         channelTitle: selectedChannel?.title,
         videoIds: candidateVideoIds,
-        executionPlan: lightweightPlan,
+        masterTitles: masterTitlesList,
+        selectedThumbnailIds: selectedThumbnailIdsList,
+        publishStartDate,
+        intervalDays: 1,
         authToken,
         accessToken: authToken,
         refreshToken,

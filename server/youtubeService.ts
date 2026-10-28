@@ -117,12 +117,12 @@ export class YouTubeService {
    * Sets video thumbnail
    */
   public async setThumbnail(videoId: string, thumbnailUrl: string): Promise<{ success: boolean; error?: string }> {
-    const video = dbStore.videos.get(videoId);
+    const video = dbStore.getVideoById(videoId) || dbStore.videos.get(videoId) || Array.from(dbStore.videos.values()).find((v) => v.youtubeVideoId === videoId);
     if (!video) {
       return { success: false, error: `Video ${videoId} not found in database` };
     }
 
-    const channel = dbStore.channels.get(video.channelId);
+    const channel = dbStore.getChannelByIdOrTitle(video.channelId) || dbStore.getChannelByYoutubeId(video.channelId) || dbStore.channels.get(video.channelId);
     if (!channel) {
       return { success: false, error: `Channel ${video.channelId} not found` };
     }
@@ -135,7 +135,8 @@ export class YouTubeService {
       };
     }
 
-    if (!video.youtubeVideoId) {
+    const ytVideoId = video.youtubeVideoId || video.id.replace(/^yt-vid-|^yt-/, '');
+    if (!ytVideoId) {
       return {
         success: false,
         error: `YouTube Video ID tidak ditemukan untuk video ${videoId}. Thumbnail upload dibatalkan.`,
@@ -144,7 +145,7 @@ export class YouTubeService {
 
     // Call live YouTube Data API
     try {
-      const thumbRes = await youtubeDataService.updateVideoThumbnail(channel.id, video.youtubeVideoId, thumbnailUrl);
+      const thumbRes = await youtubeDataService.updateVideoThumbnail(channel.id, ytVideoId, thumbnailUrl);
       if (!thumbRes.success) {
         return { success: false, error: `Gagal mengunggah thumbnail ke YouTube API: ${thumbRes.error}` };
       }
@@ -152,10 +153,16 @@ export class YouTubeService {
       return { success: false, error: `Exception saat mengunggah thumbnail ke YouTube API: ${err.message}` };
     }
 
-    // ONLY commit to database after YouTube API mutation succeeds
-    video.thumbnailAssigned = thumbnailUrl;
+    // Commit to database after YouTube API mutation succeeds
+    // Use canonical YouTube thumbnail URL if uploaded via base64, to keep database lightweight
+    if (thumbnailUrl.startsWith('data:')) {
+      video.thumbnailAssigned = `https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg`;
+    } else {
+      video.thumbnailAssigned = thumbnailUrl;
+    }
     video.updatedAt = new Date().toISOString();
     dbStore.videos.set(video.id, video);
+    dbStore.saveToDisk();
 
     return { success: true };
   }

@@ -125,8 +125,14 @@ export function isRealChannel(c: Channel): boolean {
 
   if (
     id === 'chan-test-worker-01' ||
+    id === 'chan-valid-01' ||
     id.startsWith('chan-test-') ||
+    id.startsWith('chan-payload-test-') ||
     ytId === 'UC_TEST_WORKER_01' ||
+    ytId === 'UC_VALID_01' ||
+    ytId.startsWith('UC_TEST_') ||
+    ytId.startsWith('UC_VALID_') ||
+    title.includes('valid relaxing ambience') ||
     title.includes('test ambience') ||
     id === 'chan-ayam-warna' ||
     id === 'chan-suara-alam' ||
@@ -152,13 +158,22 @@ export function isRealVideo(v: ManagedVideo): boolean {
   const cId = v.channelId || '';
   const chanTitle = (v.channelTitle || '').toLowerCase();
 
-  // Test mutation video rejection
+  // Test mutation & mock video rejection
   if (
     id === 'yt-vid-mut-test-101' ||
     id === 'vid-mut-test-101' ||
+    id === 'yt-vid-serial-test-01' ||
+    id.startsWith('vid-test-') ||
     yId === 'vid-mut-test-101' ||
+    yId === 'serial-test-01' ||
+    yId.startsWith('serial-test-') ||
     cId === 'chan-test-worker-01' ||
+    cId === 'chan-valid-01' ||
+    cId.startsWith('chan-payload-test-') ||
+    cId.startsWith('chan-test-') ||
     chanTitle.includes('test ambience') ||
+    chanTitle.includes('valid relaxing ambience') ||
+    title === 'Salinan dari Video Asli' ||
     title.includes('T1 - Suasana Hujan Menenangkan Pengantar Tidur')
   ) {
     return false;
@@ -226,6 +241,71 @@ export function isRealVideo(v: ManagedVideo): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * Hard reset localStorage of any test/mock channels and videos (UC_VALID_, UC_TEST_, etc.)
+ * Ensures clean zero state whenever no authentic channels are connected.
+ */
+export function purgeMockDataFromLocalStorage(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    const rawChannels = localStorage.getItem('amg_channels');
+    if (rawChannels) {
+      const parsed = JSON.parse(rawChannels);
+      if (Array.isArray(parsed)) {
+        const clean = parsed.filter(isRealChannel);
+        if (clean.length !== parsed.length) {
+          localStorage.setItem('amg_channels', JSON.stringify(clean));
+        }
+        if (clean.length === 0) {
+          localStorage.setItem('amg_channels', JSON.stringify([]));
+          const activeId = localStorage.getItem('amg_active_channel_id');
+          if (
+            activeId &&
+            (activeId.includes('VALID') ||
+              activeId.includes('TEST') ||
+              activeId.startsWith('chan-payload-test-') ||
+              activeId === 'chan-valid-01' ||
+              !clean.some((c) => c.id === activeId || c.youtubeChannelId === activeId))
+          ) {
+            localStorage.removeItem('amg_active_channel_id');
+          }
+        }
+      }
+    } else {
+      localStorage.setItem('amg_channels', JSON.stringify([]));
+    }
+
+    const rawVideos = localStorage.getItem('amg_videos');
+    if (rawVideos) {
+      const parsed = JSON.parse(rawVideos);
+      if (Array.isArray(parsed)) {
+        const clean = parsed.filter(isRealVideo);
+        if (clean.length !== parsed.length) {
+          localStorage.setItem('amg_videos', JSON.stringify(clean));
+        }
+      }
+    }
+
+    const activeChanId = localStorage.getItem('amg_active_channel_id');
+    if (
+      activeChanId &&
+      (activeChanId.includes('VALID') ||
+        activeChanId.includes('TEST') ||
+        activeChanId.startsWith('chan-payload-test-') ||
+        activeChanId === 'chan-valid-01')
+    ) {
+      localStorage.removeItem('amg_active_channel_id');
+    }
+  } catch (e) {
+    console.warn('[Storage] Purge error:', e);
+  }
+}
+
+// Auto-execute immediate purge in browser runtime
+if (typeof window !== 'undefined') {
+  purgeMockDataFromLocalStorage();
 }
 
 // Helper to sanitize channel monetization & revenue: enforces Real Data Only (no fake mock revenue or fake YPP)
@@ -2832,6 +2912,10 @@ export const api = {
       batchSize?: number;
       channelTitle?: string;
       videoIds?: string[];
+      masterTitles?: string[];
+      selectedThumbnailIds?: string[];
+      publishStartDate?: string;
+      intervalDays?: number;
       executionPlan?: Array<{
         videoId: string;
         title?: string;
@@ -2861,20 +2945,37 @@ export const api = {
       localStorage.getItem('amg_youtube_refresh_token') ||
       '';
 
-    // Lightweight payload (< 1 KB) - send channel, profile, batchSize, and candidate videoIds / lightweight execution plan
+    // Lightweight payload strictly under 5 KB (zero base64/binary thumbnails to avoid HTTP 413)
     const payload: Record<string, any> = {
       channelId,
       profileId,
       batchSize: payloadOptions?.batchSize || 50,
       channelTitle: payloadOptions?.channelTitle,
+      publishStartDate: payloadOptions?.publishStartDate,
+      intervalDays: payloadOptions?.intervalDays || 1,
       accessToken: effectiveToken || undefined,
       refreshToken: effectiveRefreshToken || undefined,
     };
     if (Array.isArray(payloadOptions?.videoIds) && payloadOptions.videoIds.length > 0) {
       payload.videoIds = payloadOptions.videoIds;
     }
+    if (Array.isArray(payloadOptions?.masterTitles) && payloadOptions.masterTitles.length > 0) {
+      payload.masterTitles = payloadOptions.masterTitles;
+    }
+    if (Array.isArray(payloadOptions?.selectedThumbnailIds) && payloadOptions.selectedThumbnailIds.length > 0) {
+      payload.selectedThumbnailIds = payloadOptions.selectedThumbnailIds;
+    }
+    // Clean and sanitize executionPlan: strip any large base64 dataUrls
     if (Array.isArray(payloadOptions?.executionPlan) && payloadOptions.executionPlan.length > 0) {
-      payload.executionPlan = payloadOptions.executionPlan;
+      payload.executionPlan = payloadOptions.executionPlan.map((p) => ({
+        videoId: p.videoId,
+        title: p.title || p.assignedTitle,
+        assignedTitle: p.assignedTitle || p.title,
+        publishDate: p.publishDate,
+        publishTime: p.publishTime,
+        scheduledPublishAt: p.scheduledPublishAt,
+        thumbnailUrl: (p.thumbnailUrl && !p.thumbnailUrl.startsWith('data:')) ? p.thumbnailUrl : undefined,
+      }));
     }
 
     const endpoints = [
@@ -3575,5 +3676,23 @@ export const api = {
       restoredCount: 0,
       message: `Emergency Rollback: Batch ${batchId} berhasil dibatalkan dan status video dikembalikan ke siap kelola.`,
     };
+  },
+
+  /**
+   * Serial single-video thumbnail upload directly to YouTube Data API v3.
+   * Keeps request payload lightweight (~100-300KB) and avoids 413 Payload Too Large.
+   */
+  uploadVideoThumbnail: async (videoId: string, thumbnailData: string, channelId?: string) => {
+    const cleanId = videoId.replace(/^yt-vid-|^yt-/, '');
+    const res = await authFetch('/api/youtube/thumbnail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId: cleanId, channelId, thumbnailData }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Upload thumbnail gagal (${res.status})`);
+    }
+    return await res.json();
   },
 };

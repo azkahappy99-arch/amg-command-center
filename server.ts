@@ -29,6 +29,7 @@ import {
 } from './server/eligibilityService.js';
 import { phase3Engine } from './server/phase3Engine.js';
 import { workerService } from './server/workerService.js';
+import { youtubeService } from './server/youtubeService.js';
 import { authService } from './server/authService.js';
 import type { AutomationBatch, ManagedVideo } from './src/types/index.js';
 
@@ -61,8 +62,8 @@ function getAppPort(): number {
 const PORT = getAppPort();
 const app = express();
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -3236,7 +3237,21 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
   let batchId = '';
   try {
     const ctx = getRequestContext(req);
-    const { channelId, profileId, videoIds, executionPlan, channelTitle, videos, batchSize = 50, accessToken, refreshToken } = req.body || {};
+    const {
+      channelId,
+      profileId,
+      videoIds,
+      masterTitles,
+      selectedThumbnailIds,
+      publishStartDate,
+      intervalDays = 1,
+      executionPlan,
+      channelTitle,
+      videos,
+      batchSize = 50,
+      accessToken,
+      refreshToken,
+    } = req.body || {};
     if (!channelId) return res.status(400).json({ error: 'channelId is required.' });
 
     // Store incoming tokens directly from client payload into server credentials vault (Serverless Vercel compatibility)
@@ -3294,30 +3309,10 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       }
     }
 
-    const effectiveTitle =
-      channelTitle ||
-      channel?.title ||
-      channelId;
-
     if (!channel) {
-      // Upsert the channel so automation engine & phase3 can operate reliably
-      channel = dbStore.upsertChannel({
-        id: channelId.startsWith('chan-') ? channelId : `chan-${Date.now()}`,
-        title: effectiveTitle,
-        youtubeChannelId: channelId.startsWith('UC') ? channelId : `UC_${Date.now()}`,
-        status: 'CONNECTED',
-        connectedAt: new Date().toISOString(),
-        contentProfileId: profileId || 'profile-default',
-        thumbnailUrl: 'https://images.unsplash.com/photo-1548550023-2bdb3c5beed7?w=150',
-        videoCount: Array.isArray(videoIds) ? videoIds.length : (Array.isArray(executionPlan) ? executionPlan.length : 8),
-        unmanagedVideoCount: Array.isArray(videoIds) ? videoIds.length : (Array.isArray(executionPlan) ? executionPlan.length : 8),
-        publishFrequency: '1/day',
-        publishTime: '16:00',
-        timezone: 'Asia/Jakarta',
-        lastScheduledPublishAt: '2026-10-03T09:00:00.000Z',
-        latestManagedScheduledAt: '2026-10-03T09:00:00.000Z',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      return res.status(404).json({
+        success: false,
+        error: `Channel "${channelId}" tidak ditemukan atau belum terhubung. Silakan hubungkan channel YouTube resmi terlebih dahulu.`,
       });
     }
 
@@ -3402,10 +3397,26 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       const titles = Array.from(dbStore.masterTitles.values()).filter((t) => !blockId || t.blockId === blockId);
       const thumbs = Array.from(dbStore.masterThumbnails.values()).filter((t) => !blockId || t.blockId === blockId);
 
-      let anchorPublishAt = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
-      let anchorTime = anchorPublishAt ? new Date(anchorPublishAt).getTime() : Date.now();
-      if (isNaN(anchorTime) || anchorTime <= Date.now()) {
-        anchorTime = Date.now();
+      const masterTitlesList = Array.isArray(masterTitles) && masterTitles.length > 0
+        ? masterTitles
+        : titles.map((t) => t.text);
+
+      const selectedThumbnailIdsList = Array.isArray(selectedThumbnailIds) && selectedThumbnailIds.length > 0
+        ? selectedThumbnailIds
+        : thumbs.map((th) => th.id);
+
+      const interval = Math.max(1, Number(intervalDays) || 1);
+      let anchorTime = Date.now();
+      if (publishStartDate) {
+        const [y, m, d] = publishStartDate.split('-').map(Number);
+        // 16:00 WIB = 09:00 UTC
+        anchorTime = Date.UTC(y, m - 1, d, 9, 0, 0, 0);
+      } else {
+        const anchorPublishAt = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
+        anchorTime = anchorPublishAt ? new Date(anchorPublishAt).getTime() : Date.now();
+        if (isNaN(anchorTime) || anchorTime <= Date.now()) {
+          anchorTime = Date.now();
+        }
       }
 
       for (let idx = 0; idx < videoIds.length; idx++) {
@@ -3417,16 +3428,31 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         const assignedTitle =
           pItem?.assignedTitle ||
           pItem?.title ||
-          (titles.length > 0 ? titles[idx % titles.length].text : (v?.titleAssigned || v?.titleBefore || 'Video YouTube'));
+          (masterTitlesList.length > 0 ? masterTitlesList[idx % masterTitlesList.length] : (v?.titleAssigned || v?.titleBefore || 'Video YouTube'));
 
-        const assignedThumbnail =
-          pItem?.assignedThumbnail ||
-          pItem?.thumbnailUrl ||
-          (thumbs.length > 0 ? thumbs[idx % thumbs.length].url : (v?.thumbnailAssigned || v?.thumbnailBefore || ''));
+        let assignedThumbnail = '';
+        if (selectedThumbnailIdsList.length > 0) {
+          assignedThumbnail = selectedThumbnailIdsList[idx % selectedThumbnailIdsList.length];
+        } else if (pItem?.assignedThumbnail && !pItem.assignedThumbnail.startsWith('data:')) {
+          assignedThumbnail = pItem.assignedThumbnail;
+        } else if (thumbs.length > 0) {
+          assignedThumbnail = thumbs[idx % thumbs.length].url || thumbs[idx % thumbs.length].id;
+        } else {
+          assignedThumbnail = v?.thumbnailAssigned || v?.thumbnailBefore || '';
+        }
 
-        const nextSlotDate = new Date(anchorTime + (idx + 1) * 24 * 60 * 60 * 1000);
-        nextSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
-        const isoSlot = pItem?.scheduledPublishAt || nextSlotDate.toISOString();
+        let isoSlot: string;
+        if (pItem?.scheduledPublishAt) {
+          isoSlot = pItem.scheduledPublishAt;
+        } else if (publishStartDate) {
+          const slotDate = new Date(anchorTime + idx * interval * 24 * 60 * 60 * 1000);
+          slotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
+          isoSlot = slotDate.toISOString();
+        } else {
+          const nextSlotDate = new Date(anchorTime + (idx + 1) * interval * 24 * 60 * 60 * 1000);
+          nextSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
+          isoSlot = nextSlotDate.toISOString();
+        }
         const dateStr = pItem?.publishDate || isoSlot.split('T')[0];
         const timeStr = pItem?.publishTime || '16:00 WIB';
 
@@ -3459,7 +3485,9 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         } else {
           v.channelId = channel.id;
           v.titleAssigned = assignedTitle;
-          v.thumbnailAssigned = assignedThumbnail;
+          if (assignedThumbnail && !assignedThumbnail.startsWith('data:')) {
+            v.thumbnailAssigned = assignedThumbnail;
+          }
           v.scheduledPublishAt = isoSlot;
           v.managementScope = 'REGULAR';
           v.isAmgEligible = true;
@@ -3745,6 +3773,53 @@ app.post('/api/automation/batch/start', requireAuth, handleStartBatchAutomation)
 app.post('/api/batch/execute', requireAuth, handleStartBatchAutomation);
 app.post('/api/automation/execute', requireAuth, handleStartBatchAutomation);
 app.post('/api/automation/batch/execute', requireAuth, handleStartBatchAutomation);
+
+app.post('/api/youtube/thumbnail', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { videoId, channelId, thumbnailData } = req.body || {};
+    if (!videoId || !thumbnailData) {
+      return res.status(400).json({ success: false, error: 'videoId dan thumbnailData wajib disertakan' });
+    }
+
+    const cleanVideoId = String(videoId).replace(/^yt-vid-|^yt-/, '');
+    
+    // Resolve channel from channelId or from the video's channelId
+    const video = dbStore.getVideoById(cleanVideoId) || dbStore.videos.get(cleanVideoId) || Array.from(dbStore.videos.values()).find((v) => v.youtubeVideoId === cleanVideoId);
+    const resolvedChannelId = channelId || video?.channelId;
+    const channel = resolvedChannelId
+      ? (dbStore.getChannelByIdOrTitle(resolvedChannelId) || dbStore.getChannelByYoutubeId(resolvedChannelId) || dbStore.channels.get(resolvedChannelId))
+      : null;
+
+    if (!channel) {
+      return res.status(404).json({ success: false, error: 'Channel tidak ditemukan di database' });
+    }
+
+    // Rate limit check (max 70 per 24 hours per AMG safety rules)
+    const rlCheck = dbStore.isChannelThumbnailRateLimited(channel.id);
+    if (rlCheck.isLimited || rlCheck.usedLast24h >= 70) {
+      return res.status(429).json({ success: false, error: 'Batas kuota upload thumbnail YouTube 24 jam tercapai (70 thumbnail/24h)' });
+    }
+
+    // Call youtubeService to execute real YouTube Data API v3 upload
+    const uploadResult = await youtubeService.setThumbnail(cleanVideoId, thumbnailData);
+    if (uploadResult.success) {
+      dbStore.logThumbnailAction({
+        channelId: channel.id,
+        videoId: cleanVideoId,
+        action: 'THUMBNAIL_SET',
+        timestamp: new Date().toISOString(),
+        status: 'SUCCESS',
+        response: 'OK',
+      });
+      return res.json({ success: true, message: `Thumbnail video ${cleanVideoId} berhasil diunggah ke YouTube API` });
+    } else {
+      return res.status(400).json({ success: false, error: uploadResult.error || 'Gagal mengunggah thumbnail ke YouTube API' });
+    }
+  } catch (err: any) {
+    console.error('[POST /api/youtube/thumbnail Error]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Internal server error uploading thumbnail' });
+  }
+});
 
 const handleProcessNextStep = async (req: Request, res: Response) => {
   try {
