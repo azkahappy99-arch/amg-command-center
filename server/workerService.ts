@@ -72,14 +72,29 @@ export class WorkerService {
    * 4. Synchronizes memory & persistent state on 200 OK
    */
   public async executeRealJobMutation(job: Phase3AutomationJob): Promise<WorkerJobResult> {
-    const video = dbStore.getVideoById(job.videoId) || dbStore.videos.get(job.videoId);
+    const cleanVidId = job.videoId.replace(/^yt-vid-|^yt-/, '');
+    const video =
+      dbStore.getVideoById(job.videoId) ||
+      dbStore.videos.get(job.videoId) ||
+      dbStore.getVideoById(cleanVidId) ||
+      dbStore.videos.get(cleanVidId) ||
+      Array.from(dbStore.videos.values()).find(
+        (v) => v.youtubeVideoId === cleanVidId || v.id === job.videoId || v.youtubeVideoId === job.videoId
+      );
     if (!video) {
       throw new Error(`Video ID ${job.videoId} tidak ditemukan di database.`);
     }
 
-    const channel = dbStore.getChannelByIdOrTitle(job.channelId) || dbStore.getChannelByYoutubeId(job.channelId);
+    const cleanChannelId = job.channelId.replace(/^chan-/, '');
+    const channel =
+      dbStore.getChannelByYoutubeId(cleanChannelId) ||
+      dbStore.getChannelByIdOrTitle(cleanChannelId) ||
+      dbStore.channels.get(cleanChannelId) ||
+      dbStore.channels.get(`chan-${cleanChannelId}`) ||
+      dbStore.getChannelByIdOrTitle(job.channelId) ||
+      dbStore.getChannelByYoutubeId(job.channelId);
     if (!channel) {
-      throw new Error(`Channel ID ${job.channelId} tidak ditemukan di database.`);
+      throw new Error(`Channel ID ${cleanChannelId} tidak ditemukan atau belum terhubung.`);
     }
 
     if (channel.status !== 'CONNECTED' && channel.status !== 'Connected') {

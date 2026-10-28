@@ -232,30 +232,53 @@ export class AutomationEngine {
     }
 
     // 3. DETERMINISTIC AMG SCHEDULING CURSOR (Check 8 & 17)
-    // The cursor MUST ONLY consider videos inside AMG REGULAR scope!
-    // Excluded, personal, or unclassified videos are strictly ignored.
-    let latestAmgScheduledTime: string | null = null;
-    let latestTimestamp = 0;
+    // Titik acuan jadwal terakhir WAJIB diambil HANYA dari video yang memiliki status penjadwalan resmi dari YouTube Studio:
+    // Filter: status.uploadStatus === 'processed' && status.publishAt != null
+    // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
     const occupiedSlots: string[] = [];
-
-    for (const v of dbStore.videos.values()) {
+    const verifiedScheduledVideos = Array.from(dbStore.videos.values()).filter((v) => {
       const isChannelMatch =
         v.channelId === channel.id ||
         v.channelId === channel.youtubeChannelId ||
         v.channelId === `chan-${channel.youtubeChannelId}` ||
         (channel.id.startsWith('chan-') && v.channelId === channel.id.replace('chan-', '')) ||
         (channelId && v.channelId === channelId);
-      if (!isChannelMatch) continue;
+      if (!isChannelMatch) return false;
 
-      const schedTimeStr = v.scheduledPublishAt || v.publishAt;
-      if (schedTimeStr) {
-        const time = new Date(schedTimeStr).getTime();
-        if (!isNaN(time) && time > latestTimestamp) {
-          latestTimestamp = time;
-          latestAmgScheduledTime = schedTimeStr;
-        }
-        occupiedSlots.push(schedTimeStr);
-      }
+      const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
+      if (!isPrivate) return false;
+
+      const isProcessed =
+        v.uploadStatus === 'processed' ||
+        (v as any).status?.uploadStatus === 'processed' ||
+        v.processingStatus === 'processed';
+      if (!isProcessed) return false;
+
+      const pub = v.publishAt || (v as any).status?.publishAt;
+      if (!pub) return false;
+
+      const rawT = (v.titleBefore || (v as any).title || '').toLowerCase();
+      if (rawT.startsWith('salinan dari') || rawT.startsWith('copy of')) return false;
+
+      const time = new Date(pub).getTime();
+      return !isNaN(time) && time > 0;
+    });
+
+    // Urutkan publishAt secara descending (terjauh ke masa depan). Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
+    verifiedScheduledVideos.sort((a, b) => {
+      const pubA = (a.publishAt || (a as any).status?.publishAt)!;
+      const pubB = (b.publishAt || (b as any).status?.publishAt)!;
+      return new Date(pubB).getTime() - new Date(pubA).getTime();
+    });
+
+    for (const v of verifiedScheduledVideos) {
+      const pub = v.publishAt || (v as any).status?.publishAt;
+      if (pub) occupiedSlots.push(pub);
+    }
+
+    let latestAmgScheduledTime: string | null = null;
+    if (verifiedScheduledVideos.length > 0) {
+      latestAmgScheduledTime = verifiedScheduledVideos[0].publishAt || (verifiedScheduledVideos[0] as any).status?.publishAt || null;
     }
 
     // Fall back to channel.latestManagedScheduledAt or channel.lastScheduledPublishAt

@@ -2789,35 +2789,53 @@ export const api = {
       return evalRes.isEligible || evalRes.category === 'NEW_PRIVATE_CANDIDATE';
     });
 
-    // Detect latest scheduled anchor (e.g. 3 Jan 2027, 09:00 WIB)
-    let latestAnchorMs = 0;
+    // Titik acuan jadwal terakhir WAJIB diambil HANYA dari video yang memiliki status penjadwalan resmi dari YouTube Studio:
+    // Filter: status.uploadStatus === 'processed' && status.publishAt != null
+    // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
+    const verifiedScheduledVideos = channelVideos.filter((v) => {
+      const isPriv = (v.privacyStatus || '').toLowerCase() === 'private';
+      if (!isPriv) return false;
+      const isProcessed =
+        v.uploadStatus === 'processed' ||
+        (v as any).status?.uploadStatus === 'processed' ||
+        v.processingStatus === 'processed';
+      if (!isProcessed) return false;
+      const pub = v.publishAt || (v as any).status?.publishAt;
+      if (!pub) return false;
+      const rawT = (v.titleBefore || (v as any).title || '').toLowerCase();
+      if (rawT.startsWith('salinan dari') || rawT.startsWith('copy of')) return false;
+      const t = new Date(pub).getTime();
+      return !isNaN(t) && t > 0;
+    });
+
+    // Urutkan publishAt secara descending (terjauh ke masa depan). Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
+    verifiedScheduledVideos.sort((a, b) => {
+      const pubA = (a.publishAt || (a as any).status?.publishAt)!;
+      const pubB = (b.publishAt || (b as any).status?.publishAt)!;
+      return new Date(pubB).getTime() - new Date(pubA).getTime();
+    });
+
     let latestAnchorIso: string | null = null;
-    for (const v of channelVideos) {
-      const pub = v.publishAt || v.scheduledPublishAt;
-      if (pub) {
-        const ms = new Date(pub).getTime();
-        if (!isNaN(ms) && ms > latestAnchorMs) {
-          latestAnchorMs = ms;
-          latestAnchorIso = pub;
-        }
-      }
+    if (verifiedScheduledVideos.length > 0) {
+      latestAnchorIso = verifiedScheduledVideos[0].publishAt || (verifiedScheduledVideos[0] as any).status?.publishAt || null;
     }
-    if (channel.lastScheduledPublishAt) {
-      const ms = new Date(channel.lastScheduledPublishAt).getTime();
-      if (!isNaN(ms) && ms > latestAnchorMs) {
-        latestAnchorMs = ms;
-        latestAnchorIso = channel.lastScheduledPublishAt;
-      }
-    }
-    // Default anchor reference: 3 Jan 2027 09:00 WIB (UTC 02:00)
-    if (!latestAnchorIso) {
-      latestAnchorIso = '2027-01-03T02:00:00.000Z';
+    if (!latestAnchorIso && channel.lastScheduledPublishAt) {
+      latestAnchorIso = channel.lastScheduledPublishAt;
     }
 
-    const baseAnchorDate = new Date(latestAnchorIso);
-    const opTimeStr = targetBlock.scheduleConfig?.times?.[0] || '09:00';
+    let baseAnchorUtcMs: number;
+    if (latestAnchorIso) {
+      const anchorD = new Date(latestAnchorIso);
+      // Titik acuan dinormalisasi ke jam 16:00 WIB (09:00 UTC)
+      baseAnchorUtcMs = Date.UTC(anchorD.getUTCFullYear(), anchorD.getUTCMonth(), anchorD.getUTCDate(), 9, 0, 0, 0);
+    } else {
+      const now = new Date();
+      baseAnchorUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 9, 0, 0, 0);
+    }
 
     // Map ALL candidate videos (without capping or slicing at 10)
+    // Jadwal video baru yang dieksekusi otomasi WAJIB dimulai dari (Titik Acuan Terjauh + 1 Hari) pada jam 16:00 WIB (Asia/Jakarta),
+    // berlanjut bertahap +1 hari untuk tiap video berikutnya secara urut tanpa tumpang tindih.
     const preview: AutomationPreviewItem[] = candidateVideos.map((v, i) => {
       const assignedT = titles.length > 0
         ? titles[i % titles.length].text
@@ -2827,8 +2845,9 @@ export const api = {
       const hasCustomMasterThumb = realCustomThumbnails.length > 0;
       const assignedThumb = hasCustomMasterThumb ? realCustomThumbnails[i % realCustomThumbnails.length].url : rawNativeThumb;
 
-      // Schedule starts next day after anchor (e.g. 4 Jan 2027, 5 Jan 2027, etc.)
-      const candSlotDate = new Date(baseAnchorDate.getTime() + (i + 1) * 86400000);
+      // Schedule starts next day after anchor: (Titik Acuan Terjauh + (i + 1) Hari) pada jam 16:00 WIB
+      const candSlotDate = new Date(baseAnchorUtcMs + (i + 1) * 86400000);
+      candSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
       const publishDateStr = candSlotDate.toISOString().split('T')[0];
 
       return {
@@ -2841,7 +2860,7 @@ export const api = {
         isCustomThumbnail: hasCustomMasterThumb,
         thumbnailLabel: hasCustomMasterThumb ? `Master Kustom TH${(i % realCustomThumbnails.length) + 1}` : 'Bawaan YouTube',
         publishDate: publishDateStr,
-        publishTime: `${opTimeStr} WIB`,
+        publishTime: '16:00 WIB',
         targetChannelId: channel.id,
         targetChannelTitle: channel.title,
         contentProfileName: targetBlock.name,
@@ -2945,9 +2964,11 @@ export const api = {
       localStorage.getItem('amg_youtube_refresh_token') ||
       '';
 
+    const cleanChannelId = channelId ? channelId.replace(/^chan-/, '') : channelId;
+
     // Lightweight payload strictly under 5 KB (zero base64/binary thumbnails to avoid HTTP 413)
     const payload: Record<string, any> = {
-      channelId,
+      channelId: cleanChannelId,
       profileId,
       batchSize: payloadOptions?.batchSize || 50,
       channelTitle: payloadOptions?.channelTitle,
@@ -3091,10 +3112,11 @@ export const api = {
 
   processNextBatchStep: async (batchId?: string, channelId?: string) => {
     try {
+      const cleanChannelId = channelId ? channelId.replace(/^chan-/, '') : channelId;
       const res = await authFetch('/api/automation/process-next', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batchId, channelId }),
+        body: JSON.stringify({ batchId, channelId: cleanChannelId }),
       });
       if (res.ok) {
         const json = await res.json();
@@ -3684,10 +3706,11 @@ export const api = {
    */
   uploadVideoThumbnail: async (videoId: string, thumbnailData: string, channelId?: string) => {
     const cleanId = videoId.replace(/^yt-vid-|^yt-/, '');
+    const cleanChannelId = channelId ? channelId.replace(/^chan-/, '') : channelId;
     const res = await authFetch('/api/youtube/thumbnail', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId: cleanId, channelId, thumbnailData }),
+      body: JSON.stringify({ videoId: cleanId, channelId: cleanChannelId, thumbnailData }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));

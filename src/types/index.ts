@@ -215,6 +215,7 @@ export interface ManagedVideo {
   originalUploadAt: string;
   uploadedAt?: string; // Phase 2 synonym
   processingStatus: VideoProcessingStatus;
+  uploadStatus?: string; // YouTube Data API v3 uploadStatus: 'uploaded' | 'processed' | 'failed'
   privacyStatus: VideoPrivacyStatus;
   publishAt?: string;
   scheduledPublishAt?: string;

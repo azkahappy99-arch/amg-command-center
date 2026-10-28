@@ -77,7 +77,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [isClearingStale, setIsClearingStale] = useState(false);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
 
-  const selectedChannel = channels.find((c) => c.id === selectedChannelId) || channels[0];
+  const selectedChannel = channels.find((c) => c.id === selectedChannelId || c.youtubeChannelId === selectedChannelId || `chan-${c.youtubeChannelId}` === selectedChannelId) || channels[0];
+  const pureChannelId = selectedChannel?.youtubeChannelId || (selectedChannelId ? selectedChannelId.replace(/^chan-/, '') : '');
   const selectedProfile =
     profiles.find((p) => p.id === selectedChannel?.contentProfileId || p.id === selectedChannel?.blockId || p.blockId === selectedChannel?.blockId) ||
     profiles.find((p) => p.name.toLowerCase() === 'general' || p.nicheCategory?.toLowerCase() === 'general') ||
@@ -89,7 +90,8 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setDryRunResult(null);
     setExecutionMessage(null);
     try {
-      const res = await api.getAutomationPreview(channelId);
+      const cleanId = channelId.replace(/^chan-/, '');
+      const res = await api.getAutomationPreview(cleanId);
       if (res.success && res.preview) {
         setPreviewItems(res.preview);
         if (res.scopeSummary) {
@@ -120,13 +122,13 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   }, [initialChannelId]);
 
   useEffect(() => {
-    if (selectedChannelId) {
-      fetchPreview(selectedChannelId);
+    if (pureChannelId || selectedChannelId) {
+      fetchPreview(pureChannelId || selectedChannelId);
     }
     fetchBatches();
     setCurrentPage(1);
     setIsTableExpanded(false);
-  }, [selectedChannelId, previewFilter]);
+  }, [selectedChannelId, pureChannelId, previewFilter]);
 
   // Client-Side Step Executor & Polling untuk Serverless Vercel (setiap 3 detik memproses 1 video secara serial)
   const hasRunningBatch = batches.some((b) => b.status === 'running' || (b.status as string) === 'BERJALAN');
@@ -147,7 +149,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         const currentRunning =
           batchesRef.current.find(
             (b) =>
-              (b.channelId === selectedChannelId || b.channelId === selectedChannel?.youtubeChannelId) &&
+              (b.channelId === pureChannelId || b.channelId === selectedChannelId || b.channelId === selectedChannel?.youtubeChannelId || b.channelId === `chan-${pureChannelId}`) &&
               (b.status === 'running' || (b.status as string) === 'BERJALAN') &&
               b.completedCount < b.detectedCount
           ) ||
@@ -162,7 +164,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           return;
         }
 
-        const res = await api.processNextBatchStep(currentRunning.id, selectedChannelId);
+        const res = await api.processNextBatchStep(currentRunning.id, pureChannelId || selectedChannelId);
         if (isSubscribed && res && res.success) {
           if (res.batch) {
             setBatches((prev) => {
@@ -205,7 +207,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   const binaryData = await getThumbnailDataById(assignedThumb.id);
                   const cleanVidId = (res.video.id || (res.video as any).youtubeVideoId || '').replace(/^yt-vid-|^yt-/, '');
                   if (binaryData && cleanVidId) {
-                    await api.uploadVideoThumbnail(cleanVidId, binaryData, selectedChannelId);
+                    await api.uploadVideoThumbnail(cleanVidId, binaryData, pureChannelId || selectedChannelId);
                     console.log(`[Serial Thumbnail] Berhasil mengunggah thumbnail Master (${assignedThumb.name || (assignedThumb as any).label || assignedThumb.id}) untuk video ${cleanVidId}`);
                   }
                 } catch (thumbUploadErr: any) {
@@ -421,7 +423,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       }
 
       // Rampingkan Payload Inisialisasi Batch: Zero base64, payload < 5KB
-      const res = await api.startBatchAutomation(selectedChannelId, selectedProfile?.id, {
+      const res = await api.startBatchAutomation(pureChannelId || selectedChannelId, selectedProfile?.id, {
         batchSize: 50,
         channelTitle: selectedChannel?.title,
         videoIds: candidateVideoIds,
@@ -442,7 +444,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         const newRunningBatch: AutomationBatch = res.batch || {
           id: res.batchId,
           batchNumber: batchNum,
-          channelId: selectedChannelId,
+          channelId: pureChannelId || selectedChannelId,
           channelTitle: selectedChannel?.title || 'YouTube Channel',
           profileId: selectedProfile?.id || 'profile-default',
           profileName: selectedProfile?.name || 'Standard AMG Schedule (Kloter 1)',

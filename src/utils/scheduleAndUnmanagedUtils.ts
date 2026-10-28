@@ -153,32 +153,52 @@ export interface ScheduledAnchorInfo {
 export function getChannelScheduledAnchor(channel: Channel, videos: ManagedVideo[] = []): ScheduledAnchorInfo {
   const channelVideos = videos.filter((v) => isVideoOfChannel(v, channel));
 
+  // Filter HANYA video dengan status penjadwalan resmi dari YouTube Studio:
+  // status.uploadStatus === 'processed' && status.publishAt != null
+  // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
+  const verifiedScheduled = channelVideos.filter((v) => {
+    const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
+    if (!isPrivate) return false;
+
+    const isProcessed =
+      v.uploadStatus === 'processed' ||
+      (v as any).status?.uploadStatus === 'processed' ||
+      v.processingStatus === 'processed';
+    if (!isProcessed) return false;
+
+    const pubAt = v.publishAt || (v as any).status?.publishAt;
+    if (!pubAt) return false;
+
+    const rawTitle = (v.titleBefore || (v as any).title || '').toLowerCase();
+    if (rawTitle.startsWith('salinan dari') || rawTitle.startsWith('copy of')) return false;
+
+    const t = new Date(pubAt).getTime();
+    return !isNaN(t) && t > 0;
+  });
+
+  // Urutkan publishAt secara descending (terjauh ke masa depan).
+  // Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
+  verifiedScheduled.sort((a, b) => {
+    const pubA = (a.publishAt || (a as any).status?.publishAt)!;
+    const pubB = (b.publishAt || (b as any).status?.publishAt)!;
+    return new Date(pubB).getTime() - new Date(pubA).getTime();
+  });
+
   let maxTime = 0;
   let latestPublishAt: string | null = null;
   let latestVideoTitle: string | null = null;
   let latestVideoId: string | null = null;
-  let count = 0;
 
-  for (const v of channelVideos) {
-    const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
-    if (!isPrivate) continue;
-
-    const pubAt = v.publishAt || (v as any).status?.publishAt || v.scheduledPublishAt;
-    if (pubAt) {
-      const t = new Date(pubAt).getTime();
-      if (!isNaN(t) && t > 0) {
-        count++;
-        if (t > maxTime) {
-          maxTime = t;
-          latestPublishAt = pubAt;
-          latestVideoTitle = v.titleBefore || v.titleAssigned || v.id;
-          latestVideoId = v.youtubeVideoId || v.id;
-        }
-      }
-    }
+  if (verifiedScheduled.length > 0) {
+    const furthest = verifiedScheduled[0];
+    const pubAt = furthest.publishAt || (furthest as any).status?.publishAt;
+    maxTime = new Date(pubAt!).getTime();
+    latestPublishAt = pubAt!;
+    latestVideoTitle = furthest.titleBefore || furthest.titleAssigned || furthest.id;
+    latestVideoId = furthest.youtubeVideoId || furthest.id;
   }
 
-  // Also verify against channel's stored anchor
+  // Also verify against channel's stored anchor if valid and further
   const channelStored = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
   if (channelStored) {
     const storedTime = new Date(channelStored).getTime();
@@ -194,6 +214,7 @@ export function getChannelScheduledAnchor(channel: Channel, videos: ManagedVideo
     latestPublishAt,
     latestVideoTitle: latestVideoTitle || channel.lastScheduledVideoTitle || null,
     latestVideoId: latestVideoId || channel.lastScheduledVideoId || null,
-    scheduledVideosCount: count || channel.scheduleStockCount || 0,
+    scheduledVideosCount: verifiedScheduled.length || channel.scheduleStockCount || 0,
   };
 }
+

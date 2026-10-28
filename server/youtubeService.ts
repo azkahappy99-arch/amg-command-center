@@ -28,13 +28,21 @@ export class YouTubeService {
       return { success: false, error: `Video ${videoId} not found in database` };
     }
 
-    const channel = dbStore.channels.get(video.channelId);
+    const channel =
+      dbStore.getChannelByYoutubeId(video.channelId) ||
+      dbStore.getChannelByIdOrTitle(video.channelId) ||
+      dbStore.channels.get(video.channelId) ||
+      dbStore.channels.get(`chan-${video.channelId.replace(/^chan-/, '')}`);
     if (!channel) {
       return { success: false, error: `Channel ${video.channelId} not found` };
     }
 
     // Authenticate via OAuth
-    const accessToken = await youtubeAuthService.getValidAccessToken(channel.id);
+    const cleanChanId = (channel.youtubeChannelId || channel.id || video.channelId).replace(/^chan-/, '');
+    const accessToken =
+      (await youtubeAuthService.getValidAccessToken(cleanChanId)) ||
+      (await youtubeAuthService.getValidAccessToken(channel.id)) ||
+      (await youtubeAuthService.getValidAccessToken(video.channelId));
     if (!accessToken) {
       return {
         success: false,

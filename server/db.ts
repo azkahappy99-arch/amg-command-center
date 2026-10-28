@@ -1040,9 +1040,12 @@ class DatabaseStore {
 
   public getChannelByYoutubeId(youtubeChannelId: string): Channel | undefined {
     if (!youtubeChannelId) return undefined;
-    const norm = youtubeChannelId.trim().toLowerCase();
+    const clean = youtubeChannelId.replace(/^chan-/, '').trim().toLowerCase();
+    const withChan = `chan-${clean}`;
     for (const c of this.channels.values()) {
-      if (c.youtubeChannelId && c.youtubeChannelId.trim().toLowerCase() === norm) {
+      const cYt = (c.youtubeChannelId || '').trim().toLowerCase();
+      const cId = (c.id || '').trim().toLowerCase();
+      if (cYt === clean || cYt === withChan || cId === clean || cId === withChan) {
         return c;
       }
     }
@@ -1051,14 +1054,22 @@ class DatabaseStore {
 
   public getChannelByIdOrTitle(identifier: string): Channel | undefined {
     if (!identifier) return undefined;
-    const direct = this.channels.get(identifier);
+    const clean = identifier.replace(/^chan-/, '').trim().toLowerCase();
+    const withChan = `chan-${clean}`;
+    const direct = this.channels.get(identifier) || this.channels.get(clean) || this.channels.get(withChan);
     if (direct) return direct;
 
     const norm = identifier.trim().toLowerCase();
     for (const c of this.channels.values()) {
+      const cYt = (c.youtubeChannelId || '').toLowerCase();
+      const cId = (c.id || '').toLowerCase();
       if (
-        c.id.toLowerCase() === norm ||
-        (c.youtubeChannelId && c.youtubeChannelId.toLowerCase() === norm) ||
+        cId === norm ||
+        cId === clean ||
+        cId === withChan ||
+        cYt === norm ||
+        cYt === clean ||
+        cYt === withChan ||
         (c.title && c.title.toLowerCase() === norm)
       ) {
         return c;

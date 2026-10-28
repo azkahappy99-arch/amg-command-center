@@ -90,30 +90,30 @@ export class YoutubeAuthService {
    */
   public resolveStoredCredentials(channelId: string): StoredCredentials | undefined {
     if (!channelId) return undefined;
-    let creds = credentialsVault.get(channelId);
-    if (creds) return creds;
-
     const cleanId = channelId.startsWith('chan-') ? channelId.replace(/^chan-/, '') : channelId;
-    creds = credentialsVault.get(cleanId) || credentialsVault.get(`chan-${cleanId}`);
+    let creds = credentialsVault.get(cleanId) || credentialsVault.get(channelId) || credentialsVault.get(`chan-${cleanId}`);
     if (creds) return creds;
 
     // Check dbStore.channels
     try {
-      const ch = dbStore.channels.get(channelId) || 
-                 dbStore.getChannelByYoutubeId(channelId) || 
+      const ch = dbStore.getChannelByYoutubeId(cleanId) ||
+                 dbStore.getChannelByIdOrTitle(cleanId) ||
+                 dbStore.channels.get(cleanId) ||
+                 dbStore.channels.get(channelId) || 
                  dbStore.getChannelByIdOrTitle(channelId);
       if (ch) {
-        creds = credentialsVault.get(ch.id) ||
-                (ch.youtubeChannelId ? credentialsVault.get(ch.youtubeChannelId) : undefined) ||
+        creds = (ch.youtubeChannelId ? credentialsVault.get(ch.youtubeChannelId) : undefined) ||
+                credentialsVault.get(ch.id) ||
                 (ch.youtubeChannelId ? credentialsVault.get(`chan-${ch.youtubeChannelId}`) : undefined);
         if (creds) return creds;
       }
     } catch {}
 
     // Check fuzzy match across vault
-    const lower = channelId.toLowerCase();
+    const lower = cleanId.toLowerCase();
     for (const [key, val] of credentialsVault.entries()) {
-      if (key.toLowerCase() === lower || key.includes(cleanId) || cleanId.includes(key.replace(/^chan-/, ''))) {
+      const cleanKey = key.replace(/^chan-/, '').toLowerCase();
+      if (key.toLowerCase() === lower || cleanKey === lower || key.includes(cleanId) || cleanId.includes(cleanKey)) {
         return val;
       }
     }

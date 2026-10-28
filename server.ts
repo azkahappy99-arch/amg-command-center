@@ -3024,11 +3024,15 @@ app.post('/api/test/phase2-acceptance', (req: Request, res: Response) => {
 // ==========================================
 app.get('/api/scheduler/reconcile/:channelId', async (req: Request, res: Response) => {
   const targetId = req.params.channelId;
+  const cleanTargetId = targetId.replace(/^chan-/, '');
   const channel =
+    dbStore.getChannelByYoutubeId(cleanTargetId) ||
+    dbStore.getChannelByIdOrTitle(cleanTargetId) ||
+    dbStore.channels.get(cleanTargetId) ||
+    dbStore.channels.get(`chan-${cleanTargetId}`) ||
     dbStore.channels.get(targetId) ||
-    dbStore.getChannelByYoutubeId(targetId) ||
     Array.from(dbStore.channels.values()).find(
-      (c) => c.id === targetId || c.youtubeChannelId === targetId || c.id === `chan-${targetId}`
+      (c) => c.id === targetId || c.youtubeChannelId === targetId || c.youtubeChannelId === cleanTargetId || c.id === `chan-${targetId}`
     );
   if (!channel) return res.status(404).json({ error: 'Channel not found' });
 
@@ -3106,29 +3110,49 @@ app.get('/api/scheduler/reconcile/:channelId', async (req: Request, res: Respons
           v.channelId === `chan-${channel.youtubeChannelId}`))
   );
 
+  // Filter HANYA video dengan status penjadwalan resmi dari YouTube Studio:
+  // status.uploadStatus === 'processed' && status.publishAt != null
+  // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
+  const verifiedChannelScheduled = channelVideos.filter((v) => {
+    const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
+    if (!isPrivate) return false;
+
+    const isProcessed =
+      v.uploadStatus === 'processed' ||
+      (v as any).status?.uploadStatus === 'processed' ||
+      v.processingStatus === 'processed';
+    if (!isProcessed) return false;
+
+    const pubAt = v.publishAt || (v as any).status?.publishAt;
+    if (!pubAt) return false;
+
+    const rawTitle = (v.titleBefore || (v as any).title || '').toLowerCase();
+    if (rawTitle.startsWith('salinan dari') || rawTitle.startsWith('copy of')) return false;
+
+    const t = new Date(pubAt).getTime();
+    return !isNaN(t) && t > 0;
+  });
+
+  // Urutkan publishAt secara descending (terjauh ke masa depan). Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
+  verifiedChannelScheduled.sort((a, b) => {
+    const pubA = (a.publishAt || (a as any).status?.publishAt)!;
+    const pubB = (b.publishAt || (b as any).status?.publishAt)!;
+    return new Date(pubB).getTime() - new Date(pubA).getTime();
+  });
+
   let furthestPublishAt: string | null = null;
   let furthestTitle: string | null = null;
   let furthestId: string | null = null;
   let maxTimestamp = 0;
-  let scheduledCount = 0;
+  let scheduledCount = verifiedChannelScheduled.length;
 
-  for (const v of channelVideos) {
-    const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
-    if (!isPrivate) continue;
-
-    const pubAt = v.publishAt || (v as any).status?.publishAt || v.scheduledPublishAt;
-    if (pubAt) {
-      const t = new Date(pubAt).getTime();
-      if (!isNaN(t) && t > 0) {
-        scheduledCount++;
-        if (t > maxTimestamp) {
-          maxTimestamp = t;
-          furthestPublishAt = pubAt;
-          furthestTitle = v.titleBefore || v.titleAssigned || null;
-          furthestId = v.youtubeVideoId || v.id;
-        }
-      }
-    }
+  if (verifiedChannelScheduled.length > 0) {
+    const furthest = verifiedChannelScheduled[0];
+    const pubAt = furthest.publishAt || (furthest as any).status?.publishAt;
+    maxTimestamp = new Date(pubAt!).getTime();
+    furthestPublishAt = pubAt!;
+    furthestTitle = furthest.titleBefore || furthest.titleAssigned || null;
+    furthestId = furthest.youtubeVideoId || furthest.id;
   }
 
   // Compare with youtubeAnchor
@@ -3254,6 +3278,8 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
     } = req.body || {};
     if (!channelId) return res.status(400).json({ error: 'channelId is required.' });
 
+    const cleanChannelId = channelId.replace(/^chan-/, '');
+
     // Store incoming tokens directly from client payload into server credentials vault (Serverless Vercel compatibility)
     const clientAuthHeader = req.headers.authorization;
     const bearerToken = (clientAuthHeader && clientAuthHeader.startsWith('Bearer ')) ? clientAuthHeader.substring(7).trim() : undefined;
@@ -3261,24 +3287,33 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
     const effectiveRefreshToken = refreshToken;
 
     if (effectiveToken && effectiveToken !== 'serverless-channel-session' && effectiveToken.length > 20) {
-      youtubeAuthService.storeCredentials(channelId, {
-        channelId,
+      youtubeAuthService.storeCredentials(cleanChannelId, {
+        channelId: cleanChannelId,
         accessToken: effectiveToken,
         refreshToken: effectiveRefreshToken || undefined,
         tokenExpiresAt: Date.now() + 3600 * 1000,
         scope: 'https://www.googleapis.com/auth/youtube.force-ssl',
       });
+      if (cleanChannelId !== channelId) {
+        youtubeAuthService.storeCredentials(channelId, {
+          channelId,
+          accessToken: effectiveToken,
+          refreshToken: effectiveRefreshToken || undefined,
+          tokenExpiresAt: Date.now() + 3600 * 1000,
+          scope: 'https://www.googleapis.com/auth/youtube.force-ssl',
+        });
+      }
     } else if (effectiveRefreshToken) {
-      const existing = youtubeAuthService.resolveStoredCredentials(channelId);
+      const existing = youtubeAuthService.resolveStoredCredentials(cleanChannelId) || youtubeAuthService.resolveStoredCredentials(channelId);
       if (existing) {
         existing.refreshToken = effectiveRefreshToken;
-        youtubeAuthService.storeCredentials(channelId, existing);
+        youtubeAuthService.storeCredentials(cleanChannelId, existing);
       }
     }
 
     // Enforce channel workspace access if user is logged in
     if (ctx.isAuthenticated && ctx.role === 'USER') {
-      const ch = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
+      const ch = dbStore.getChannelByYoutubeId(cleanChannelId) || dbStore.getChannelByIdOrTitle(cleanChannelId);
       if (ch && ch.workspaceId && ch.workspaceId !== ctx.workspaceId) {
         return res.status(403).json({ error: 'Akses ditolak: Channel berada di luar workspace Anda.' });
       }
@@ -3293,15 +3328,23 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       }
     }
 
-    // 1. Resolve channel in dbStore
-    let channel = dbStore.getChannelByIdOrTitle(channelId) || dbStore.getChannelByYoutubeId(channelId);
+    // 1. Resolve channel in dbStore with pure YouTube ID and aliases
+    let channel =
+      dbStore.getChannelByYoutubeId(cleanChannelId) ||
+      dbStore.getChannelByIdOrTitle(cleanChannelId) ||
+      dbStore.channels.get(cleanChannelId) ||
+      dbStore.channels.get(`chan-${cleanChannelId}`) ||
+      dbStore.getChannelByIdOrTitle(channelId) ||
+      dbStore.getChannelByYoutubeId(channelId);
+
     if (!channel) {
-      const norm = channelId.trim().toLowerCase();
+      const norm = cleanChannelId.trim().toLowerCase();
       for (const c of dbStore.channels.values()) {
         if (
           c.title?.toLowerCase() === norm ||
           c.id.toLowerCase() === norm ||
-          c.youtubeChannelId?.toLowerCase() === norm
+          c.youtubeChannelId?.toLowerCase() === norm ||
+          c.id.toLowerCase() === `chan-${norm}`
         ) {
           channel = c;
           break;
@@ -3312,17 +3355,17 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
     if (!channel) {
       return res.status(404).json({
         success: false,
-        error: `Channel "${channelId}" tidak ditemukan atau belum terhubung. Silakan hubungkan channel YouTube resmi terlebih dahulu.`,
+        error: `Channel "${cleanChannelId}" tidak ditemukan atau belum terhubung. Silakan hubungkan channel YouTube resmi terlebih dahulu.`,
       });
     }
 
     // Proactive Google OAuth Token Check & Auto-Refresh before batch automation dispatch
     if (channel) {
       try {
-        let validToken = await youtubeAuthService.getValidAccessToken(channel.id);
+        let validToken = await youtubeAuthService.getValidAccessToken(cleanChannelId) || await youtubeAuthService.getValidAccessToken(channel.id);
         if (!validToken) {
           const rToken = effectiveRefreshToken || (channel as any).refreshToken;
-          const refreshed = await youtubeAuthService.refreshAccessToken(channel.id, rToken);
+          const refreshed = (await youtubeAuthService.refreshAccessToken(cleanChannelId, rToken)) || (await youtubeAuthService.refreshAccessToken(channel.id, rToken));
           if (refreshed) {
             console.log(`[handleStartBatchAutomation] Proactively refreshed Google OAuth token for channel "${channel.title}".`);
           }
@@ -3405,18 +3448,59 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
         ? selectedThumbnailIds
         : thumbs.map((th) => th.id);
 
+      // Titik acuan jadwal terakhir WAJIB diambil HANYA dari video yang memiliki status penjadwalan resmi dari YouTube Studio:
+      // Filter: status.uploadStatus === 'processed' && status.publishAt != null
+      // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
+      const channelVerifiedScheduled = Array.from(dbStore.videos.values()).filter((v) => {
+        const isChan =
+          v.channelId === channel.id ||
+          v.channelId === cleanChannelId ||
+          (channel.youtubeChannelId && (v.channelId === channel.youtubeChannelId || v.channelId === `chan-${channel.youtubeChannelId}`));
+        if (!isChan) return false;
+        const isPriv = (v.privacyStatus || '').toLowerCase() === 'private';
+        if (!isPriv) return false;
+        const isProcessed =
+          v.uploadStatus === 'processed' ||
+          (v as any).status?.uploadStatus === 'processed' ||
+          v.processingStatus === 'processed';
+        if (!isProcessed) return false;
+        const pub = v.publishAt || (v as any).status?.publishAt;
+        if (!pub) return false;
+        const rawT = (v.titleBefore || (v as any).title || '').toLowerCase();
+        if (rawT.startsWith('salinan dari') || rawT.startsWith('copy of')) return false;
+        const t = new Date(pub).getTime();
+        return !isNaN(t) && t > 0;
+      });
+
+      // Urutkan publishAt secara descending (terjauh ke masa depan). Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
+      channelVerifiedScheduled.sort((a, b) => {
+        const pubA = (a.publishAt || (a as any).status?.publishAt)!;
+        const pubB = (b.publishAt || (b as any).status?.publishAt)!;
+        return new Date(pubB).getTime() - new Date(pubA).getTime();
+      });
+
+      let latestAnchorIso: string | null = null;
+      if (channelVerifiedScheduled.length > 0) {
+        latestAnchorIso = channelVerifiedScheduled[0].publishAt || (channelVerifiedScheduled[0] as any).status?.publishAt || null;
+      }
+      if (!latestAnchorIso && channel.lastScheduledPublishAt) {
+        latestAnchorIso = channel.lastScheduledPublishAt;
+      }
+
       const interval = Math.max(1, Number(intervalDays) || 1);
-      let anchorTime = Date.now();
-      if (publishStartDate) {
+      let baseAnchorUtcMs: number;
+
+      if (latestAnchorIso) {
+        const anchorD = new Date(latestAnchorIso);
+        // Normalize anchor date to 16:00 WIB (09:00 UTC)
+        baseAnchorUtcMs = Date.UTC(anchorD.getUTCFullYear(), anchorD.getUTCMonth(), anchorD.getUTCDate(), 9, 0, 0, 0);
+      } else if (publishStartDate) {
         const [y, m, d] = publishStartDate.split('-').map(Number);
         // 16:00 WIB = 09:00 UTC
-        anchorTime = Date.UTC(y, m - 1, d, 9, 0, 0, 0);
+        baseAnchorUtcMs = Date.UTC(y, m - 1, d - 1, 9, 0, 0, 0);
       } else {
-        const anchorPublishAt = channel.lastScheduledPublishAt || channel.latestManagedScheduledAt;
-        anchorTime = anchorPublishAt ? new Date(anchorPublishAt).getTime() : Date.now();
-        if (isNaN(anchorTime) || anchorTime <= Date.now()) {
-          anchorTime = Date.now();
-        }
+        const now = new Date();
+        baseAnchorUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 9, 0, 0, 0);
       }
 
       for (let idx = 0; idx < videoIds.length; idx++) {
@@ -3441,15 +3525,13 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
           assignedThumbnail = v?.thumbnailAssigned || v?.thumbnailBefore || '';
         }
 
+        // Jadwal video baru yang dieksekusi otomasi WAJIB dimulai dari (Titik Acuan Terjauh + 1 Hari) pada jam 16:00 WIB (Asia/Jakarta),
+        // berlanjut bertahap +1 hari untuk tiap video berikutnya secara urut tanpa tumpang tindih.
         let isoSlot: string;
         if (pItem?.scheduledPublishAt) {
           isoSlot = pItem.scheduledPublishAt;
-        } else if (publishStartDate) {
-          const slotDate = new Date(anchorTime + idx * interval * 24 * 60 * 60 * 1000);
-          slotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
-          isoSlot = slotDate.toISOString();
         } else {
-          const nextSlotDate = new Date(anchorTime + (idx + 1) * interval * 24 * 60 * 60 * 1000);
+          const nextSlotDate = new Date(baseAnchorUtcMs + (idx + 1) * interval * 24 * 60 * 60 * 1000);
           nextSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
           isoSlot = nextSlotDate.toISOString();
         }

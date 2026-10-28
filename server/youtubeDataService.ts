@@ -406,25 +406,29 @@ export class YouTubeDataService {
       };
     }
 
-    // Filter scheduled videos: privacyStatus === 'private' and valid ISO publishAt
+    // Filter scheduled videos: WAJIB status.uploadStatus === 'processed' && status.publishAt != null
+    // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
     const scheduledList = uploadsResult.data.filter((v) => {
       const isPrivate = (v.privacyStatus || '').toLowerCase() === 'private';
       if (!isPrivate) return false;
       if (!v.publishAt) return false;
+
+      // WAJIB status.uploadStatus === 'processed'
+      const isProcessed = v.uploadStatus === 'processed';
+      if (!isProcessed) return false;
+
+      // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
+      const rawTitle = (v.title || '').toLowerCase();
+      if (rawTitle.startsWith('salinan dari') || rawTitle.startsWith('copy of')) return false;
+
       const time = new Date(v.publishAt).getTime();
       return !isNaN(time) && time > 0;
     });
 
-    let maxTimestamp = 0;
-    let furthestItem: YouTubeVideoItem | null = null;
+    // Urutkan publishAt secara descending (terjauh ke masa depan). Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
+    scheduledList.sort((a, b) => new Date(b.publishAt!).getTime() - new Date(a.publishAt!).getTime());
 
-    for (const v of scheduledList) {
-      const time = new Date(v.publishAt!).getTime();
-      if (time > maxTimestamp) {
-        maxTimestamp = time;
-        furthestItem = v;
-      }
-    }
+    const furthestItem = scheduledList.length > 0 ? scheduledList[0] : null;
 
     return {
       latestPublishAt: furthestItem?.publishAt || null,
@@ -461,9 +465,13 @@ export class YouTubeDataService {
     operationName: string,
     operation: (token: string) => Promise<{ res: Response; data?: any; error?: string }>
   ): Promise<{ success: boolean; data?: T; error?: string; status?: number }> {
-    let token = await youtubeAuthService.getValidAccessToken(channelId);
+    const cleanChanId = channelId.startsWith('chan-') ? channelId.replace(/^chan-/, '') : channelId;
+    let token = await youtubeAuthService.getValidAccessToken(cleanChanId);
+    if (!token && cleanChanId !== channelId) {
+      token = await youtubeAuthService.getValidAccessToken(channelId);
+    }
     if (!token) {
-      token = await youtubeAuthService.refreshAccessToken(channelId);
+      token = (await youtubeAuthService.refreshAccessToken(cleanChanId)) || (await youtubeAuthService.refreshAccessToken(channelId));
     }
     if (!token) {
       return {
