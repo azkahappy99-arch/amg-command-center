@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Tv,
   Film,
@@ -14,11 +14,21 @@ import {
   DollarSign,
   ChevronRight,
   Key,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  X,
+  CalendarClock,
+  UserCheck,
+  CheckCircle,
 } from 'lucide-react';
 import { Channel, ContentProfile, MasterTitle, MasterThumbnail, ManagedVideo, AutomationBatch, ActivityLog } from '../types/index.ts';
 import { QueueMonitor } from './QueueMonitor';
 import { formatIDR } from './MonetizationBadge';
 import { calculateDetectedVideosCount } from '../utils/blockIsolation';
+import { isAmgRegulerEligible } from '../services/candidateDetectionService.ts';
+import { getChannelScheduledAnchor, formatWibDateTime, getChannelUnmanagedVideos } from '../utils/scheduleAndUnmanagedUtils.ts';
+import { NicheBadge } from '../utils/nicheCategories';
 
 export interface ActionRequiredItem {
   id: string;
@@ -85,6 +95,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const effectiveChannels = useMemo(() => {
     if (channels && channels.length > 0) return channels;
     try {
+      const persistent = localStorage.getItem('amg_persistent_channels');
+      if (persistent) {
+        const parsed = JSON.parse(persistent);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+          const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+          return parsed.filter(
+            (c: Channel) =>
+              !c.isSeeded &&
+              !unlinkedIds.includes(c.id) &&
+              !unlinkedIds.includes(c.youtubeChannelId || '')
+          );
+        }
+      }
       const stored = localStorage.getItem('amg_channels');
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -151,48 +175,75 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return videos;
   }, [videos, activeChannel]);
 
-  // Block-isolated Video Metrics
-  const activeBlockVideos = useMemo(() => {
+  // Active Channel Isolated Videos
+  const activeChannelVideos = useMemo(() => {
     if (!activeChannel) return [];
+    const cleanId = activeChannel.youtubeChannelId || activeChannel.id.replace(/^chan-/, '');
     return effectiveVideos.filter(
       (v) =>
         v.channelId === activeChannel.id ||
+        v.channelId === `chan-${activeChannel.id}` ||
         v.channelId === activeChannel.youtubeChannelId ||
         v.channelId === `chan-${activeChannel.youtubeChannelId}` ||
-        v.blockId === activeBlockId
+        v.channelId === cleanId ||
+        v.channelId === `chan-${cleanId}`
     );
-  }, [effectiveVideos, activeChannel, activeBlockId]);
+  }, [effectiveVideos, activeChannel]);
 
-  const targetChannelFilter =
-    effectiveSelectedId && effectiveSelectedId !== 'ALL'
-      ? effectiveSelectedId
-      : effectiveSelectedId === 'ALL'
-      ? 'ALL'
-      : activeChannel?.id;
+  // Video Terdeteksi: Kandidat AMG Reguler (Layak) untuk channel aktif
+  const channelDetectedCount = useMemo(() => {
+    if (effectiveChannels.length === 0 || !activeChannel) return 0;
+    return activeChannelVideos.filter(isAmgRegulerEligible).length;
+  }, [effectiveChannels, activeChannel, activeChannelVideos]);
 
-  const blockDetectedCount = useMemo(() => {
-    if (effectiveChannels.length === 0) return 0;
-    const calculated = calculateDetectedVideosCount(effectiveVideos, effectiveChannels, profiles, targetChannelFilter);
-    if (calculated > 0) return calculated;
-    if (effectiveVideos && effectiveVideos.length > 0) {
-      if (targetChannelFilter && targetChannelFilter !== 'ALL') {
-        const forChan = effectiveVideos.filter(
-          (v) =>
-            v.channelId === targetChannelFilter ||
-            v.channelId === `chan-${targetChannelFilter}` ||
-            (activeChannel && (v.channelId === activeChannel.youtubeChannelId || v.channelId === `chan-${activeChannel.youtubeChannelId}`))
-        );
-        return forChan.length > 0 ? forChan.length : effectiveVideos.length;
-      }
-      return effectiveVideos.length;
-    }
-    return 0;
-  }, [effectiveVideos, effectiveChannels, profiles, targetChannelFilter, activeChannel]);
+  // Sudah Dikelola
+  const channelCompletedCount = useMemo(() => {
+    if (effectiveChannels.length === 0 || !activeChannel) return 0;
+    return activeChannelVideos.filter((v) => v.managementStatus === 'COMPLETED' || (v.isManaged && v.managementStatus !== 'EXCLUDED')).length;
+  }, [effectiveChannels, activeChannel, activeChannelVideos]);
 
-  const blockCompletedCount = useMemo(() => {
-    if (effectiveChannels.length === 0) return 0;
-    return activeBlockVideos.filter((v) => v.managementStatus === 'COMPLETED' || v.isManaged).length;
-  }, [effectiveChannels, activeBlockVideos]);
+  // Siap HD
+  const channelHdCount = useMemo(() => {
+    if (effectiveChannels.length === 0 || !activeChannel) return 0;
+    return activeChannelVideos.filter((v) => v.definition === 'hd').length;
+  }, [effectiveChannels, activeChannel, activeChannelVideos]);
+
+  // Terjadwal (Slot masa depan / memiliki publishAt)
+  const channelScheduledCount = useMemo(() => {
+    if (effectiveChannels.length === 0 || !activeChannel) return 0;
+    return activeChannelVideos.filter((v) => v.managementStatus === 'SCHEDULED' || v.publishAt || v.scheduledPublishAt).length;
+  }, [effectiveChannels, activeChannel, activeChannelVideos]);
+
+  // Antrean
+  const channelQueueCount = useMemo(() => {
+    if (effectiveChannels.length === 0 || !activeChannel) return 0;
+    return activeChannelVideos.filter((v) => v.managementStatus === 'QUEUED' || v.managementStatus === 'PROCESSING').length;
+  }, [effectiveChannels, activeChannel, activeChannelVideos]);
+
+  // Accordion state
+  const [isAccordionExpanded, setIsAccordionExpanded] = useState(false);
+  const [channelSearchQuery, setChannelSearchQuery] = useState('');
+
+  const otherChannels = useMemo(() => {
+    if (effectiveChannels.length <= 1 || !activeChannel) return [];
+    return effectiveChannels.filter((c) => c.id !== activeChannel.id && c.youtubeChannelId !== activeChannel.youtubeChannelId);
+  }, [effectiveChannels, activeChannel]);
+
+  const filteredOtherChannels = useMemo(() => {
+    const q = channelSearchQuery.trim().toLowerCase();
+    if (!q) return otherChannels;
+    const cleanQ = q.startsWith('@') ? q.slice(1) : q;
+    return otherChannels.filter((c) => {
+      const t = (c.title || '').toLowerCase();
+      const h = (c.customUrl || '').toLowerCase();
+      const cleanH = h.startsWith('@') ? h.slice(1) : h;
+      return (
+        t.includes(q) ||
+        h.includes(q) ||
+        (cleanQ.length > 0 && (cleanH.includes(cleanQ) || t.includes(cleanQ)))
+      );
+    });
+  }, [otherChannels, channelSearchQuery]);
 
   // Master Revenue and Monetization Aggregation (Real Data Only)
   const revenueSummary = useMemo(() => {
@@ -388,9 +439,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-[11px] font-medium uppercase tracking-wider">Video Terdeteksi</span>
             <Film className="w-3.5 h-3.5 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-amber-400">{blockDetectedCount}</div>
-          <div className="text-[10px] text-amber-300 mt-1 font-medium">
-            Private Mentah ({targetChannelFilter === 'ALL' ? 'Semua Channel' : activeProfile?.name || activeChannel?.title || 'Blok'})
+          <div className="text-2xl font-bold text-amber-400">{channelDetectedCount}</div>
+          <div className="text-[10px] text-amber-300 mt-1 font-medium truncate">
+            Private Mentah ({activeChannel?.title || 'Channel'})
           </div>
         </div>
 
@@ -403,7 +454,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-[11px] font-medium uppercase tracking-wider">Sudah Dikelola</span>
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-neutral-100">{blockCompletedCount}</div>
+          <div className="text-2xl font-bold text-neutral-100">{channelCompletedCount}</div>
           <div className="text-[10px] text-emerald-400 mt-1 font-medium">Diproses AMG</div>
         </div>
 
@@ -417,7 +468,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-neutral-100">
-            {effectiveChannels.length === 0 ? 0 : (activeBlockVideos.filter((v) => v.definition === 'hd').length || metrics.hdReady)}
+            {channelHdCount}
           </div>
           <div className="text-[10px] text-emerald-400 mt-1 font-medium">Transcoding Selesai</div>
         </div>
@@ -432,7 +483,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Calendar className="w-3.5 h-3.5 text-purple-400" />
           </div>
           <div className="text-2xl font-bold text-neutral-100">
-            {effectiveChannels.length === 0 ? 0 : (activeBlockVideos.filter((v) => v.managementStatus === 'SCHEDULED' || v.scheduledPublishAt).length || metrics.scheduled)}
+            {channelScheduledCount}
           </div>
           <div className="text-[10px] text-purple-400 mt-1 font-medium">Slot Masa Depan</div>
         </div>
@@ -447,7 +498,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <Activity className="w-3.5 h-3.5 text-cyan-400" />
           </div>
           <div className="text-2xl font-bold text-neutral-100">
-            {effectiveChannels.length === 0 ? 0 : metrics.automationJobs}
+            {channelQueueCount}
           </div>
           <div className="text-[10px] text-cyan-400 mt-1 font-medium">Tercatat</div>
         </div>
@@ -461,8 +512,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="text-[11px] font-medium uppercase tracking-wider">Kendala</span>
             <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
           </div>
-          <div className={`text-2xl font-bold ${metrics.errors > 0 ? 'text-rose-500' : 'text-neutral-100'}`}>
-            {metrics.errors}
+          <div className={`text-2xl font-bold ${effectiveChannels.length > 0 && metrics.errors > 0 ? 'text-rose-500' : 'text-neutral-100'}`}>
+            {effectiveChannels.length === 0 ? 0 : metrics.errors}
           </div>
           <div className="text-[10px] text-neutral-500 mt-1 font-medium">Perlu Tindakan</div>
         </div>
@@ -507,6 +558,291 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         )}
       </div>
+
+      {/* 4B. Tampilan Kartu Channel Utama & Accordion Ringkas / Zero-State Card */}
+      {effectiveChannels.length === 0 ? (
+        <div className="p-8 sm:p-10 rounded-2xl bg-neutral-900/60 border border-neutral-800 text-center space-y-4 shadow-xl">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-red-950/50 border border-red-800/40 flex items-center justify-center text-red-400 shadow-lg">
+            <Tv className="w-8 h-8" />
+          </div>
+          <div className="max-w-md mx-auto space-y-2">
+            <h3 className="text-base sm:text-lg font-bold text-neutral-100">
+              Belum Ada Channel Terhubung
+            </h3>
+            <p className="text-xs sm:text-sm text-neutral-400 leading-relaxed">
+              Belum ada channel YouTube yang ditautkan. Klik tombol 'Tautkan Akun YouTube' di atas untuk mulai menghubungkan channel resmi Anda.
+            </p>
+          </div>
+          {onGisAuthorize && (
+            <div className="pt-2">
+              <button
+                onClick={() => onGisAuthorize()}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs sm:text-sm transition active:scale-95 shadow-lg shadow-red-950/60 cursor-pointer"
+              >
+                <Key className="w-4 h-4" />
+                <span>Tautkan Akun YouTube</span>
+              </button>
+            </div>
+          )}
+        </div>
+      ) : activeChannel ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between pb-1 border-b border-neutral-800/80">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+              <h2 className="text-xs font-black uppercase tracking-wider text-neutral-200">
+                Channel Aktif Terpilih
+              </h2>
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-950/90 text-emerald-300 border border-emerald-700/60">
+                AKTIF
+              </span>
+            </div>
+            <div className="text-[11px] text-neutral-400 font-mono">
+              Total {effectiveChannels.length} channel tersimpan
+            </div>
+          </div>
+
+          {/* Kartu Channel Utama */}
+          {(() => {
+            const anchorInfo = getChannelScheduledAnchor(activeChannel, effectiveVideos);
+            const unmanagedVideos = getChannelUnmanagedVideos(activeChannel, effectiveVideos);
+
+            return (
+              <div className="p-4 sm:p-5 rounded-2xl bg-neutral-900/90 border border-emerald-600/50 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {activeChannel.thumbnailUrl ? (
+                      <img
+                        src={activeChannel.thumbnailUrl}
+                        alt={activeChannel.title}
+                        className="w-12 h-12 rounded-xl object-cover border border-neutral-700 shadow shrink-0"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-400 shrink-0">
+                        <Tv className="w-6 h-6 text-neutral-400" />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-bold text-base text-neutral-100 truncate">
+                          {activeChannel.title}
+                        </h3>
+                        <NicheBadge category={activeChannel.nicheCategory} badgeKey={activeChannel.nicheBadge} />
+                        <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 shrink-0">
+                          CONNECTED
+                        </span>
+                      </div>
+                      <div className="text-xs text-neutral-400 font-mono mt-0.5 flex items-center gap-2 flex-wrap">
+                        <span>{activeChannel.customUrl || activeChannel.youtubeChannelId}</span>
+                        {activeChannel.subscriberCount !== undefined && activeChannel.subscriberCount > 0 && (
+                          <>
+                            <span className="text-neutral-600">•</span>
+                            <span>{new Intl.NumberFormat('id-ID').format(activeChannel.subscriberCount)} Subscribers</span>
+                          </>
+                        )}
+                        {activeChannel.videoCount !== undefined && (
+                          <>
+                            <span className="text-neutral-600">•</span>
+                            <span>{activeChannel.videoCount} Total Video</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                    <button
+                      onClick={() => {
+                        if (onSyncChannel) onSyncChannel(activeChannel.id);
+                        else onSyncAll();
+                      }}
+                      disabled={isSyncing}
+                      className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white border border-neutral-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-red-500' : ''}`} />
+                      <span>Sinkronkan</span>
+                    </button>
+                    <button
+                      onClick={() => onNavigate('automation')}
+                      className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-md shadow-red-900/30 flex items-center gap-1.5 transition cursor-pointer"
+                    >
+                      <PlayCircle className="w-3.5 h-3.5" />
+                      <span>Kelola di Otomasi</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sub-Card: Jadwal Terakhir Terverifikasi & Stok */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-neutral-800/80">
+                  <div className="p-3 rounded-xl bg-neutral-950/60 border border-neutral-800/80 space-y-1">
+                    <div className="flex items-center justify-between text-[11px] text-neutral-400 font-semibold">
+                      <span className="flex items-center gap-1.5">
+                        <CalendarClock className="w-3.5 h-3.5 text-red-500" />
+                        <span>Titik Acuan Jadwal Terakhir</span>
+                      </span>
+                      {anchorInfo.scheduledVideosCount > 0 && (
+                        <span className="text-[10px] font-mono px-2 py-0.2 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800/60">
+                          {anchorInfo.scheduledVideosCount} Terjadwal
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm font-bold font-mono text-emerald-400">
+                      {anchorInfo.latestPublishAt
+                        ? formatWibDateTime(anchorInfo.latestPublishAt)
+                        : 'Belum Ada (Otomasi Mulai Besok 16:00 WIB)'}
+                    </div>
+                    {anchorInfo.latestVideoTitle && (
+                      <p className="text-[10px] text-neutral-400 truncate">
+                        Video: {anchorInfo.latestVideoTitle}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-neutral-950/60 border border-neutral-800/80 space-y-1">
+                    <div className="flex items-center justify-between text-[11px] text-neutral-400 font-semibold">
+                      <span className="flex items-center gap-1.5">
+                        <Film className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Kandidat Belum Dikelola</span>
+                      </span>
+                      <span className="text-[10px] font-mono px-2 py-0.2 rounded-full bg-amber-950 text-amber-300 border border-amber-800/60">
+                        {unmanagedVideos.length} Video
+                      </span>
+                    </div>
+                    <div className="text-sm font-bold text-neutral-200">
+                      {unmanagedVideos.length > 0
+                        ? `${unmanagedVideos.length} Video Private Siap Otomasi`
+                        : 'Tidak ada video private mentah'}
+                    </div>
+                    <p className="text-[10px] text-neutral-400">
+                      Jadwal: {activeChannel.publishTime} WIB ({activeChannel.publishFrequency})
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Toggle Accordion untuk Channel Lainnya (Hanya jika channels.length > 1) */}
+          {otherChannels.length > 0 && (
+            <div className="space-y-3 pt-1">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <button
+                  onClick={() => setIsAccordionExpanded(!isAccordionExpanded)}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 text-neutral-200 text-xs font-bold transition cursor-pointer group shadow-sm active:scale-98"
+                >
+                  {isAccordionExpanded ? (
+                    <>
+                      <ChevronUp className="w-4 h-4 text-red-400 group-hover:-translate-y-0.5 transition-transform" />
+                      <span>Lihat Lebih Sedikit</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-4 h-4 text-red-400 group-hover:translate-y-0.5 transition-transform" />
+                      <span>Lihat Lebih Banyak Channel ({otherChannels.length})</span>
+                    </>
+                  )}
+                </button>
+                <span className="text-[11px] text-neutral-400 font-mono">
+                  {isAccordionExpanded || channelSearchQuery.trim().length > 0
+                    ? `Menampilkan ${filteredOtherChannels.length} channel lainnya`
+                    : `${otherChannels.length} channel lainnya tersembunyi`}
+                </span>
+              </div>
+
+              {/* Collapsible Panel */}
+              {(isAccordionExpanded || channelSearchQuery.trim().length > 0) && (
+                <div className="space-y-3 animate-in fade-in duration-200">
+                  {/* Real-time search input */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500" />
+                    <input
+                      type="text"
+                      value={channelSearchQuery}
+                      onChange={(e) => setChannelSearchQuery(e.target.value)}
+                      placeholder="Cari channel berdasarkan nama atau handle..."
+                      className="w-full pl-8 pr-8 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-neutral-200 text-xs focus:ring-1 focus:ring-red-500 focus:outline-none placeholder-neutral-500"
+                    />
+                    {channelSearchQuery && (
+                      <button
+                        onClick={() => setChannelSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-neutral-300 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Grid of Other Channels */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {filteredOtherChannels.map((c) => (
+                      <div
+                        key={c.id}
+                        className="p-3.5 rounded-xl bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition space-y-3 flex flex-col justify-between"
+                      >
+                        <div className="flex items-start gap-3">
+                          {c.thumbnailUrl ? (
+                            <img
+                              src={c.thumbnailUrl}
+                              alt={c.title}
+                              className="w-10 h-10 rounded-lg object-cover border border-neutral-800 shrink-0"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = 'none';
+                              }}
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-400 shrink-0">
+                              <Tv className="w-5 h-5 text-neutral-400" />
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <h4 className="font-bold text-xs text-neutral-200 truncate">
+                              {c.title}
+                            </h4>
+                            <div className="text-[10px] text-neutral-400 font-mono truncate">
+                              {c.customUrl || c.youtubeChannelId}
+                            </div>
+                            <div className="text-[10px] text-neutral-400 mt-0.5">
+                              {c.videoCount || 0} Video • {c.publishTime} WIB
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-2 border-t border-neutral-800/80">
+                          <button
+                            onClick={() => {
+                              if (onSelectChannel) {
+                                onSelectChannel(c.id);
+                              }
+                            }}
+                            className="flex-1 py-1.5 px-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white text-xs font-semibold transition active:scale-95 cursor-pointer flex items-center justify-center gap-1"
+                          >
+                            <CheckCircle className="w-3 h-3 text-emerald-400" />
+                            <span>Pilih Sebagai Channel Aktif</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (onSelectChannel) onSelectChannel(c.id);
+                              onNavigate('automation');
+                            }}
+                            className="py-1.5 px-2.5 rounded-lg bg-red-600/90 hover:bg-red-500 text-white text-xs font-bold transition active:scale-95 cursor-pointer flex items-center justify-center gap-1 shrink-0"
+                            title="Otomasi Channel Ini"
+                          >
+                            <PlayCircle className="w-3 h-3" />
+                            <span className="hidden sm:inline">Otomasi</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {/* 5. Widget Ringkas Pemantau Antrean Worker Phase 3 */}
       <QueueMonitor onNavigateToAutomation={() => onNavigate('automation')} />

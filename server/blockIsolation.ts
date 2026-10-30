@@ -35,7 +35,7 @@ export function validateBlockIsolation(params: {
   }
 
   let targetBlockId = resolveBlockId(block) || resolveBlockId(channel);
-  if (!targetBlockId && (channel?.id === 'chan-ayam-yahya' || channel?.title?.toLowerCase().includes('ayam yahya'))) {
+  if (!targetBlockId) {
     targetBlockId = 'block-general';
   }
   if (!targetBlockId) {

@@ -166,7 +166,7 @@ export function getChannelScheduledAnchor(channel: Channel, videos: ManagedVideo
       v.processingStatus === 'processed';
     if (!isProcessed) return false;
 
-    const pubAt = v.publishAt || (v as any).status?.publishAt;
+    const pubAt = v.publishAt || (v as any).status?.publishAt || v.scheduledPublishAt;
     if (!pubAt) return false;
 
     const rawTitle = (v.titleBefore || (v as any).title || '').toLowerCase();

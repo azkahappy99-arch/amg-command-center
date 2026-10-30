@@ -30,6 +30,8 @@ import {
   PlayCircle,
   Sparkles,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   MoreVertical,
   X,
   Lock,
@@ -60,6 +62,8 @@ interface ChannelsViewProps {
   channels: Channel[];
   profiles: ContentProfile[];
   videos?: ManagedVideo[];
+  selectedChannelId?: string;
+  onSelectChannel?: (channelId: string) => void;
   onChannelUpdated: () => void;
   onNavigateToAutomation: (channelId: string) => void;
   onNavigateToTitles?: (channelId: string) => void;
@@ -105,6 +109,8 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
   channels,
   profiles,
   videos,
+  selectedChannelId,
+  onSelectChannel,
   onChannelUpdated,
   onNavigateToAutomation,
   onNavigateToTitles,
@@ -112,6 +118,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [isAccordionExpanded, setIsAccordionExpanded] = useState<boolean>(false);
   const [selectedChannelForOAuth, setSelectedChannelForOAuth] = useState<Channel | null>(null);
   const [loadedVideos, setLoadedVideos] = useState<ManagedVideo[]>(() => {
     if (videos && videos.length > 0) return videos;
@@ -255,18 +262,68 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
     return nicheTabs.find((t) => t.id === selectedNicheTab) || nicheTabs[0];
   }, [nicheTabs, selectedNicheTab]);
 
-  // Filter channels by query, status, and niche tab
+  const effectiveActiveChannelId = useMemo(() => {
+    if (selectedChannelId) return selectedChannelId;
+    try {
+      const stored = localStorage.getItem('amg_active_channel_id') || localStorage.getItem('amg_active_channel');
+      if (stored) return stored;
+    } catch {}
+    return channels[0]?.id || '';
+  }, [selectedChannelId, channels]);
+
+  const handleSetActiveChannel = (chanId: string) => {
+    localStorage.setItem('amg_active_channel_id', chanId);
+    localStorage.setItem('amg_active_channel', chanId);
+    if (onSelectChannel) {
+      onSelectChannel(chanId);
+    }
+    const found = channels.find((c) => c.id === chanId || c.youtubeChannelId === chanId);
+    if (found) {
+      setBannerMessage({
+        text: `Channel "${found.title}" kini dipilih sebagai channel aktif AMG Command Center.`,
+        type: 'info',
+      });
+    }
+  };
+
+  // Filter channels by query, status, and niche tab with real-time multi-attribute matching
   const filteredChannels = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const cleanQ = q.startsWith('@') ? q.slice(1) : q;
+
     return channels.filter((c) => {
+      const title = (c.title || '').toLowerCase();
+      const ytId = (c.youtubeChannelId || '').toLowerCase();
+      const rawId = (c.id || '').toLowerCase();
+      const customUrl = (c.customUrl || '').toLowerCase();
+      const cleanCustomUrl = customUrl.startsWith('@') ? customUrl.slice(1) : customUrl;
+
       const matchesSearch =
-        c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        c.youtubeChannelId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (c.customUrl && c.customUrl.toLowerCase().includes(searchQuery.toLowerCase()));
+        !q ||
+        title.includes(q) ||
+        ytId.includes(q) ||
+        rawId.includes(q) ||
+        customUrl.includes(q) ||
+        (cleanQ.length > 0 && cleanCustomUrl.includes(cleanQ)) ||
+        (cleanQ.length > 0 && title.includes(cleanQ));
+
       const matchesStatus = statusFilter === 'ALL' || c.status === statusFilter;
       const matchesTab = currentActiveTab.matcher(c.nicheCategory || 'General');
       return matchesSearch && matchesStatus && matchesTab;
     });
   }, [channels, searchQuery, statusFilter, currentActiveTab]);
+
+  const { primaryChannel, otherChannels } = useMemo(() => {
+    if (filteredChannels.length === 0) {
+      return { primaryChannel: null, otherChannels: [] };
+    }
+    const active = filteredChannels.find(
+      (c) => c.id === effectiveActiveChannelId || c.youtubeChannelId === effectiveActiveChannelId
+    );
+    const primary = active || filteredChannels[0];
+    const others = filteredChannels.filter((c) => c.id !== primary.id);
+    return { primaryChannel: primary, otherChannels: others };
+  }, [filteredChannels, effectiveActiveChannelId]);
 
   // Group filtered channels by niche
   const groupedChannels = useMemo(() => {
@@ -651,6 +708,507 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 
   const hasSeededChannels = channels.some((c) => c.isSeeded);
 
+  const renderChannelCard = (channel: Channel, isPrimary: boolean) => {
+    const profile = profiles.find((p) => p.id === channel.contentProfileId);
+    const isSyncing = syncingChannelId === channel.id;
+    const isTesting = testingChannelId === channel.id;
+    const isCurrentActive = channel.id === effectiveActiveChannelId || channel.youtubeChannelId === effectiveActiveChannelId;
+
+    return (
+      <div
+        key={channel.id}
+        className={`p-5 rounded-2xl flex flex-col justify-between transition group space-y-4 relative shadow-sm ${
+          isPrimary || isCurrentActive
+            ? 'bg-neutral-950/90 border-2 border-emerald-500/80 shadow-[0_0_20px_rgba(16,185,129,0.18)]'
+            : 'bg-neutral-950/70 border border-neutral-800/90 hover:border-neutral-700'
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2 relative">
+          <div className="flex items-center space-x-3 min-w-0 flex-1">
+            {channel.thumbnailUrl ? (
+              <img
+                src={channel.thumbnailUrl}
+                alt={channel.title}
+                className="w-12 h-12 rounded-xl object-cover border border-neutral-700/80 shadow shrink-0"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700/80 flex items-center justify-center text-sm font-bold text-neutral-300 shrink-0">
+                {channel.title ? channel.title.slice(0, 2).toUpperCase() : 'YT'}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h3 className="font-bold text-sm text-neutral-100 group-hover:text-red-400 transition truncate max-w-[140px] sm:max-w-[170px]">
+                  {channel.title}
+                </h3>
+                <NicheBadge category={channel.nicheCategory} badgeKey={channel.nicheBadge} />
+                {(isPrimary || isCurrentActive) && (
+                  <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 shrink-0">
+                    AKTIF
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] text-neutral-400 font-mono mt-0.5 truncate flex items-center gap-1">
+                <span>{channel.customUrl || channel.youtubeChannelId}</span>
+                {channel.youtubeChannelId && channel.customUrl && (
+                  <span className="text-neutral-500 text-[10px]">({channel.youtubeChannelId})</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Options Dropdown Trigger Button */}
+          <div className="relative shrink-0">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpenMenuChannelId(openMenuChannelId === channel.id ? null : channel.id);
+              }}
+              className={`p-1.5 rounded-xl border transition cursor-pointer ${
+                openMenuChannelId === channel.id
+                  ? 'bg-neutral-800 border-neutral-700 text-white shadow-sm'
+                  : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-neutral-400 hover:text-neutral-100'
+              }`}
+              title="Opsi Pengaturan Channel"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+
+            {/* Popover / Dropdown Menu */}
+            {openMenuChannelId === channel.id && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenMenuChannelId(null);
+                  }}
+                />
+
+                <div
+                  className="absolute right-0 top-full mt-1.5 w-56 rounded-2xl bg-neutral-900/95 backdrop-blur-md border border-neutral-800 shadow-2xl p-1.5 z-40 text-xs space-y-0.5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-2.5 py-1.5 text-[10px] font-bold text-neutral-400 uppercase tracking-wider border-b border-neutral-800/80 mb-1 flex items-center justify-between">
+                    <span>Opsi Pengaturan</span>
+                    <span className="text-[9px] font-mono text-neutral-500">{channel.nicheCategory || 'General'}</span>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setOpenMenuChannelId(null);
+                      handleSyncChannel(channel);
+                    }}
+                    disabled={isSyncing}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-neutral-400 ${isSyncing ? 'animate-spin text-red-500' : ''}`} />
+                    <span className="flex-1">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan YouTube'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setOpenMenuChannelId(null);
+                      handleGisAuthorizeChannel(channel);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                  >
+                    <Key className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="flex-1">Otorisasi OAuth Google</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setOpenMenuChannelId(null);
+                      handleTestConnection(channel);
+                    }}
+                    disabled={isTesting}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                    <span className="flex-1">{isTesting ? 'Menguji...' : 'Uji Koneksi Channel'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setOpenMenuChannelId(null);
+                      setSelectedChannelForEligibility(channel);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-neutral-400" />
+                    <span className="flex-1">Aturan Kelayakan & Batas</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setOpenMenuChannelId(null);
+                      handleOpenScheduleModal(channel);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                  >
+                    <Clock className="w-3.5 h-3.5 text-rose-400" />
+                    <span className="flex-1">Sesuaikan Jadwal Tayang</span>
+                  </button>
+
+                  {onNavigateToTitles && (
+                    <button
+                      onClick={() => {
+                        setOpenMenuChannelId(null);
+                        onNavigateToTitles(channel.id);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                    >
+                      <Film className="w-3.5 h-3.5 text-red-400" />
+                      <span className="flex-1">Master Judul Channel</span>
+                    </button>
+                  )}
+
+                  {onNavigateToThumbnails && (
+                    <button
+                      onClick={() => {
+                        setOpenMenuChannelId(null);
+                        onNavigateToThumbnails(channel.id);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
+                    >
+                      <Tag className="w-3.5 h-3.5 text-amber-400" />
+                      <span className="flex-1">Master Thumbnail Channel</span>
+                    </button>
+                  )}
+
+                  <div className="my-1 border-t border-neutral-800/80" />
+
+                  <button
+                    onClick={() => {
+                      setOpenMenuChannelId(null);
+                      handleDeleteChannel(channel.id, channel.title);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 text-left transition cursor-pointer font-medium"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span className="flex-1">Hapus Channel</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Connection Status Badge */}
+        <div className="flex items-center justify-between">
+          {renderStatusBadge(channel.status)}
+          <span className="text-[10px] text-neutral-400">
+            {channel.videoCount !== undefined ? `${channel.videoCount} Total Videos` : ''}
+          </span>
+        </div>
+
+        {/* Monetization Status Badge */}
+        <div className="pt-0.5">
+          <MonetizationBadge
+            status={channel.monetizationStatus}
+            subscribers={channel.subscriberCount || 0}
+            watchHours={channel.watchHours || 0}
+          />
+          {channel.revenue && channel.revenue.totalChannelRevenue > 0 && (
+            <div className="mt-1.5 flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-xl bg-neutral-900/80 border border-neutral-800">
+              <span className="text-neutral-400 font-medium">Estimasi Pendapatan:</span>
+              <span className="font-bold font-mono text-emerald-400">
+                {formatIDR(channel.revenue.totalChannelRevenue)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* 1. JADWAL TERAKHIR TERVERIFIKASI */}
+        {(() => {
+          const anchorInfo = getChannelScheduledAnchor(channel, loadedVideos);
+          const unmanagedVideos = getChannelUnmanagedVideos(channel, loadedVideos);
+
+          return (
+            <div className="space-y-3 pt-1">
+              <div className="p-3.5 rounded-xl bg-neutral-900/80 border border-neutral-800 space-y-1.5 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <CalendarClock className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                    <span>Jadwal Terakhir Terverifikasi</span>
+                  </span>
+                  {anchorInfo.scheduledVideosCount > 0 ? (
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 font-semibold border border-emerald-800/50">
+                      {anchorInfo.scheduledVideosCount} Terjadwal
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-400">
+                      0 Terjadwal
+                    </span>
+                  )}
+                </div>
+
+                <div className="pt-0.5">
+                  {anchorInfo.latestPublishAt ? (
+                    <div className="space-y-1">
+                      <div className="text-sm font-black text-emerald-400 flex items-center gap-1.5 font-mono">
+                        <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>{formatWibDateTime(anchorInfo.latestPublishAt)}</span>
+                      </div>
+                      {anchorInfo.latestVideoTitle && (
+                        <p
+                          className="text-[11px] text-neutral-300 font-medium truncate pt-0.5"
+                          title={anchorInfo.latestVideoTitle}
+                        >
+                          "{anchorInfo.latestVideoTitle}"
+                        </p>
+                      )}
+                      <div className="text-[10px] text-emerald-400/90 flex items-center gap-1 pt-1 border-t border-neutral-800/60 font-semibold">
+                        <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
+                        <span>Titik Acuan Terverifikasi</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="py-1 text-xs font-medium text-neutral-400 italic">
+                      Belum ada jadwal terverifikasi
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. SISA VIDEO PRIVATE — BELUM DIKELOLA AMG */}
+              <div className="p-3.5 rounded-xl bg-neutral-900/60 border border-neutral-800/90 space-y-2.5 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>Sisa Video Private (Belum Dikelola AMG)</span>
+                  </div>
+                  <span
+                    className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
+                      unmanagedVideos.length > 0
+                        ? 'bg-amber-950 text-amber-300 border border-amber-800/50'
+                        : 'bg-neutral-800 text-neutral-400'
+                    }`}
+                  >
+                    {unmanagedVideos.length} Video
+                  </span>
+                </div>
+
+                {unmanagedVideos.length === 0 ? (
+                  <div className="p-3 rounded-lg bg-neutral-950/60 border border-neutral-800/60 text-center">
+                    <p className="text-[11px] text-neutral-400 italic">
+                      Belum ada video private yang menunggu dikelola AMG.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {unmanagedVideos
+                      .slice(0, expandedUnmanagedChannelId === channel.id ? 10 : 3)
+                      .map((v) => (
+                        <div
+                          key={v.id}
+                          className="p-2.5 rounded-lg bg-neutral-950/90 border border-neutral-800/80 hover:border-amber-900/40 transition text-xs space-y-1"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span
+                              className="font-medium text-neutral-200 line-clamp-1 flex-1 text-[11px]"
+                              title={v.titleBefore || 'Video Tanpa Judul'}
+                            >
+                              {v.titleBefore || 'Video Tanpa Judul'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] pt-1 border-t border-neutral-900">
+                            <span className="inline-flex items-center gap-1 font-bold text-amber-400 bg-amber-950/70 px-1.5 py-0.2 rounded border border-amber-800/40 text-[9px] uppercase tracking-wider">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                              PRIVATE • BELUM DIKELOLA
+                            </span>
+                            {(v.originalUploadAt || v.uploadedAt || v.createdAt) && (
+                              <span className="text-neutral-500 font-mono text-[10px]">
+                                {new Date(
+                                  v.originalUploadAt || v.uploadedAt || v.createdAt!
+                                ).toLocaleDateString('id-ID', {
+                                  day: 'numeric',
+                                  month: 'short',
+                                  year: 'numeric',
+                                })}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                    {unmanagedVideos.length > 3 && (
+                      <button
+                        onClick={() =>
+                          setExpandedUnmanagedChannelId(
+                            expandedUnmanagedChannelId === channel.id ? null : channel.id
+                          )
+                        }
+                        className="w-full text-center text-[11px] text-amber-400 hover:text-amber-300 font-semibold py-1 hover:underline cursor-pointer flex items-center justify-center gap-1 transition"
+                      >
+                        {expandedUnmanagedChannelId === channel.id ? (
+                          <span>Tutup daftar ({unmanagedVideos.length} video)</span>
+                        ) : (
+                          <span>Lihat semua {unmanagedVideos.length} video private...</span>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Schedule Buffer Stock Monitor Badge */}
+        <div className="pt-0.5">
+          <ScheduleBufferBadge
+            days={channel.scheduleBufferDays}
+            stockCount={channel.scheduleStockCount}
+            status={channel.scheduleAlertStatus}
+            exhaustionDate={channel.bufferExhaustionDate}
+            className="w-full justify-center"
+          />
+        </div>
+
+        {/* Channel Stats and Settings Badge */}
+        <div className="grid grid-cols-2 gap-2 text-xs py-2 border-y border-neutral-800/60">
+          <div className="space-y-0.5">
+            <span className="text-[10px] font-semibold text-neutral-500 uppercase">Profil</span>
+            <div className="font-medium text-neutral-200 truncate">
+              {profile ? profile.name : 'Belum Ditentukan'}
+            </div>
+          </div>
+          <div className="space-y-0.5">
+            <span className="text-[10px] font-semibold text-neutral-500 uppercase">Belum Dikelola</span>
+            <div className="font-bold text-amber-400">
+              {channel.unmanagedVideoCount || 0} Video
+            </div>
+          </div>
+          <div className="space-y-0.5 col-span-2 bg-neutral-900/60 p-2 rounded-xl border border-neutral-800/80">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-neutral-500 uppercase flex items-center gap-1">
+                <Clock className="w-3 h-3 text-rose-400" />
+                Aturan Jadwal
+              </span>
+              <button
+                onClick={() => handleOpenScheduleModal(channel)}
+                className="text-[10px] text-rose-400 hover:text-rose-300 font-bold underline flex items-center gap-0.5 transition cursor-pointer"
+                title="Atur frekuensi publikasi kustom, waktu harian & zona waktu"
+              >
+                Sesuaikan
+              </button>
+            </div>
+            <div className="font-semibold text-neutral-200 text-xs flex items-center gap-1.5 pt-0.5 truncate">
+              <span className="text-rose-400 font-bold bg-rose-500/10 px-1.5 py-0.2 rounded border border-rose-500/20 text-[11px]">
+                {channel.scheduleConfig?.videosPerDay || channel.publishFrequency}
+              </span>
+              <span className="text-neutral-300 text-[11px] truncate">
+                {channel.scheduleConfig?.times?.join(', ') || channel.publishTime}
+              </span>
+              <span className="text-[10px] font-mono text-neutral-500 shrink-0">
+                ({channel.scheduleConfig?.timezone === 'Asia/Jakarta' ? 'WIB' : channel.scheduleConfig?.timezone || channel.timezone || 'WIB'})
+              </span>
+            </div>
+          </div>
+          <div className="space-y-0.5">
+            <span className="text-[10px] font-semibold text-neutral-500 uppercase">Sinkron Terakhir</span>
+            <div className="font-medium text-neutral-400 text-[11px]">
+              {channel.lastSyncAt
+                ? new Date(channel.lastSyncAt).toLocaleDateString([], {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : 'Belum Pernah'}
+            </div>
+          </div>
+        </div>
+
+        {/* Reconnect Required Alert if Token Expired */}
+        {(channel.status === 'RECONNECT REQUIRED' || channel.status === 'TOKEN EXPIRED') && (
+          <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-600/70 flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex items-center gap-1.5 text-[11px] text-amber-300 font-semibold min-w-0">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span className="truncate">Otorisasi kedaluwarsa</span>
+            </div>
+            <button
+              onClick={() => handleGisAuthorizeChannel(channel)}
+              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] transition cursor-pointer shrink-0"
+            >
+              Sambungkan Ulang
+            </button>
+          </div>
+        )}
+
+        {/* Connection Date & Unlink Action */}
+        <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-neutral-500">Tersambung:</span>
+            <span className="font-semibold text-neutral-300">
+              {channel.connectedAt
+                ? new Date(channel.connectedAt).toLocaleDateString('id-ID', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : 'Permanen'}
+            </span>
+          </div>
+          <button
+            onClick={() => handleDeleteChannel(channel.id, channel.title)}
+            className="text-[10px] text-neutral-500 hover:text-rose-400 hover:underline transition cursor-pointer font-medium"
+            title="Putuskan sambungan channel ini dari AMG Command Center"
+          >
+            [Unlink Channel]
+          </button>
+        </div>
+
+        {/* Channel Activation Toggle (Bagian B Aturan 4) */}
+        {isPrimary || isCurrentActive ? (
+          <div className="w-full py-2 px-3 rounded-xl bg-emerald-950/60 border border-emerald-700/60 text-emerald-300 text-xs font-bold text-center flex items-center justify-center gap-1.5 font-mono shadow-xs">
+            <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Channel Sedang Aktif</span>
+          </div>
+        ) : (
+          <button
+            onClick={() => handleSetActiveChannel(channel.id)}
+            className="w-full py-2 px-3 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 hover:text-white text-xs font-semibold border border-neutral-800 hover:border-neutral-700 transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Pilih Sebagai Channel Aktif</span>
+          </button>
+        )}
+
+        {/* Two Main Action Buttons directly visible */}
+        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-800/60">
+          <button
+            onClick={() => setSelectedChannelForCandidates(channel)}
+            className="py-2.5 px-3 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 hover:text-cyan-200 text-xs font-semibold border border-cyan-800/60 hover:border-cyan-700 transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+            title="Deteksi video kandidat baru dan periksa batas tanggal"
+          >
+            <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="truncate">Deteksi Kandidat</span>
+          </button>
+
+          <button
+            onClick={() => {
+              handleSetActiveChannel(channel.id);
+              onNavigateToAutomation(channel.id);
+            }}
+            className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-md shadow-red-900/30 text-center transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+            title="Buka panel otomasi untuk channel ini"
+          >
+            <PlayCircle className="w-3.5 h-3.5" />
+            <span className="truncate">Otomasi Channel</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 overflow-x-hidden max-w-full w-full">
       {/* Read-Only Safety Protocol Banner */}
@@ -863,7 +1421,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
         </div>
       )}
 
-      {/* Grouped Channel Blocks by Niche */}
+      {/* Grouped Channel Blocks & Accordion */}
       <div className="space-y-6">
         {channels.length === 0 ? (
           <div className="p-12 text-center bg-neutral-900/40 rounded-2xl border border-neutral-800 space-y-3">
@@ -875,539 +1433,109 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
               Hubungkan akun YouTube Anda melalui otorisasi OAuth Google untuk memulai manajemen video, rotasi judul, dan penjadwalan otomatis.
             </p>
             <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-red-950/50 cursor-pointer"
+              onClick={async () => {
+                try {
+                  setBannerMessage({ text: 'Membuka dialog Google Identity Services...', type: 'info' });
+                  const result = await authorizeAndFetchYouTubeChannel(true);
+                  const channelsToSync = result.allChannels && result.allChannels.length > 0 ? result.allChannels : [result.channel];
+                  for (const chan of channelsToSync) {
+                    await api.gisSyncChannel({
+                      accessToken: result.accessToken,
+                      channelData: chan,
+                    });
+                  }
+                  onChannelUpdated();
+                } catch (err: any) {
+                  const isClosed = err?.isPopupClosed || (typeof err?.message === 'string' && err.message.toLowerCase().includes('closed'));
+                  if (!isClosed) {
+                    setBannerMessage({ text: `Gagal otorisasi Google Identity Services: ${err.message}`, type: 'error' });
+                  }
+                }
+              }}
+              className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs transition active:scale-95 shadow-md shadow-emerald-950/50 cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Tambah Channel YouTube</span>
+              <Key className="w-3.5 h-3.5" />
+              <span>Tautkan Akun YouTube</span>
             </button>
           </div>
-        ) : displayedNiches.length === 0 ? (
-          <div className="p-8 text-center bg-neutral-900/40 rounded-2xl border border-neutral-800 text-neutral-400 text-xs">
-            Tidak ada channel ditemukan pada pencarian atau kategori niche ini.
+        ) : filteredChannels.length === 0 ? (
+          <div className="p-8 text-center bg-neutral-900/40 rounded-2xl border border-neutral-800 text-neutral-400 text-xs space-y-2">
+            <p>Tidak ada channel ditemukan untuk kata kunci "{searchQuery}" atau filter aktif.</p>
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setStatusFilter('ALL');
+                setSelectedNicheTab('ALL');
+              }}
+              className="text-xs text-red-400 hover:text-red-300 font-semibold underline cursor-pointer"
+            >
+              Reset Pencarian & Filter
+            </button>
           </div>
         ) : (
-          displayedNiches.map((niche) => {
-            const chanList = groupedChannels[niche] || [];
-            if (chanList.length === 0) return null;
-            const meta = getNicheMeta(niche, chanList[0]?.nicheBadge);
-            const nicheRevenue = chanList.reduce((acc, c) => acc + (c.revenue?.totalChannelRevenue || 0), 0);
-
-            return (
-              <div
-                key={niche}
-                className="p-5 rounded-2xl bg-neutral-900/50 border border-neutral-800/90 space-y-4 shadow-sm"
-              >
-                {/* Niche Block Header */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800/80">
-                  <div className="flex items-center gap-2.5">
-                    <div className={`p-2 rounded-xl border ${meta.badgeClass} flex items-center justify-center shadow-xs`}>
-                      <Tag className="w-4 h-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-sm font-bold text-neutral-100 uppercase tracking-wider">
-                          Blok {meta.label}
-                        </h3>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300 border border-neutral-700">
-                          {chanList.length} Channel Terkelola
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-neutral-400 mt-0.5">{meta.description}</p>
-                    </div>
+          <div className="space-y-6">
+            {/* 1. CHANNEL UTAMA / AKTIF (Paling Atas) */}
+            {primaryChannel && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between pb-1 border-b border-neutral-800/80">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_#34d399]" />
+                    <h2 className="text-xs font-black uppercase tracking-wider text-neutral-200">
+                      Channel Utama / Aktif
+                    </h2>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-950/90 text-emerald-300 border border-emerald-700/60">
+                      AKTIF
+                    </span>
                   </div>
-
-                  {nicheRevenue > 0 && (
-                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-neutral-950/80 border border-emerald-900/60 self-start sm:self-auto">
-                      <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">
-                        Total Pendapatan Niche:
-                      </span>
-                      <span className="font-bold font-mono text-emerald-300 text-xs">
-                        {formatIDR(nicheRevenue)}
-                      </span>
-                    </div>
-                  )}
+                  <div className="text-[11px] text-neutral-400 font-mono">
+                    Total {filteredChannels.length} channel tersimpan
+                  </div>
                 </div>
 
-                {/* Channel Cards in this Niche Block */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {chanList.map((channel) => {
-                    const profile = profiles.find((p) => p.id === channel.contentProfileId);
-                    const isSyncing = syncingChannelId === channel.id;
-                    const isTesting = testingChannelId === channel.id;
-
-                    return (
-                      <div
-                        key={channel.id}
-                        className="p-5 rounded-2xl bg-neutral-950/70 border border-neutral-800/90 hover:border-neutral-700 flex flex-col justify-between transition group space-y-4 relative shadow-sm"
-                      >
-                        {/* Header */}
-                        <div className="flex items-start justify-between gap-2 relative">
-                          <div className="flex items-center space-x-3 min-w-0 flex-1">
-                            {channel.thumbnailUrl ? (
-                              <img
-                                src={channel.thumbnailUrl}
-                                alt={channel.title}
-                                className="w-12 h-12 rounded-xl object-cover border border-neutral-700/80 shadow shrink-0"
-                                onError={(e) => {
-                                  (e.target as HTMLElement).style.display = 'none';
-                                }}
-                              />
-                            ) : (
-                              <div className="w-12 h-12 rounded-xl bg-neutral-900 border border-neutral-700/80 flex items-center justify-center text-sm font-bold text-neutral-300 shrink-0">
-                                {channel.title ? channel.title.slice(0, 2).toUpperCase() : 'YT'}
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <h3 className="font-bold text-sm text-neutral-100 group-hover:text-red-400 transition truncate max-w-[140px] sm:max-w-[170px]">
-                                  {channel.title}
-                                </h3>
-                                <NicheBadge category={channel.nicheCategory} badgeKey={channel.nicheBadge} />
-                              </div>
-                              <div className="text-[11px] text-neutral-400 font-mono mt-0.5 truncate">
-                                {channel.customUrl || channel.youtubeChannelId}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Options Dropdown Trigger Button */}
-                          <div className="relative shrink-0">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuChannelId(openMenuChannelId === channel.id ? null : channel.id);
-                              }}
-                              className={`p-1.5 rounded-xl border transition cursor-pointer ${
-                                openMenuChannelId === channel.id
-                                  ? 'bg-neutral-800 border-neutral-700 text-white shadow-sm'
-                                  : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-neutral-400 hover:text-neutral-100'
-                              }`}
-                              title="Opsi Pengaturan Channel"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </button>
-
-                            {/* Popover / Dropdown Menu */}
-                            {openMenuChannelId === channel.id && (
-                              <>
-                                <div
-                                  className="fixed inset-0 z-30"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOpenMenuChannelId(null);
-                                  }}
-                                />
-
-                                <div
-                                  className="absolute right-0 top-full mt-1.5 w-56 rounded-2xl bg-neutral-900/95 backdrop-blur-md border border-neutral-800 shadow-2xl p-1.5 z-40 text-xs space-y-0.5"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  <div className="px-2.5 py-1.5 text-[10px] font-bold text-neutral-400 uppercase tracking-wider border-b border-neutral-800/80 mb-1 flex items-center justify-between">
-                                    <span>Opsi Pengaturan</span>
-                                    <span className="text-[9px] font-mono text-neutral-500">{channel.nicheCategory || 'General'}</span>
-                                  </div>
-
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenuChannelId(null);
-                                      handleSyncChannel(channel);
-                                    }}
-                                    disabled={isSyncing}
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                  >
-                                    <RefreshCw className={`w-3.5 h-3.5 text-neutral-400 ${isSyncing ? 'animate-spin text-red-500' : ''}`} />
-                                    <span className="flex-1">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan YouTube'}</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenuChannelId(null);
-                                      handleGisAuthorizeChannel(channel);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                  >
-                                    <Key className="w-3.5 h-3.5 text-amber-400" />
-                                    <span className="flex-1">Otorisasi OAuth Google</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenuChannelId(null);
-                                      handleTestConnection(channel);
-                                    }}
-                                    disabled={isTesting}
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                  >
-                                    <Eye className="w-3.5 h-3.5 text-cyan-400" />
-                                    <span className="flex-1">{isTesting ? 'Menguji...' : 'Uji Koneksi Channel'}</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenuChannelId(null);
-                                      setSelectedChannelForEligibility(channel);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                  >
-                                    <Sliders className="w-3.5 h-3.5 text-neutral-400" />
-                                    <span className="flex-1">Aturan Kelayakan & Batas</span>
-                                  </button>
-
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenuChannelId(null);
-                                      handleOpenScheduleModal(channel);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                  >
-                                    <Clock className="w-3.5 h-3.5 text-rose-400" />
-                                    <span className="flex-1">Sesuaikan Jadwal Tayang</span>
-                                  </button>
-
-                                  {onNavigateToTitles && (
-                                    <button
-                                      onClick={() => {
-                                        setOpenMenuChannelId(null);
-                                        onNavigateToTitles(channel.id);
-                                      }}
-                                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                    >
-                                      <Film className="w-3.5 h-3.5 text-red-400" />
-                                      <span className="flex-1">Master Judul Channel</span>
-                                    </button>
-                                  )}
-
-                                  {onNavigateToThumbnails && (
-                                    <button
-                                      onClick={() => {
-                                        setOpenMenuChannelId(null);
-                                        onNavigateToThumbnails(channel.id);
-                                      }}
-                                      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-neutral-200 hover:text-white hover:bg-neutral-800 text-left transition cursor-pointer"
-                                    >
-                                      <Tag className="w-3.5 h-3.5 text-amber-400" />
-                                      <span className="flex-1">Master Thumbnail Channel</span>
-                                    </button>
-                                  )}
-
-                                  <div className="my-1 border-t border-neutral-800/80" />
-
-                                  <button
-                                    onClick={() => {
-                                      setOpenMenuChannelId(null);
-                                      handleDeleteChannel(channel.id, channel.title);
-                                    }}
-                                    className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 text-left transition cursor-pointer font-medium"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                                    <span className="flex-1">Hapus Channel</span>
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Connection Status Badge */}
-                        <div className="flex items-center justify-between">
-                          {renderStatusBadge(channel.status)}
-                          <span className="text-[10px] text-neutral-400">
-                            {channel.videoCount !== undefined ? `${channel.videoCount} Total Videos` : ''}
-                          </span>
-                        </div>
-
-                        {/* Monetization Status Badge */}
-                        <div className="pt-0.5">
-                          <MonetizationBadge
-                            status={channel.monetizationStatus}
-                            subscribers={channel.subscriberCount || 0}
-                            watchHours={channel.watchHours || 0}
-                          />
-                          {channel.revenue && channel.revenue.totalChannelRevenue > 0 && (
-                            <div className="mt-1.5 flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-xl bg-neutral-900/80 border border-neutral-800">
-                              <span className="text-neutral-400 font-medium">Estimasi Pendapatan:</span>
-                              <span className="font-bold font-mono text-emerald-400">
-                                {formatIDR(channel.revenue.totalChannelRevenue)}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* ================================================== */}
-                        {/* 1. JADWAL TERAKHIR TERVERIFIKASI                   */}
-                        {/* ================================================== */}
-                        {(() => {
-                          const anchorInfo = getChannelScheduledAnchor(channel, loadedVideos);
-                          const unmanagedVideos = getChannelUnmanagedVideos(channel, loadedVideos);
-
-                          return (
-                            <div className="space-y-3 pt-1">
-                              {/* Card Section: Jadwal Terakhir Terverifikasi */}
-                              <div className="p-3.5 rounded-xl bg-neutral-900/80 border border-neutral-800 space-y-1.5 shadow-xs">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-1.5">
-                                    <CalendarClock className="w-3.5 h-3.5 text-red-500 shrink-0" />
-                                    <span>Jadwal Terakhir Terverifikasi</span>
-                                  </span>
-                                  {anchorInfo.scheduledVideosCount > 0 ? (
-                                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 font-semibold border border-emerald-800/50">
-                                      {anchorInfo.scheduledVideosCount} Terjadwal
-                                    </span>
-                                  ) : (
-                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-400">
-                                      0 Terjadwal
-                                    </span>
-                                  )}
-                                </div>
-
-                                <div className="pt-0.5">
-                                  {anchorInfo.latestPublishAt ? (
-                                    <div className="space-y-1">
-                                      <div className="text-sm font-black text-emerald-400 flex items-center gap-1.5 font-mono">
-                                        <Clock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                                        <span>{formatWibDateTime(anchorInfo.latestPublishAt)}</span>
-                                      </div>
-                                      {anchorInfo.latestVideoTitle && (
-                                        <p
-                                          className="text-[11px] text-neutral-300 font-medium truncate pt-0.5"
-                                          title={anchorInfo.latestVideoTitle}
-                                        >
-                                          "{anchorInfo.latestVideoTitle}"
-                                        </p>
-                                      )}
-                                      <div className="text-[10px] text-emerald-400/90 flex items-center gap-1 pt-1 border-t border-neutral-800/60 font-semibold">
-                                        <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
-                                        <span>Titik Acuan Terverifikasi</span>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="py-1 text-xs font-medium text-neutral-400 italic">
-                                      Belum ada jadwal terverifikasi
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* ================================================== */}
-                              {/* 2. SISA VIDEO PRIVATE — BELUM DIKELOLA AMG         */}
-                              {/* ================================================== */}
-                              <div className="p-3.5 rounded-xl bg-neutral-900/60 border border-neutral-800/90 space-y-2.5 shadow-xs">
-                                <div className="flex items-center justify-between">
-                                  <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                                    <span>Sisa Video Private (Belum Dikelola AMG)</span>
-                                  </div>
-                                  <span
-                                    className={`text-xs font-mono font-bold px-2 py-0.5 rounded-full ${
-                                      unmanagedVideos.length > 0
-                                        ? 'bg-amber-950 text-amber-300 border border-amber-800/50'
-                                        : 'bg-neutral-800 text-neutral-400'
-                                    }`}
-                                  >
-                                    {unmanagedVideos.length} Video
-                                  </span>
-                                </div>
-
-                                {unmanagedVideos.length === 0 ? (
-                                  <div className="p-3 rounded-lg bg-neutral-950/60 border border-neutral-800/60 text-center">
-                                    <p className="text-[11px] text-neutral-400 italic">
-                                      Belum ada video private yang menunggu dikelola AMG.
-                                    </p>
-                                  </div>
-                                ) : (
-                                  <div className="space-y-1.5">
-                                    {unmanagedVideos
-                                      .slice(0, expandedUnmanagedChannelId === channel.id ? 10 : 3)
-                                      .map((v) => (
-                                        <div
-                                          key={v.id}
-                                          className="p-2.5 rounded-lg bg-neutral-950/90 border border-neutral-800/80 hover:border-amber-900/40 transition text-xs space-y-1"
-                                        >
-                                          <div className="flex items-start justify-between gap-2">
-                                            <span
-                                              className="font-medium text-neutral-200 line-clamp-1 flex-1 text-[11px]"
-                                              title={v.titleBefore || 'Video Tanpa Judul'}
-                                            >
-                                              {v.titleBefore || 'Video Tanpa Judul'}
-                                            </span>
-                                          </div>
-
-                                          <div className="flex items-center justify-between text-[10px] pt-1 border-t border-neutral-900">
-                                            <span className="inline-flex items-center gap-1 font-bold text-amber-400 bg-amber-950/70 px-1.5 py-0.2 rounded border border-amber-800/40 text-[9px] uppercase tracking-wider">
-                                              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                                              PRIVATE • BELUM DIKELOLA
-                                            </span>
-                                            {(v.originalUploadAt || v.uploadedAt || v.createdAt) && (
-                                              <span className="text-neutral-500 font-mono text-[10px]">
-                                                {new Date(
-                                                  v.originalUploadAt || v.uploadedAt || v.createdAt!
-                                                ).toLocaleDateString('id-ID', {
-                                                  day: 'numeric',
-                                                  month: 'short',
-                                                  year: 'numeric',
-                                                })}
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                      ))}
-
-                                    {unmanagedVideos.length > 3 && (
-                                      <button
-                                        onClick={() =>
-                                          setExpandedUnmanagedChannelId(
-                                            expandedUnmanagedChannelId === channel.id ? null : channel.id
-                                          )
-                                        }
-                                        className="w-full text-center text-[11px] text-amber-400 hover:text-amber-300 font-semibold py-1 hover:underline cursor-pointer flex items-center justify-center gap-1 transition"
-                                      >
-                                        {expandedUnmanagedChannelId === channel.id ? (
-                                          <span>Tutup daftar ({unmanagedVideos.length} video)</span>
-                                        ) : (
-                                          <span>Lihat semua {unmanagedVideos.length} video private...</span>
-                                        )}
-                                      </button>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {/* Schedule Buffer Stock Monitor Badge */}
-                        <div className="pt-0.5">
-                          <ScheduleBufferBadge
-                            days={channel.scheduleBufferDays}
-                            stockCount={channel.scheduleStockCount}
-                            status={channel.scheduleAlertStatus}
-                            exhaustionDate={channel.bufferExhaustionDate}
-                            className="w-full justify-center"
-                          />
-                        </div>
-
-                        {/* Channel Stats and Settings Badge */}
-                        <div className="grid grid-cols-2 gap-2 text-xs py-2 border-y border-neutral-800/60">
-                          <div className="space-y-0.5">
-                            <span className="text-[10px] font-semibold text-neutral-500 uppercase">Profil</span>
-                            <div className="font-medium text-neutral-200 truncate">
-                              {profile ? profile.name : 'Belum Ditentukan'}
-                            </div>
-                          </div>
-                          <div className="space-y-0.5">
-                            <span className="text-[10px] font-semibold text-neutral-500 uppercase">Belum Dikelola</span>
-                            <div className="font-bold text-amber-400">
-                              {channel.unmanagedVideoCount || 0} Video
-                            </div>
-                          </div>
-                          <div className="space-y-0.5 col-span-2 bg-neutral-900/60 p-2 rounded-xl border border-neutral-800/80">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-semibold text-neutral-500 uppercase flex items-center gap-1">
-                                <Clock className="w-3 h-3 text-rose-400" />
-                                Aturan Jadwal
-                              </span>
-                              <button
-                                onClick={() => handleOpenScheduleModal(channel)}
-                                className="text-[10px] text-rose-400 hover:text-rose-300 font-bold underline flex items-center gap-0.5 transition cursor-pointer"
-                                title="Atur frekuensi publikasi kustom, waktu harian & zona waktu"
-                              >
-                                Sesuaikan
-                              </button>
-                            </div>
-                            <div className="font-semibold text-neutral-200 text-xs flex items-center gap-1.5 pt-0.5 truncate">
-                              <span className="text-rose-400 font-bold bg-rose-500/10 px-1.5 py-0.2 rounded border border-rose-500/20 text-[11px]">
-                                {channel.scheduleConfig?.videosPerDay || channel.publishFrequency}
-                              </span>
-                              <span className="text-neutral-300 text-[11px] truncate">
-                                {channel.scheduleConfig?.times?.join(', ') || channel.publishTime}
-                              </span>
-                              <span className="text-[10px] font-mono text-neutral-500 shrink-0">
-                                ({channel.scheduleConfig?.timezone === 'Asia/Jakarta' ? 'WIB' : channel.scheduleConfig?.timezone || channel.timezone || 'WIB'})
-                              </span>
-                            </div>
-                          </div>
-                          <div className="space-y-0.5">
-                            <span className="text-[10px] font-semibold text-neutral-500 uppercase">Sinkron Terakhir</span>
-                            <div className="font-medium text-neutral-400 text-[11px]">
-                              {channel.lastSyncAt
-                                ? new Date(channel.lastSyncAt).toLocaleDateString([], {
-                                    month: 'short',
-                                    day: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })
-                                : 'Belum Pernah'}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Reconnect Required Alert if Token Expired */}
-                        {(channel.status === 'RECONNECT REQUIRED' || channel.status === 'TOKEN EXPIRED') && (
-                          <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-600/70 flex items-center justify-between gap-2 shadow-xs">
-                            <div className="flex items-center gap-1.5 text-[11px] text-amber-300 font-semibold min-w-0">
-                              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                              <span className="truncate">Otorisasi kedaluwarsa</span>
-                            </div>
-                            <button
-                              onClick={() => handleGisAuthorizeChannel(channel)}
-                              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-[10px] transition cursor-pointer shrink-0"
-                            >
-                              Sambungkan Ulang
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Connection Date & Unlink Action */}
-                        <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1">
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] text-neutral-500">Tersambung:</span>
-                            <span className="font-semibold text-neutral-300">
-                              {channel.connectedAt
-                                ? new Date(channel.connectedAt).toLocaleDateString('id-ID', {
-                                    day: 'numeric',
-                                    month: 'short',
-                                    year: 'numeric',
-                                  })
-                                : 'Permanen'}
-                            </span>
-                          </div>
-                          <button
-                            onClick={() => handleDeleteChannel(channel.id, channel.title)}
-                            className="text-[10px] text-neutral-500 hover:text-rose-400 hover:underline transition cursor-pointer font-medium"
-                            title="Putuskan sambungan channel ini dari AMG Command Center"
-                          >
-                            [Unlink Channel]
-                          </button>
-                        </div>
-
-                        {/* Two Main Action Buttons directly visible */}
-                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-neutral-800/60">
-                          <button
-                            onClick={() => setSelectedChannelForCandidates(channel)}
-                            className="py-2.5 px-3 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 hover:text-cyan-200 text-xs font-semibold border border-cyan-800/60 hover:border-cyan-700 transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
-                            title="Deteksi video kandidat baru dan periksa batas tanggal"
-                          >
-                            <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
-                            <span className="truncate">Deteksi Kandidat</span>
-                          </button>
-
-                          <button
-                            onClick={() => onNavigateToAutomation(channel.id)}
-                            className="py-2.5 px-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-md shadow-red-900/30 text-center transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
-                            title="Buka panel otomasi untuk channel ini"
-                          >
-                            <PlayCircle className="w-3.5 h-3.5" />
-                            <span className="truncate">Otomasi Channel</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                <div className="grid grid-cols-1 gap-4">
+                  {renderChannelCard(primaryChannel, true)}
                 </div>
               </div>
-            );
-          })
+            )}
+
+            {/* 2. ACCORDION EXPAND-COLLAPSE UNTUK CHANNEL LAINNYA */}
+            {otherChannels.length > 0 && (
+              <div className="pt-2 space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <button
+                    onClick={() => setIsAccordionExpanded(!isAccordionExpanded)}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 text-neutral-200 text-xs font-bold transition cursor-pointer group shadow-sm active:scale-98"
+                  >
+                    {isAccordionExpanded ? (
+                      <>
+                        <ChevronUp className="w-4 h-4 text-red-400 group-hover:-translate-y-0.5 transition-transform" />
+                        <span>Lihat Lebih Sedikit</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-4 h-4 text-red-400 group-hover:translate-y-0.5 transition-transform" />
+                        <span>Lihat Lebih Banyak Channel ({otherChannels.length})</span>
+                      </>
+                    )}
+                  </button>
+                  <span className="text-[11px] text-neutral-400 font-mono">
+                    {isAccordionExpanded || searchQuery.trim().length > 0
+                      ? `Menampilkan ${otherChannels.length} channel lainnya`
+                      : `${otherChannels.length} channel lainnya tersembunyi`}
+                  </span>
+                </div>
+
+                {/* Collapsible Panel */}
+                {(isAccordionExpanded || searchQuery.trim().length > 0) && (
+                  <div className="pt-1 animate-in fade-in duration-200">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {otherChannels.map((channel) => renderChannelCard(channel, false))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -1610,16 +1738,19 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 
       {/* Add Channel Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-950/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto [overscroll-behavior-y:contain] [-webkit-overflow-scrolling:touch]">
+          <div className="relative w-full max-w-lg rounded-2xl bg-neutral-900 border border-neutral-800 shadow-2xl max-h-[90vh] overflow-y-auto [overscroll-behavior-y:contain] [-webkit-overflow-scrolling:touch] flex flex-col my-auto">
+            {/* 1. Sticky Header */}
+            <div className="sticky top-0 z-20 flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-950/95 backdrop-blur-md shadow-sm">
               <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
                 <Tv className="w-4 h-4 text-red-500" />
                 Tambah Channel YouTube Baru
               </h3>
               <button
+                type="button"
                 onClick={() => setIsAddModalOpen(false)}
-                className="text-neutral-400 hover:text-white cursor-pointer"
+                className="text-neutral-400 hover:text-white p-1 rounded-lg hover:bg-neutral-800 transition cursor-pointer"
+                title="Tutup Form"
               >
                 ✕
               </button>
@@ -1833,20 +1964,31 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
                 />
               </div>
 
-              <div className="pt-2 flex justify-end gap-2">
+              {/* Padding Bottom Ekstra pb-24 untuk Safe Area & agar seluruh opsi jadwal terbawah terlihat jelas */}
+              <div className="pb-24" />
+
+              {/* 2. Sticky Footer */}
+              <div className="sticky bottom-0 z-20 -mx-6 -mb-6 px-6 py-4 pb-6 bg-neutral-950/95 backdrop-blur-md border-t border-neutral-800 flex items-center justify-end gap-3 shadow-2xl">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-semibold cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-semibold cursor-pointer transition active:scale-95"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
                   disabled={isAdding}
-                  className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold cursor-pointer"
+                  className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold cursor-pointer transition shadow-lg shadow-red-900/30 active:scale-95 flex items-center gap-2"
                 >
-                  {isAdding ? 'Menyimpan...' : 'Simpan Channel'}
+                  {isAdding ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Menyimpan...</span>
+                    </>
+                  ) : (
+                    <span>Simpan Channel</span>
+                  )}
                 </button>
               </div>
             </form>

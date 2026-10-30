@@ -47,6 +47,7 @@ import {
   unmarkChannelAsUnlinked,
   removePersistedConnectedChannel,
   savePersistedConnectedChannel,
+  getPersistedConnectedChannels,
 } from './youtubeGisAuth.ts';
 
 export { fetchYouTubeVideos, syncChannelVideos };
@@ -62,6 +63,11 @@ import {
   isVideoUnmanagedPrivateRaw,
   getChannelScheduledAnchor,
 } from '../utils/scheduleAndUnmanagedUtils.ts';
+import {
+  classifyChannelVideos,
+  isAmgRegulerEligible,
+  isRawStudioTitle,
+} from './candidateDetectionService.ts';
 import {
   safeLocalStorageSet,
   getChannelThumbnailsFromIdb,
@@ -85,6 +91,7 @@ const KEYS = {
   ACCESS_TOKEN: 'amg_youtube_access_token',
   TOKEN_EXPIRES: 'amg_youtube_token_expires_at',
   CONNECTED_CHANNEL: 'amg_youtube_connected_channel',
+  PERSISTENT_CHANNELS: 'amg_persistent_channels',
   PERSISTENT_LIST: 'amg_persistent_channels_list',
 };
 
@@ -122,6 +129,7 @@ export function isRealChannel(c: Channel): boolean {
   const id = c.id || '';
   const ytId = c.youtubeChannelId || '';
   const title = (c.title || '').toLowerCase();
+  const customUrl = (c.customUrl || '').toLowerCase();
 
   if (
     id === 'chan-test-worker-01' ||
@@ -134,13 +142,21 @@ export function isRealChannel(c: Channel): boolean {
     ytId.startsWith('UC_VALID_') ||
     title.includes('valid relaxing ambience') ||
     title.includes('test ambience') ||
+    title.includes('production') ||
+    title.includes('server') ||
+    title.includes('dora') ||
+    title.includes('unit test') ||
+    title.includes('demo fixture') ||
+    title.includes('[demo fixture]') ||
+    title.includes('fixture') ||
+    customUrl.includes('prod') ||
+    customUrl.includes('server') ||
+    customUrl.includes('dora') ||
+    customUrl.includes('unittest') ||
     id === 'chan-ayam-warna' ||
     id === 'chan-suara-alam' ||
     id === 'chan-murottal' ||
-    id === 'chan-kucing-gemoy' ||
-    title.includes('demo fixture') ||
-    title.includes('[demo fixture]') ||
-    title.includes('fixture')
+    id === 'chan-kucing-gemoy'
   ) {
     return false;
   }
@@ -250,6 +266,41 @@ export function isRealVideo(v: ManagedVideo): boolean {
 export function purgeMockDataFromLocalStorage(): void {
   if (typeof window === 'undefined' || !window.localStorage) return;
   try {
+    const checkKeys = ['amg_persistent_channels', 'amg_channels', 'amg_persistent_channels_list'];
+    for (const key of checkKeys) {
+      const val = localStorage.getItem(key);
+      if (val && (
+        val.includes('Production') ||
+        val.includes('Server') ||
+        val.includes('DORA') ||
+        val.includes('AyamYahyaProd') ||
+        val.includes('StudioAmbienceProd') ||
+        val.includes('UnitTest') ||
+        val.includes('UC_TEST_ISOLATION_') ||
+        val.includes('Valid Relaxing Ambience')
+      )) {
+        localStorage.removeItem('amg_persistent_channels');
+        localStorage.removeItem('amg_channels');
+        localStorage.removeItem('amg_persistent_channels_list');
+        localStorage.removeItem('amg_active_channel_id');
+        localStorage.removeItem('amg_active_channel');
+        localStorage.removeItem('amg_permanent_channel_ids');
+        localStorage.removeItem('amg_videos');
+        break;
+      }
+    }
+
+    const rawPersistent = localStorage.getItem('amg_persistent_channels');
+    if (rawPersistent) {
+      const parsed = JSON.parse(rawPersistent);
+      if (Array.isArray(parsed)) {
+        const clean = parsed.filter(isRealChannel);
+        if (clean.length !== parsed.length) {
+          localStorage.setItem('amg_persistent_channels', JSON.stringify(clean));
+        }
+      }
+    }
+
     const rawChannels = localStorage.getItem('amg_channels');
     if (rawChannels) {
       const parsed = JSON.parse(rawChannels);
@@ -428,7 +479,7 @@ export function isRealThumbnail(th: MasterThumbnail): boolean {
   return true;
 }
 
-// Ensure connected GIS channels in localStorage are synced into amg_channels
+// Ensure connected GIS channels in localStorage are synced into amg_channels without dropping channels
 function syncConnectedChannelState(channels: Channel[]): Channel[] {
   try {
     const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
@@ -440,31 +491,93 @@ function syncConnectedChannelState(channels: Channel[]): Channel[] {
       .filter((c) => isRealChannel(c) && !isUnlinked(c.id) && !isUnlinked(c.youtubeChannelId) && !isUnlinked(`chan-${c.youtubeChannelId}`))
       .map(sanitizeChannel);
 
+    // Retrieve all persisted channels
+    const persistedList = getPersistedConnectedChannels();
     const storedConnected = localStorage.getItem(KEYS.CONNECTED_CHANNEL);
-
+    const combinedSnippets: any[] = [...persistedList];
     if (storedConnected) {
-      const liveData = JSON.parse(storedConnected);
-      if (liveData && liveData.id && !isUnlinked(liveData.id) && !isUnlinked(`chan-${liveData.id}`)) {
-        const idx = channels.findIndex(
-          (c) =>
-            c.youtubeChannelId === liveData.id ||
-            c.id === liveData.id ||
-            c.id === `chan-${liveData.id}`
-        );
-
-        if (idx >= 0) {
-          channels[idx] = sanitizeChannel({
-            ...channels[idx],
-            title: liveData.title || channels[idx].title,
-            thumbnailUrl: liveData.thumbnailUrl || channels[idx].thumbnailUrl,
-            customUrl: liveData.customUrl || channels[idx].customUrl,
-            status: 'CONNECTED',
-            connectedAt: channels[idx].connectedAt || new Date().toISOString(),
-            isSeeded: false,
-            subscriberCount: liveData.subscriberCount ?? channels[idx].subscriberCount ?? 0,
-            videoCount: liveData.videoCount ?? channels[idx].videoCount ?? 0,
-          });
+      try {
+        const sc = JSON.parse(storedConnected);
+        if (sc && sc.id && !combinedSnippets.some((p) => p.id === sc.id)) {
+          combinedSnippets.push(sc);
         }
+      } catch {}
+    }
+
+    const now = new Date().toISOString();
+    for (const liveData of combinedSnippets) {
+      if (!liveData || !liveData.id || isUnlinked(liveData.id) || isUnlinked(`chan-${liveData.id}`)) {
+        continue;
+      }
+
+      const idx = channels.findIndex(
+        (c) =>
+          c.youtubeChannelId === liveData.id ||
+          c.id === liveData.id ||
+          c.id === `chan-${liveData.id}`
+      );
+
+      if (idx >= 0) {
+        channels[idx] = sanitizeChannel({
+          ...channels[idx],
+          title: liveData.title || channels[idx].title,
+          thumbnailUrl: liveData.thumbnailUrl || channels[idx].thumbnailUrl,
+          customUrl: liveData.customUrl || channels[idx].customUrl,
+          status: 'CONNECTED',
+          connectedAt: channels[idx].connectedAt || now,
+          isSeeded: false,
+          subscriberCount: liveData.subscriberCount ?? channels[idx].subscriberCount ?? 0,
+          videoCount: liveData.videoCount ?? channels[idx].videoCount ?? 0,
+        });
+      } else {
+        // Multi-channel preservation: Add this channel side-by-side!
+        const targetId = `chan-${liveData.id}`;
+        const newChan: Channel = sanitizeChannel({
+          id: targetId,
+          youtubeChannelId: liveData.id,
+          title: liveData.title || 'Channel YouTube Terhubung',
+          customUrl: liveData.customUrl || `@${liveData.id}`,
+          thumbnailUrl: liveData.thumbnailUrl || '',
+          status: 'CONNECTED',
+          monetizationStatus: 'NOT_MONETIZED',
+          watchHours: 0,
+          revenue: {
+            adSenseReguler: 0,
+            liveStream: 0,
+            ytShopping: 0,
+            channelMemberships: 0,
+            totalChannelRevenue: 0,
+          },
+          nicheCategory: 'General',
+          nicheBadge: 'cyan',
+          publishFrequency: '1/day',
+          publishTime: '16:00',
+          timezone: 'Asia/Jakarta',
+          useProfileSchedule: false,
+          scheduleConfig: {
+            mode: 'DAILY',
+            videosPerDay: 1,
+            times: ['16:00'],
+            timezone: 'Asia/Jakarta',
+            startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+          },
+          eligibilityWindowDays: 7,
+          eligibleTitlePatterns: [],
+          autoEnroll: false,
+          subscriberCount: liveData.subscriberCount || 0,
+          videoCount: liveData.videoCount || 0,
+          unmanagedVideoCount: 0,
+          hasOAuthConfigured: true,
+          isSeeded: false,
+          createdAt: now,
+          updatedAt: now,
+          connectedAt: now,
+          lastSyncAt: now,
+          scheduleBufferDays: 7,
+          scheduleStockCount: 5,
+          scheduleAlertStatus: 'SAFE',
+        });
+        channels.push(newChan);
       }
     }
 
@@ -648,14 +761,14 @@ export const api = {
     return {
       metrics: {
         totalChannels: channels.length,
-        connectedChannels,
-        newVideos: detectedCandidatesCount,
-        hdReady: targetVideos.filter((v) => v.definition === 'hd').length,
-        processing: targetVideos.filter((v) => v.managementStatus === 'PROCESSING').length,
-        scheduled: targetVideos.filter((v) => v.managementStatus === 'SCHEDULED').length,
-        completedVideos: targetVideos.filter((v) => v.managementStatus === 'COMPLETED').length,
-        automationJobs: jobs.length,
-        errors: errors.filter((e) => e.status === 'open').length,
+        connectedChannels: channels.length === 0 ? 0 : connectedChannels,
+        newVideos: channels.length === 0 ? 0 : detectedCandidatesCount,
+        hdReady: channels.length === 0 ? 0 : targetVideos.filter((v) => v.definition === 'hd').length,
+        processing: channels.length === 0 ? 0 : targetVideos.filter((v) => v.managementStatus === 'PROCESSING').length,
+        scheduled: channels.length === 0 ? 0 : targetVideos.filter((v) => v.managementStatus === 'SCHEDULED').length,
+        completedVideos: channels.length === 0 ? 0 : targetVideos.filter((v) => v.managementStatus === 'COMPLETED').length,
+        automationJobs: channels.length === 0 ? 0 : jobs.length,
+        errors: channels.length === 0 ? 0 : errors.filter((e) => e.status === 'open').length,
       },
       actionRequired,
       recentBatches: batches.slice(-5).reverse(),
@@ -672,6 +785,7 @@ export const api = {
         if (Array.isArray(backendChannels) && backendChannels.length > 0) {
           const sanitized = backendChannels.map(sanitizeChannel);
           setStorageItem(KEYS.CHANNELS, sanitized);
+          localStorage.setItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(sanitized));
           return sanitized;
         }
       }
@@ -679,7 +793,19 @@ export const api = {
       // fallback
     }
 
-    let channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    let channels: Channel[] = [];
+    const persistentRaw = localStorage.getItem(KEYS.PERSISTENT_CHANNELS);
+    if (persistentRaw) {
+      try {
+        const parsed = JSON.parse(persistentRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          channels = parsed.filter(isRealChannel).map(sanitizeChannel);
+        }
+      } catch {}
+    }
+    if (channels.length === 0) {
+      channels = getStorageItem<Channel[]>(KEYS.CHANNELS, initialChannels);
+    }
     return syncConnectedChannelState(channels);
   },
 
@@ -818,31 +944,23 @@ export const api = {
     const target = channels.find((c) => c.id === id || c.youtubeChannelId === id || c.id === `chan-${id}`);
     const targetId = target ? target.id : id;
     const targetYoutubeId = target?.youtubeChannelId || (id.startsWith('chan-') ? id.replace('chan-', '') : id);
-    const targetTitle = target?.title || (id.toLowerCase().includes('ayam') ? 'Ayam YAHYA' : '');
 
-    // 1. Mark as unlinked so that refresh or sync never resurrects it
+    // 1. Mark strictly this channel as unlinked so that refresh never resurrects it
     markChannelAsUnlinked(targetId);
     markChannelAsUnlinked(targetYoutubeId);
     markChannelAsUnlinked(id);
-    if (targetTitle) {
-      markChannelAsUnlinked(targetTitle);
-    }
-    if (targetTitle?.toLowerCase().includes('ayam') || targetId.toLowerCase().includes('ayam')) {
-      markChannelAsUnlinked('chan-ayam-yahya');
-      markChannelAsUnlinked('UC_AYAM_YAHYA_001');
-      markChannelAsUnlinked('Ayam YAHYA');
-    }
 
-    // 2. Remove from active channels list
+    // 2. Remove only this specific channel from active channels list
     channels = channels.filter(
       (c) =>
         c.id !== targetId &&
         c.id !== id &&
         c.youtubeChannelId !== targetYoutubeId &&
         c.youtubeChannelId !== id &&
-        (!targetTitle || c.title?.toLowerCase() !== targetTitle.toLowerCase())
+        c.id !== `chan-${targetYoutubeId}`
     );
     setStorageItem(KEYS.CHANNELS, channels);
+    localStorage.setItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(channels));
 
     // 3. Remove from GIS persistent list & connected channel
     removePersistedConnectedChannel(targetId);
@@ -866,6 +984,8 @@ export const api = {
         setStorageItem(KEYS.BATCHES, []);
         setStorageItem(KEYS.JOBS, []);
         localStorage.setItem('amg_channels', JSON.stringify([]));
+        localStorage.setItem('amg_persistent_channels', JSON.stringify([]));
+        localStorage.removeItem(KEYS.PERSISTENT_CHANNELS);
         localStorage.setItem('amg_videos', JSON.stringify([]));
         localStorage.setItem('amg_batches', JSON.stringify([]));
         localStorage.setItem('amg_jobs', JSON.stringify([]));
@@ -882,9 +1002,7 @@ export const api = {
             v.channelId !== targetId &&
             v.channelId !== targetYoutubeId &&
             v.channelId !== id &&
-            v.channelId !== `chan-${targetYoutubeId}` &&
-            (!targetTitle || v.channelTitle?.toLowerCase() !== targetTitle.toLowerCase()) &&
-            (!targetTitle?.toLowerCase().includes('ayam') || (!v.youtubeVideoId?.startsWith('AY_YAHYA_') && !v.channelTitle?.toLowerCase().includes('ayam')))
+            v.channelId !== `chan-${targetYoutubeId}`
         );
         setStorageItem(KEYS.VIDEOS, remainingVideos);
 
@@ -894,7 +1012,7 @@ export const api = {
             b.channelId !== targetId &&
             b.channelId !== targetYoutubeId &&
             b.channelId !== id &&
-            (!targetTitle || b.channelTitle?.toLowerCase() !== targetTitle.toLowerCase())
+            b.channelId !== `chan-${targetYoutubeId}`
         );
         setStorageItem(KEYS.BATCHES, remainingBatches);
       }
@@ -909,7 +1027,7 @@ export const api = {
       await authFetch('/api/channels/unlink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: targetId, channelId: targetId, youtubeChannelId: targetYoutubeId, title: targetTitle }),
+        body: JSON.stringify({ id: targetId, channelId: targetId, youtubeChannelId: targetYoutubeId }),
       }).catch(() => {});
     } catch (e) {
       console.warn('Backend deleteChannel notice:', e);
@@ -1158,6 +1276,9 @@ export const api = {
       localStorage.setItem('amg_youtube_refresh_token', data.refreshToken);
     }
 
+    // Persist to multi-channel list in browser localStorage
+    savePersistedConnectedChannel(data.channelData);
+
     // Remove from unlinked blacklist because user is explicitly connecting it
     if (data.channelData && data.channelData.id) {
       unmarkChannelAsUnlinked(data.channelData.id);
@@ -1184,19 +1305,36 @@ export const api = {
     const now = new Date().toISOString();
     let targetChannel: Channel;
 
+    const cd = data.channelData || {};
+    const ytId = cd.id;
+    const ytTitle = cd.snippet?.title || cd.title || 'Channel YouTube';
+    const ytHandle = cd.snippet?.customUrl || cd.customUrl || (ytId ? `@${ytId}` : '');
+    const ytAvatar =
+      cd.snippet?.thumbnails?.high?.url ||
+      cd.snippet?.thumbnails?.medium?.url ||
+      cd.snippet?.thumbnails?.default?.url ||
+      cd.thumbnailUrl ||
+      '';
+    const subCount = cd.statistics?.subscriberCount ? parseInt(cd.statistics.subscriberCount, 10) : (cd.subscriberCount || 0);
+    const vidCount = cd.statistics?.videoCount ? parseInt(cd.statistics.videoCount, 10) : (cd.videoCount || 0);
+
+    // Multi-Channel Anti-Overwrite: Match strictly by YouTube channel ID
     const existingIdx = channels.findIndex(
-      (c) => c.youtubeChannelId === data.channelData.id || (data.channelId && c.id === data.channelId)
+      (c) =>
+        c.youtubeChannelId === ytId ||
+        c.id === ytId ||
+        c.id === `chan-${ytId}`
     );
 
     if (existingIdx >= 0) {
       channels[existingIdx] = {
         ...channels[existingIdx],
-        youtubeChannelId: data.channelData.id,
-        title: data.channelData.title || channels[existingIdx].title,
-        thumbnailUrl: data.channelData.thumbnailUrl || channels[existingIdx].thumbnailUrl,
-        customUrl: data.channelData.customUrl || channels[existingIdx].customUrl,
-        subscriberCount: data.channelData.subscriberCount || channels[existingIdx].subscriberCount,
-        videoCount: data.channelData.videoCount || channels[existingIdx].videoCount,
+        youtubeChannelId: ytId,
+        title: ytTitle || channels[existingIdx].title,
+        thumbnailUrl: ytAvatar || channels[existingIdx].thumbnailUrl,
+        customUrl: ytHandle || channels[existingIdx].customUrl,
+        subscriberCount: subCount || channels[existingIdx].subscriberCount,
+        videoCount: vidCount || channels[existingIdx].videoCount,
         status: 'CONNECTED',
         connectedAt: channels[existingIdx].connectedAt || now,
         lastSyncAt: now,
@@ -1208,11 +1346,11 @@ export const api = {
       targetChannel = channels[existingIdx];
     } else {
       targetChannel = {
-        id: `chan-${data.channelData.id}`,
-        youtubeChannelId: data.channelData.id,
-        title: data.channelData.title || 'Channel YouTube Baru',
-        customUrl: data.channelData.customUrl || `@${data.channelData.id}`,
-        thumbnailUrl: data.channelData.thumbnailUrl || '',
+        id: `chan-${ytId}`,
+        youtubeChannelId: ytId,
+        title: ytTitle || 'Channel YouTube',
+        customUrl: ytHandle || `@${ytId}`,
+        thumbnailUrl: ytAvatar || '',
         status: 'CONNECTED',
         monetizationStatus: 'NOT_MONETIZED',
         watchHours: 0,
@@ -1239,8 +1377,8 @@ export const api = {
         eligibilityWindowDays: 7,
         eligibleTitlePatterns: [],
         autoEnroll: false,
-        subscriberCount: data.channelData.subscriberCount || 0,
-        videoCount: data.channelData.videoCount || 0,
+        subscriberCount: subCount,
+        videoCount: vidCount,
         unmanagedVideoCount: 0,
         hasOAuthConfigured: true,
         isSeeded: false,
@@ -1252,7 +1390,7 @@ export const api = {
         scheduleStockCount: 5,
         scheduleAlertStatus: 'SAFE',
       };
-      channels.unshift(targetChannel);
+      channels.push(targetChannel);
     }
 
     const assignedProfId = targetChannel.contentProfileId || targetChannel.blockId || `profile-${targetChannel.id}`;
@@ -1289,6 +1427,9 @@ export const api = {
     }
 
     setStorageItem(KEYS.CHANNELS, channels);
+    try {
+      localStorage.setItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(channels));
+    } catch {}
 
     const activityLogs = getStorageItem<ActivityLog[]>(KEYS.ACTIVITY_LOGS, initialActivityLogs);
     activityLogs.unshift({
@@ -2776,61 +2917,47 @@ export const api = {
     const candidateVideos = channelVideos.filter((v) => {
       if (v.isManaged || v.managementStatus === 'COMPLETED') return false;
       if (v.managementScope === 'EXCLUDED') return false;
-      const priv = (v.privacyStatus || 'private').toLowerCase();
-      const hasSched = Boolean(v.publishAt || v.scheduledPublishAt);
-      if (priv === 'private' && !hasSched) {
-        const rawT = v.titleBefore || (v as any).title || '';
-        if (/salinan\s+dari\s+a/i.test(rawT) || /copy\s+of\s+a/i.test(rawT)) {
-          return true;
-        }
-      }
+      if (isAmgRegulerEligible(v)) return true;
       if ((v.managementScope === 'REGULAR' && v.isAmgEligible) || v.isEnrolled) return true;
       const evalRes = evaluateVideoEligibilityWithBlock(v, channel, targetBlock);
       return evalRes.isEligible || evalRes.category === 'NEW_PRIVATE_CANDIDATE';
     });
 
-    // Titik acuan jadwal terakhir WAJIB diambil HANYA dari video yang memiliki status penjadwalan resmi dari YouTube Studio:
-    // Filter: status.uploadStatus === 'processed' && status.publishAt != null
-    // DILARANG mengambil tanggal dari video mentah/private yang belum terjadwal (seperti 'Salinan dari A')
-    const verifiedScheduledVideos = channelVideos.filter((v) => {
-      const isPriv = (v.privacyStatus || '').toLowerCase() === 'private';
-      if (!isPriv) return false;
-      const isProcessed =
-        v.uploadStatus === 'processed' ||
-        (v as any).status?.uploadStatus === 'processed' ||
-        v.processingStatus === 'processed';
-      if (!isProcessed) return false;
-      const pub = v.publishAt || (v as any).status?.publishAt;
+    // Titik Acuan Jadwal Dinamis 100% (No Hardcoding):
+    // Cek seluruh video channel yang memiliki status.publishAt (terjadwal ke depan)
+    const scheduledVideos = channelVideos.filter((v) => {
+      const pub = (v as any).status?.publishAt || v.publishAt || v.scheduledPublishAt;
       if (!pub) return false;
-      const rawT = (v.titleBefore || (v as any).title || '').toLowerCase();
+      const rawT = (v.titleBefore || v.titleAssigned || (v as any).title || '').toLowerCase();
       if (rawT.startsWith('salinan dari') || rawT.startsWith('copy of')) return false;
       const t = new Date(pub).getTime();
       return !isNaN(t) && t > 0;
     });
 
-    // Urutkan publishAt secara descending (terjauh ke masa depan). Nilai publishAt terjauh itulah yang menjadi titik acuan resmi channel.
-    verifiedScheduledVideos.sort((a, b) => {
-      const pubA = (a.publishAt || (a as any).status?.publishAt)!;
-      const pubB = (b.publishAt || (b as any).status?.publishAt)!;
-      return new Date(pubB).getTime() - new Date(pubA).getTime();
-    });
-
-    let latestAnchorIso: string | null = null;
-    if (verifiedScheduledVideos.length > 0) {
-      latestAnchorIso = verifiedScheduledVideos[0].publishAt || (verifiedScheduledVideos[0] as any).status?.publishAt || null;
+    let latestScheduledDate: Date | null = null;
+    if (scheduledVideos.length > 0) {
+      // Ambil tanggal publishAt terjauh/terakhir sebagai titik acuan riil
+      const maxMs = Math.max(...scheduledVideos.map((v) => {
+        const pub = (v as any).status?.publishAt || v.publishAt || v.scheduledPublishAt;
+        return new Date(pub).getTime();
+      }));
+      latestScheduledDate = new Date(maxMs);
+    } else if (channel.lastScheduledPublishAt) {
+      const t = new Date(channel.lastScheduledPublishAt).getTime();
+      if (!isNaN(t) && t > 0) {
+        latestScheduledDate = new Date(t);
+      }
     }
-    if (!latestAnchorIso && channel.lastScheduledPublishAt) {
-      latestAnchorIso = channel.lastScheduledPublishAt;
-    }
 
-    let baseAnchorUtcMs: number;
-    if (latestAnchorIso) {
-      const anchorD = new Date(latestAnchorIso);
-      // Titik acuan dinormalisasi ke jam 16:00 WIB (09:00 UTC)
-      baseAnchorUtcMs = Date.UTC(anchorD.getUTCFullYear(), anchorD.getUTCMonth(), anchorD.getUTCDate(), 9, 0, 0, 0);
+    // JIKA ADA video terjadwal: mulai dari (latestScheduledDate + 1 Hari) pada jam 16:00 WIB
+    // JIKA TIDAK ADA video terjadwal: mulai BESOK (Hari Ini + 1 Hari) pada jam 16:00 WIB
+    let startSlotDate: Date;
+    if (latestScheduledDate) {
+      startSlotDate = new Date(latestScheduledDate.getTime());
+      startSlotDate.setUTCDate(startSlotDate.getUTCDate() + 1);
     } else {
-      const now = new Date();
-      baseAnchorUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 9, 0, 0, 0);
+      startSlotDate = new Date();
+      startSlotDate.setUTCDate(startSlotDate.getUTCDate() + 1);
     }
 
     // Map ALL candidate videos (without capping or slicing at 10)
@@ -2845,8 +2972,9 @@ export const api = {
       const hasCustomMasterThumb = realCustomThumbnails.length > 0;
       const assignedThumb = hasCustomMasterThumb ? realCustomThumbnails[i % realCustomThumbnails.length].url : rawNativeThumb;
 
-      // Schedule starts next day after anchor: (Titik Acuan Terjauh + (i + 1) Hari) pada jam 16:00 WIB
-      const candSlotDate = new Date(baseAnchorUtcMs + (i + 1) * 86400000);
+      // Slot berurutan bertambah +1 hari pada jam 16:00 WIB (09:00 UTC)
+      const candSlotDate = new Date(startSlotDate.getTime());
+      candSlotDate.setUTCDate(startSlotDate.getUTCDate() + i);
       candSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
       const publishDateStr = candSlotDate.toISOString().split('T')[0];
 
@@ -3448,40 +3576,8 @@ export const api = {
 
   // Phase 2: Safe Video Eligibility & Scope Isolation
   detectCandidates: async (channelId: string) => {
-    const videos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(
-      (v) => v.channelId === channelId
-    );
-    const candidates = videos.filter((v) => !v.isManaged && v.managementScope === 'REGULAR');
-    const alreadyManaged = videos.filter((v) => v.isManaged);
-    const unclassified = videos.filter((v) => v.managementScope === 'UNCLASSIFIED');
-    const excluded = videos.filter((v) => v.managementScope === 'EXCLUDED');
-
-    return {
-      channelId,
-      candidates,
-      protectedOld: [],
-      protectedByCutoff: [],
-      unclassified,
-      enrolledEligible: candidates,
-      alreadyManaged,
-      excluded,
-      statistics: {
-        totalEvaluated: videos.length,
-        newCandidates: candidates.length,
-        enrolledEligible: candidates.length,
-        protectedOld: 0,
-        protectedByCutoff: 0,
-        unclassified: unclassified.length,
-        alreadyManaged: alreadyManaged.length,
-        excluded: excluded.length,
-      },
-      config: {
-        eligibilityWindowDays: 7,
-        eligibleTitlePatterns: [],
-        latestManagedUploadAt: new Date().toISOString(),
-        autoEnroll: false,
-      },
-    };
+    const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, initialVideos).filter(isRealVideo);
+    return classifyChannelVideos(channelId, rawVideos);
   },
 
   updateEligibilityConfig: async (
@@ -3534,13 +3630,6 @@ export const api = {
     const enrolled: ManagedVideo[] = [];
 
     videos.forEach((v, i) => {
-      // Filter Status Privasi Ketat: Hanya video private tanpa jadwal tayang yang dapat di-enroll
-      const hasPublishAt = Boolean(
-        v.publishAt ||
-        v.scheduledPublishAt ||
-        (v as any).scheduledAt ||
-        (v as any).status?.publishAt
-      );
       const isChanMatch =
         v.channelId === channelId ||
         v.channelId === `chan-${channelId}` ||
@@ -3548,11 +3637,8 @@ export const api = {
       if (
         isChanMatch &&
         !v.isManaged &&
-        (v.privacyStatus || '').toLowerCase() === 'private' &&
-        !hasPublishAt &&
-        v.managementStatus !== 'SCHEDULED' &&
-        v.managementStatus !== 'COMPLETED' &&
-        v.managementScope !== 'EXCLUDED'
+        v.managementScope !== 'EXCLUDED' &&
+        isAmgRegulerEligible(v)
       ) {
         videos[i].isManaged = true;
         videos[i].managementScope = 'REGULAR';

@@ -150,42 +150,41 @@ class WorkerClientService {
   public getChannelVerifiedAnchor(channelId: string, allVideos: ManagedVideo[]): string | null {
     const cleanChanId = channelId.replace(/^chan-/, '');
 
-    const verified = allVideos.filter((v) => {
+    const channelVideos = allVideos.filter((v) => {
       const isMatch =
         v.channelId === channelId ||
         v.channelId === cleanChanId ||
         v.channelId === `chan-${cleanChanId}`;
-      if (!isMatch) return false;
+      return isMatch;
+    });
 
-      const isProcessed =
-        v.uploadStatus === 'processed' ||
-        v.processingStatus === 'processed' ||
-        (v as any).status?.uploadStatus === 'processed';
-      if (!isProcessed) return false;
-
-      const pub = v.publishAt || (v as any).status?.publishAt;
+    // Cek seluruh video channel yang memiliki status.publishAt (terjadwal ke depan)
+    const scheduledVideos = channelVideos.filter((v) => {
+      const pub = (v as any).status?.publishAt || v.publishAt || v.scheduledPublishAt;
       if (!pub) return false;
-
       const title = (v.titleBefore || v.titleAssigned || (v as any).title || '').toLowerCase();
       if (title.startsWith('salinan dari') || title.startsWith('copy of')) {
         return false;
       }
-
       const t = new Date(pub).getTime();
       return !isNaN(t) && t > 0;
     });
 
-    if (verified.length === 0) {
+    if (scheduledVideos.length === 0) {
       return null;
     }
 
-    verified.sort((a, b) => {
-      const pubA = (a.publishAt || (a as any).status?.publishAt)!;
-      const pubB = (b.publishAt || (b as any).status?.publishAt)!;
-      return new Date(pubB).getTime() - new Date(pubA).getTime();
-    });
+    // Ambil tanggal publishAt terjauh/terakhir sebagai titik acuan riil
+    const latestScheduledDate = new Date(
+      Math.max(
+        ...scheduledVideos.map((v) => {
+          const pub = (v as any).status?.publishAt || v.publishAt || v.scheduledPublishAt;
+          return new Date(pub).getTime();
+        })
+      )
+    );
 
-    return verified[0].publishAt || (verified[0] as any).status?.publishAt || null;
+    return latestScheduledDate.toISOString();
   }
 
   /**
@@ -194,20 +193,23 @@ class WorkerClientService {
    */
   public generateSequentialSchedules(count: number, anchorIsoDate: string | null): string[] {
     const results: string[] = [];
-    let baseDate: Date;
+    let start: Date;
 
     if (anchorIsoDate) {
-      baseDate = new Date(anchorIsoDate);
-      if (isNaN(baseDate.getTime())) {
-        baseDate = new Date();
+      const latestScheduledDate = new Date(anchorIsoDate);
+      if (!isNaN(latestScheduledDate.getTime())) {
+        // Mulai dari (latestScheduledDate + 1 Hari)
+        start = new Date(latestScheduledDate.getTime());
+        start.setUTCDate(start.getUTCDate() + 1);
+      } else {
+        start = new Date();
+        start.setUTCDate(start.getUTCDate() + 1);
       }
     } else {
-      baseDate = new Date();
+      // TIDAK ADA video terjadwal: Jadwalkan video pertama mulai BESOK (Hari Ini + 1 Hari) jam 16:00 WIB
+      start = new Date();
+      start.setUTCDate(start.getUTCDate() + 1);
     }
-
-    // Titik acuan + 1 hari
-    const start = new Date(baseDate.getTime());
-    start.setUTCDate(start.getUTCDate() + 1);
 
     for (let i = 0; i < count; i++) {
       const current = new Date(start.getTime());
@@ -368,7 +370,7 @@ class WorkerClientService {
     this.shouldStop = false;
 
     const pureChannelId = channel.youtubeChannelId || channel.id.replace(/^chan-/, '');
-    const batchSize = options.batchSize || 50;
+    const batchSize = options.batchSize || 70;
     const itemsToProcess = candidates.slice(0, batchSize);
     const totalCount = itemsToProcess.length;
 

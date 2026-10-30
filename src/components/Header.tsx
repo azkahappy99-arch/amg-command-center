@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Menu, RefreshCw, Bell, Shield, Radio, CheckCircle, AlertCircle, Crown, User, LogIn } from 'lucide-react';
+import { Menu, RefreshCw, Bell, Shield, Radio, CheckCircle, AlertCircle, Crown, User, LogIn, Tv } from 'lucide-react';
 import { Channel } from '../types/index.ts';
 import { UserSessionData } from './AuthModal.tsx';
 
@@ -36,6 +36,21 @@ export const Header: React.FC<HeaderProps> = ({
   const effectiveChannels = useMemo(() => {
     if (channels && channels.length > 0) return channels;
     try {
+      const persistent = localStorage.getItem('amg_persistent_channels');
+      if (persistent) {
+        const parsed = JSON.parse(persistent);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+          const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+          const valid = parsed.filter(
+            (c: Channel) =>
+              !c.isSeeded &&
+              !unlinkedIds.includes(c.id) &&
+              !unlinkedIds.includes(c.youtubeChannelId || '')
+          );
+          if (valid.length > 0) return valid;
+        }
+      }
       const stored = localStorage.getItem('amg_channels');
       if (stored) {
         const parsed = JSON.parse(stored);
@@ -81,48 +96,44 @@ export const Header: React.FC<HeaderProps> = ({
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* Channel Selector */}
-        <div className="flex items-center space-x-1.5 sm:space-x-2 min-w-0 flex-1 max-w-[200px] xs:max-w-[240px] sm:max-w-[320px] md:max-w-md">
-          {activeChannel?.thumbnailUrl ? (
-            <img
-              src={activeChannel.thumbnailUrl}
-              alt={activeChannel.title}
-              className="w-7 h-7 rounded-lg object-cover border border-neutral-700/80 shadow shrink-0"
-              onError={(e) => {
-                (e.target as HTMLElement).style.display = 'none';
-              }}
-            />
-          ) : activeChannel ? (
-            <div className="w-7 h-7 rounded-lg bg-neutral-900 border border-neutral-800 flex items-center justify-center shrink-0 text-xs font-bold text-neutral-400">
-              {activeChannel.title ? activeChannel.title.slice(0, 2).toUpperCase() : 'YT'}
-            </div>
-          ) : null}
-          <span className="hidden sm:inline-block text-xs font-semibold text-neutral-400 uppercase tracking-wider shrink-0">
-            Channel:
-          </span>
-          <select
-            value={effectiveSelectedId}
-            onChange={(e) => {
-              const val = e.target.value;
-              localStorage.setItem('amg_active_channel_id', val);
-              localStorage.setItem('amg_active_channel', val);
-              onSelectChannel(val);
-            }}
-            className="w-full min-w-0 bg-neutral-900 border border-neutral-800 text-neutral-100 text-xs font-semibold rounded-lg px-2 sm:px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-red-500 hover:border-neutral-700 cursor-pointer truncate"
-          >
-            {effectiveChannels.length === 0 ? (
-              <option value="" className="bg-neutral-900 text-neutral-400">
-                Belum ada channel terhubung
-              </option>
+        {/* Channel Selector - Sembunyikan panel dropdown saat channels.length === 0 */}
+        {effectiveChannels.length > 0 && activeChannel && (
+          <div className="flex items-center space-x-1.5 sm:space-x-2 min-w-0 flex-1 max-w-[200px] xs:max-w-[240px] sm:max-w-[320px] md:max-w-md">
+            {activeChannel.thumbnailUrl ? (
+              <img
+                src={activeChannel.thumbnailUrl}
+                alt={activeChannel.title}
+                className="w-7 h-7 rounded-lg object-cover border border-neutral-700/80 shadow shrink-0"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
             ) : (
-              effectiveChannels.map((chan) => (
+              <div className="w-7 h-7 rounded-lg bg-neutral-900 border border-neutral-800 flex items-center justify-center shrink-0 text-neutral-400">
+                <Tv className="w-4 h-4 text-neutral-400" />
+              </div>
+            )}
+            <span className="hidden sm:inline-block text-xs font-semibold text-neutral-400 uppercase tracking-wider shrink-0">
+              Channel:
+            </span>
+            <select
+              value={effectiveSelectedId}
+              onChange={(e) => {
+                const val = e.target.value;
+                localStorage.setItem('amg_active_channel_id', val);
+                localStorage.setItem('amg_active_channel', val);
+                onSelectChannel(val);
+              }}
+              className="w-full min-w-0 bg-neutral-900 border border-neutral-800 text-neutral-100 text-xs font-semibold rounded-lg px-2 sm:px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-red-500 hover:border-neutral-700 cursor-pointer truncate"
+            >
+              {effectiveChannels.map((chan) => (
                 <option key={chan.id} value={chan.id} className="bg-neutral-900 text-white">
                   {chan.title} ({chan.status})
                 </option>
-              ))
-            )}
-          </select>
-        </div>
+              ))}
+            </select>
+          </div>
+        )}
 
         {activeChannel && (
           <div className="hidden md:flex items-center space-x-2 pl-2 border-l border-neutral-800 text-[11px] shrink-0">

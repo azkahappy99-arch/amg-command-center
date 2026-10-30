@@ -90,22 +90,98 @@ function getStoredChannels(): Channel[] {
     const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
     const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
 
-    const storedChannelsRaw = localStorage.getItem('amg_channels');
-    if (storedChannelsRaw) {
-      const parsed = JSON.parse(storedChannelsRaw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const clean = parsed
-          .filter(
-            (c: Channel) =>
-              isRealChannel(c) &&
-              !isUnlinked(c.id) &&
-              !isUnlinked(c.youtubeChannelId) &&
-              !isUnlinked(`chan-${c.youtubeChannelId}`)
-          )
-          .map(sanitizeChannel);
-        return clean;
+    let clean: Channel[] = [];
+    const persistentRaw = localStorage.getItem('amg_persistent_channels');
+    if (persistentRaw) {
+      try {
+        const parsed = JSON.parse(persistentRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          clean = parsed
+            .filter(
+              (c: Channel) =>
+                isRealChannel(c) &&
+                !isUnlinked(c.id) &&
+                !isUnlinked(c.youtubeChannelId) &&
+                !isUnlinked(`chan-${c.youtubeChannelId}`)
+            )
+            .map(sanitizeChannel);
+        }
+      } catch {}
+    }
+
+    if (clean.length === 0) {
+      const storedChannelsRaw = localStorage.getItem('amg_channels');
+      if (storedChannelsRaw) {
+        const parsed = JSON.parse(storedChannelsRaw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          clean = parsed
+            .filter(
+              (c: Channel) =>
+                isRealChannel(c) &&
+                !isUnlinked(c.id) &&
+                !isUnlinked(c.youtubeChannelId) &&
+                !isUnlinked(`chan-${c.youtubeChannelId}`)
+            )
+            .map(sanitizeChannel);
+        }
       }
     }
+
+    const persistedRaw = localStorage.getItem('amg_persistent_channels_list');
+    if (persistedRaw) {
+      try {
+        const persisted = JSON.parse(persistedRaw);
+        if (Array.isArray(persisted)) {
+          for (const p of persisted) {
+            if (p && p.id && !isUnlinked(p.id) && !isUnlinked(`chan-${p.id}`)) {
+              if (!clean.some((c) => c.youtubeChannelId === p.id || c.id === p.id || c.id === `chan-${p.id}`)) {
+                clean.push(sanitizeChannel({
+                  id: `chan-${p.id}`,
+                  youtubeChannelId: p.id,
+                  title: p.title || 'Channel YouTube Terhubung',
+                  customUrl: p.customUrl || `@${p.id}`,
+                  thumbnailUrl: p.thumbnailUrl || '',
+                  status: 'CONNECTED',
+                  monetizationStatus: 'NOT_MONETIZED',
+                  watchHours: 0,
+                  revenue: { adSenseReguler: 0, liveStream: 0, ytShopping: 0, channelMemberships: 0, totalChannelRevenue: 0 },
+                  nicheCategory: 'General',
+                  nicheBadge: 'cyan',
+                  publishFrequency: '1/day',
+                  publishTime: '16:00',
+                  timezone: 'Asia/Jakarta',
+                  useProfileSchedule: false,
+                  scheduleConfig: {
+                    mode: 'DAILY',
+                    videosPerDay: 1,
+                    times: ['16:00'],
+                    timezone: 'Asia/Jakarta',
+                    startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+                  },
+                  eligibilityWindowDays: 7,
+                  eligibleTitlePatterns: [],
+                  autoEnroll: false,
+                  subscriberCount: p.subscriberCount || 0,
+                  videoCount: p.videoCount || 0,
+                  unmanagedVideoCount: 0,
+                  hasOAuthConfigured: true,
+                  isSeeded: false,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                  connectedAt: new Date().toISOString(),
+                  lastSyncAt: new Date().toISOString(),
+                  scheduleBufferDays: 7,
+                  scheduleStockCount: 5,
+                  scheduleAlertStatus: 'SAFE',
+                }));
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return clean;
   } catch (e) {
     console.warn('getStoredChannels error:', e);
   }
@@ -159,8 +235,31 @@ export default function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const isAutoFetchingRef = useRef(false);
 
-  // Core Data States - Initialized offline-first directly from localStorage
-  const [channels, setChannels] = useState<Channel[]>(() => getStoredChannels());
+  // Core Data States - Initialized offline-first directly from amg_persistent_channels
+  const [channels, setChannels] = useState<Channel[]>(() => {
+    try {
+      const saved = localStorage.getItem('amg_persistent_channels');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
+          const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+          const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
+          const valid = parsed
+            .filter(
+              (c: Channel) =>
+                isRealChannel(c) &&
+                !isUnlinked(c.id) &&
+                !isUnlinked(c.youtubeChannelId) &&
+                !isUnlinked(`chan-${c.youtubeChannelId}`)
+            )
+            .map(sanitizeChannel);
+          if (valid.length > 0) return valid;
+        }
+      }
+    } catch {}
+    return getStoredChannels();
+  });
   const [profiles, setProfiles] = useState<ContentProfile[]>([]);
   const [titles, setTitles] = useState<MasterTitle[]>([]);
   const [thumbnails, setThumbnails] = useState<MasterThumbnail[]>([]);
@@ -220,6 +319,16 @@ export default function App() {
           }
         } catch {}
       }
+
+      // Otomatis sinkronisasi video dari YouTube API untuk channel yang dipilih
+      const token = localStorage.getItem('amg_youtube_access_token');
+      if (token) {
+        api.syncChannel(chanId).then(() => {
+          loadAllData(chanId);
+        }).catch((err) => {
+          console.warn('[handleSelectChannel] Auto-sync notice:', err);
+        });
+      }
     }
   };
 
@@ -259,6 +368,7 @@ export default function App() {
 
         if (cleanChannels.length > 0) {
           setChannels(cleanChannels);
+          localStorage.setItem('amg_persistent_channels', JSON.stringify(cleanChannels));
           localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
           if (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId)) {
             const nextActive = cleanChannels[0].id;
@@ -461,6 +571,42 @@ export default function App() {
   };
 
   useEffect(() => {
+    // One-Time Storage Wipe: Cek jika data di localStorage mengandung nama mock ('Production', 'Server', 'DORA', dsb)
+    try {
+      const keys = ['amg_persistent_channels', 'amg_channels', 'amg_persistent_channels_list'];
+      let shouldWipe = false;
+      for (const k of keys) {
+        const val = localStorage.getItem(k);
+        if (val && (
+          val.includes('Production') ||
+          val.includes('Server') ||
+          val.includes('DORA') ||
+          val.includes('AyamYahyaProd') ||
+          val.includes('StudioAmbienceProd') ||
+          val.includes('UnitTest') ||
+          val.includes('UC_TEST_ISOLATION_') ||
+          val.includes('Valid Relaxing Ambience')
+        )) {
+          shouldWipe = true;
+          break;
+        }
+      }
+      if (shouldWipe) {
+        localStorage.removeItem('amg_persistent_channels');
+        localStorage.removeItem('amg_channels');
+        localStorage.removeItem('amg_persistent_channels_list');
+        localStorage.removeItem('amg_active_channel_id');
+        localStorage.removeItem('amg_active_channel');
+        localStorage.removeItem('amg_permanent_channel_ids');
+        localStorage.removeItem('amg_videos');
+        setChannels([]);
+        setSelectedChannelId('');
+        setVideos([]);
+      }
+    } catch (e) {
+      console.warn('Storage wipe check error:', e);
+    }
+
     // Immediate direct localStorage inspection upon mount (100% static, zero wait)
     try {
       const storedConnectedRaw = localStorage.getItem('amg_youtube_connected_channel');
@@ -589,16 +735,81 @@ export default function App() {
     setIsRefreshing(true);
     try {
       const result = await authorizeAndFetchYouTubeChannel(true);
-      const res = await api.gisSyncChannel({
-        channelId,
-        accessToken: result.accessToken,
-        channelData: result.channel,
-      });
-      if (res && res.channel?.id) {
-        setSelectedChannelId(res.channel.id);
+      const channelsToSync =
+        result.allChannels && result.allChannels.length > 0 ? result.allChannels : [result.channel];
+
+      for (const chan of channelsToSync) {
+        await api.gisSyncChannel({
+          channelId: undefined, // Never pass existing channel ID to avoid replacing other channels!
+          accessToken: result.accessToken,
+          channelData: chan,
+        });
+        // Otomatis muat seluruh videonya via playlistItems.list YouTube Data API
+        await api.syncChannel(chan.id).catch(() => {});
       }
+
+      setChannels((prev) => {
+        let updated = [...prev];
+        for (const chan of channelsToSync) {
+          const chanId = `chan-${chan.id}`;
+          if (!updated.some((c) => c.id === chanId || c.youtubeChannelId === chan.id || c.id === chan.id)) {
+            const newChan = sanitizeChannel({
+              id: chanId,
+              youtubeChannelId: chan.id,
+              title: chan.title || 'Channel YouTube Terhubung',
+              customUrl: chan.customUrl || `@${chan.id}`,
+              thumbnailUrl: chan.thumbnailUrl || '',
+              status: 'CONNECTED',
+              monetizationStatus: 'NOT_MONETIZED',
+              watchHours: 0,
+              revenue: { adSenseReguler: 0, liveStream: 0, ytShopping: 0, channelMemberships: 0, totalChannelRevenue: 0 },
+              nicheCategory: 'General',
+              nicheBadge: 'cyan',
+              publishFrequency: '1/day',
+              publishTime: '16:00',
+              timezone: 'Asia/Jakarta',
+              useProfileSchedule: false,
+              scheduleConfig: {
+                mode: 'DAILY',
+                videosPerDay: 1,
+                times: ['16:00'],
+                timezone: 'Asia/Jakarta',
+                startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+              },
+              eligibilityWindowDays: 7,
+              eligibleTitlePatterns: [],
+              autoEnroll: false,
+              subscriberCount: chan.subscriberCount || 0,
+              videoCount: chan.videoCount || 0,
+              unmanagedVideoCount: 0,
+              hasOAuthConfigured: true,
+              isSeeded: false,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              connectedAt: new Date().toISOString(),
+              lastSyncAt: new Date().toISOString(),
+              scheduleBufferDays: 7,
+              scheduleStockCount: 5,
+              scheduleAlertStatus: 'SAFE',
+            });
+            updated.push(newChan);
+          }
+        }
+        localStorage.setItem('amg_persistent_channels', JSON.stringify(updated));
+        localStorage.setItem('amg_channels', JSON.stringify(updated));
+        return updated;
+      });
+
+      const activeChan = channelsToSync[0];
+      if (activeChan) {
+        const nextId = `chan-${activeChan.id}`;
+        setSelectedChannelId(nextId);
+        localStorage.setItem('amg_active_channel_id', nextId);
+        localStorage.setItem('amg_active_channel', nextId);
+      }
+
       setToastMessage({
-        text: `Akun YouTube "${result.channel.title}" berhasil dihubungkan dan tersimpan permanen!`,
+        text: `${channelsToSync.length} Akun YouTube (${channelsToSync.map((c) => c.title).join(', ')}) berhasil dihubungkan dan tersimpan permanen!`,
         type: 'success',
       });
       await loadAllData();
@@ -700,6 +911,8 @@ export default function App() {
               channels={channels}
               profiles={profiles}
               videos={videos}
+              selectedChannelId={selectedChannelId}
+              onSelectChannel={handleSelectChannel}
               onChannelUpdated={loadAllData}
               onNavigateToAutomation={(chanId) => {
                 handleSelectChannel(chanId);
@@ -919,6 +1132,7 @@ export default function App() {
           setIsOwnerProvisioned(true);
           if (user.role === 'USER') {
             localStorage.removeItem('amg_channels');
+            localStorage.removeItem('amg_persistent_channels');
             localStorage.removeItem('amg_videos');
             localStorage.removeItem('amg_profiles');
             localStorage.removeItem('amg_master_titles');
@@ -931,6 +1145,7 @@ export default function App() {
         onLogout={() => {
           localStorage.removeItem('amg_auth_token');
           localStorage.removeItem('amg_channels');
+          localStorage.removeItem('amg_persistent_channels');
           localStorage.removeItem('amg_videos');
           localStorage.removeItem('amg_profiles');
           localStorage.removeItem('amg_master_titles');

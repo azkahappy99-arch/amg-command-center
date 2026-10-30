@@ -293,7 +293,7 @@ async function runTests() {
 
     let progressCallsCount = 0;
     let completedVideoCalled = false;
-    let seenProcessingOne = false;
+    let seenProcessingOne: boolean = false;
 
     const resultBatch = await workerClient.executeBatchSerial(
       testChannel,
@@ -326,7 +326,7 @@ async function runTests() {
     );
 
     assert(resultBatch.status === 'completed', 'Batch selesai dengan status "completed"');
-    assert(seenProcessingOne === true, 'UI Progress menampilkan "Memproses: 1"');
+    assert(Boolean(seenProcessingOne), 'UI Progress menampilkan "Memproses: 1"');
     assert(resultBatch.completedCount === 1, 'Counter "Selesai" bertambah menjadi 1');
     assert(progressCallsCount >= 2, 'Progress callback terpanggil secara real-time');
     assert(completedVideoCalled, 'onVideoCompleted callback dieksekusi');

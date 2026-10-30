@@ -258,7 +258,7 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-500/80" />
               <span>
-                Antrean pekerja siaga. Pemrosesan kloter per 50 video & auto-chaining siap dieksekusi.
+                Antrean pekerja siaga. Pemrosesan kloter per 70 video & auto-chaining siap dieksekusi.
               </span>
             </div>
             <span className="text-[11px] font-mono text-neutral-500">0 tugas aktif</span>

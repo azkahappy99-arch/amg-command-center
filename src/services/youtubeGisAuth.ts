@@ -5,6 +5,7 @@
  */
 
 import { ManagedVideo, ManagementScope, VideoManagementStatus } from '../types/index.ts';
+import { isRawStudioTitle, isAmgRegulerEligible } from './candidateDetectionService.ts';
 
 export const GIS_CONFIG = {
   CLIENT_ID: '140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com',
@@ -682,13 +683,13 @@ export async function fetchChannelVideosFromYouTube(
       let managementStatus: VideoManagementStatus = existing ? existing.managementStatus : 'DISCOVERED';
       let exclusionReason: string | undefined = existing?.exclusionReason;
 
-      // STRICT CANDIDATE FILTER:
-      // 1. Privacy: 'private' (case-insensitive)
-      // 2. Judul asli YouTube: diawali 'Salinan dari A' atau 'Copy of A' (flexible regex)
-      // 3. Belum memiliki publishAt (belum terjadwal di YouTube)
-      // 4. Belum pernah diproses oleh sistem AMG
+      // AMG REGULER (LAYAK) CANDIDATE FILTER:
+      // a. status.privacyStatus === 'private'
+      // b. status.publishAt kosong/falsy (belum dijadwalkan di masa depan)
+      // c. Judul masih merupakan judul bawaan/mentah studio (case-insensitive mengandung 'Salinan dari', 'Salinan', 'Copy of', 'Copy', atau string upload render mentah).
+      // DILARANG memasukkan video private mentah ke kategori 'Dikecualikan (Terlindung)'!
       const rawTitle = v.snippet?.title || '';
-      const isPlaceholderTitle = /salinan\s+dari\s+a/i.test(rawTitle) || /copy\s+of\s+a/i.test(rawTitle);
+      const isPlaceholderTitle = isRawStudioTitle(rawTitle);
       const isAlreadyCompleted = Boolean(
         existing?.isManaged ||
         existing?.managementStatus === 'ALREADY_MANAGED' ||
@@ -704,6 +705,13 @@ export async function fetchChannelVideosFromYouTube(
           ? existing.managementStatus
           : 'DISCOVERED';
         exclusionReason = undefined;
+      } else if (isPrivate && !isScheduled && !isAlreadyCompleted) {
+        // Video private belum terjadwal: JANGAN masukkan ke EXCLUDED (Terlindung)
+        managementScope = 'UNCLASSIFIED';
+        isAmgEligible = false;
+        isManaged = false;
+        managementStatus = 'UNCLASSIFIED';
+        exclusionReason = undefined;
       } else {
         managementScope = 'EXCLUDED';
         isAmgEligible = false;
@@ -713,10 +721,7 @@ export async function fetchChannelVideosFromYouTube(
           exclusionReason = `Status Privasi: ${(privacy || 'PUBLIC').toUpperCase()}. Video public dan unlisted dikecualikan.`;
         } else if (isScheduled) {
           managementStatus = 'SCHEDULED';
-          exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dikecualikan dari kandidat baru.`;
-        } else if (!isPlaceholderTitle) {
-          managementStatus = 'EXCLUDED';
-          exclusionReason = `Judul video ("${rawTitle}") tidak diawali "Salinan dari A" atau "Copy of A".`;
+          exclusionReason = `Video sudah memiliki jadwal publikasi YouTube (${publishAt}). Dipertahankan pada timeline yang telah diproses.`;
         } else if (isAlreadyCompleted) {
           managementStatus = 'COMPLETED';
           exclusionReason = 'Video sudah pernah diproses oleh sistem AMG.';
