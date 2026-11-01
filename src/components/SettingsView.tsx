@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Server,
   Zap,
+  Calendar,
 } from 'lucide-react';
 import { SystemSettings, ClientIdSlot } from '../types/index.ts';
 import { api } from '../services/api.ts';
@@ -133,6 +134,19 @@ export const SettingsView: React.FC = () => {
               <Clock className="w-4 h-4 text-red-500" />
               Parameter Standar Penjadwalan & Rotasi
             </h3>
+
+            {/* Global Weekly Schedule Preset Banner */}
+            <div className="p-3.5 rounded-xl bg-neutral-950/90 border border-neutral-800 space-y-1.5 shadow-sm">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="text-xs font-bold text-neutral-200">
+                  Pola Jadwal Mingguan Otomatis: Min (15.00) | Sen-Kam (16.00) | Jum (14.30) | Sab (15.30) WIB
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-400 leading-relaxed pl-6">
+                Preset ini otomatis berlaku untuk semua channel, kecuali jika channel tertentu diatur dengan jam kustom mandiri di menu Penyelarasan Jadwal.
+              </p>
+            </div>
 
             <div>
               <label className="block text-[11px] font-semibold text-neutral-300 mb-1">

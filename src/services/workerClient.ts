@@ -205,9 +205,10 @@ class WorkerClientService {
   public generateSequentialSchedules(
     count: number,
     anchorIsoDate: string | null,
-    daySchedule?: DayScheduleConfig
+    daySchedule?: DayScheduleConfig,
+    channel?: Channel | null
   ): string[] {
-    return generateSequentialSchedulesWithDayConfig(count, anchorIsoDate, daySchedule);
+    return generateSequentialSchedulesWithDayConfig(count, anchorIsoDate, daySchedule, channel);
   }
 
   /**
@@ -394,7 +395,7 @@ class WorkerClientService {
 
     const channelDaySchedule = getChannelDaySchedule(channel);
     const anchorDate = this.getChannelVerifiedAnchor(pureChannelId, localVideos);
-    const calculatedSchedules = this.generateSequentialSchedules(totalCount, anchorDate, channelDaySchedule);
+    const calculatedSchedules = this.generateSequentialSchedules(totalCount, anchorDate, channelDaySchedule, channel);
 
     // Siapkan daftar judul & thumbnail yang siap dipakai
     const titleStrings: string[] = masterTitles

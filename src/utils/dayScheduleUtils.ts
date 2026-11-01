@@ -14,15 +14,53 @@ export const DAY_NAMES_ID: Record<keyof DayScheduleConfig, string> = {
   minggu: 'Minggu',
 };
 
+export const GLOBAL_WEEKLY_SCHEDULE: Record<number, string> = {
+  0: '15:00', // Minggu (Day 0)
+  1: '16:00', // Senin  (Day 1)
+  2: '16:00', // Selasa (Day 2)
+  3: '16:00', // Rabu   (Day 3)
+  4: '16:00', // Kamis  (Day 4)
+  5: '14:30', // Jumat  (Day 5)
+  6: '15:30', // Sabtu  (Day 6)
+};
+
 export const DEFAULT_DAY_SCHEDULE: DayScheduleConfig = {
+  minggu: '15:00',
   senin: '16:00',
   selasa: '16:00',
   rabu: '16:00',
   kamis: '16:00',
-  jumat: '16:00',
-  sabtu: '16:00',
-  minggu: '16:00',
+  jumat: '14:30',
+  sabtu: '15:30',
 };
+
+/**
+ * Logika Penentuan Jam PublishAt (Hierarki Fallback Cerdas):
+ * 1. Cek prioritas konfigurasi jam: channelCustomTime (customWeeklySchedule?.[targetDay] atau dayScheduleConfig)
+ * 2. Fallback cerdas: GLOBAL_WEEKLY_SCHEDULE[targetDay]
+ */
+export function resolveTargetDayPublishTime(
+  targetDay: number,
+  channel?: Channel | null,
+  dayConfig?: DayScheduleConfig | null
+): string {
+  // 1. Cek customWeeklySchedule per day index (0-6)
+  if (channel?.customWeeklySchedule && channel.customWeeklySchedule[targetDay]) {
+    return channel.customWeeklySchedule[targetDay];
+  }
+
+  // 2. Cek dayScheduleConfig (dari parameter atau channel)
+  const dayKey = DAY_KEYS[targetDay];
+  if (dayConfig && dayConfig[dayKey]) {
+    return dayConfig[dayKey];
+  }
+  if (channel?.dayScheduleConfig && channel.dayScheduleConfig[dayKey]) {
+    return channel.dayScheduleConfig[dayKey];
+  }
+
+  // 3. Fallback cerdas ke Preset Jadwal Global
+  return GLOBAL_WEEKLY_SCHEDULE[targetDay] || '16:00';
+}
 
 /**
  * Mengambil konfigurasi jadwal harian untuk channel tertentu
@@ -120,6 +158,11 @@ export function saveChannelDaySchedule(
               } else {
                 channels[idx].publishTime = 'Kustom Harian';
               }
+              const customWeekly: Record<number, string> = {};
+              DAY_KEYS.forEach((key, idxDay) => {
+                customWeekly[idxDay] = config[key];
+              });
+              channels[idx].customWeeklySchedule = customWeekly;
               localStorage.setItem(key, JSON.stringify(channels));
             }
           }
@@ -170,15 +213,16 @@ export function createWibPublishAt(
  * Menghasilkan deretan slot jadwal berurutan bertahap +1 hari:
  * - Titik awal: (Titik Acuan Terjauh + 1 Hari) atau Besok jika belum ada jadwal.
  * - Hari target: Dapatkan hari dari tanggal target jadwal (0 = Minggu, 1 = Senin, dst.).
- * - Jam tayang: Menggunakan konfigurasi jadwal hari tersebut (senin..minggu).
- * - ISO string: Dihasilkan sesuai zona waktu Asia/Jakarta (WIB).
+ * - Jam tayang: Hierarki cerdas (Kustom per channel -> Preset Global).
+ * - ISO string: Dihasilkan sesuai zona waktu Asia/Jakarta (WIB) berakhiran 'Z' UTC.
  */
 export function generateSequentialSchedulesWithDayConfig(
   count: number,
   anchorIsoDate: string | null,
-  daySchedule?: DayScheduleConfig
+  daySchedule?: DayScheduleConfig,
+  channel?: Channel | null
 ): string[] {
-  const schedule = daySchedule || DEFAULT_DAY_SCHEDULE;
+  const schedule = daySchedule || (channel ? getChannelDaySchedule(channel) : DEFAULT_DAY_SCHEDULE);
   const results: string[] = [];
 
   let startYear: number;
@@ -214,9 +258,8 @@ export function generateSequentialSchedulesWithDayConfig(
   for (let i = 0; i < count; i++) {
     // Kalender hari ke-i
     const currentCalendarDate = new Date(Date.UTC(startYear, startMonth, startDay + i));
-    const dayOfWeek = currentCalendarDate.getUTCDay(); // 0 = Minggu, 1 = Senin, ..., 6 = Sabtu
-    const dayKey = DAY_KEYS[dayOfWeek]; // 'minggu', 'senin', dst.
-    const timeForDay = schedule[dayKey] || '16:00';
+    const targetDay = currentCalendarDate.getUTCDay(); // 0 = Minggu, 1 = Senin, ..., 6 = Sabtu
+    const timeForDay = resolveTargetDayPublishTime(targetDay, channel, schedule);
 
     const y = currentCalendarDate.getUTCFullYear();
     const m = currentCalendarDate.getUTCMonth();

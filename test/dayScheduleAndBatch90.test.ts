@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   DayScheduleConfig,
   DEFAULT_DAY_SCHEDULE,
+  GLOBAL_WEEKLY_SCHEDULE,
+  resolveTargetDayPublishTime,
   getChannelDaySchedule,
   saveChannelDaySchedule,
   generateSequentialSchedulesWithDayConfig,
@@ -20,14 +22,66 @@ import {
   getClientIdPool,
   saveClientIdPool,
 } from '../src/utils/clientIdPoolUtils.ts';
-import { ClientIdSlot } from '../src/types/index.ts';
+import { ClientIdSlot, Channel } from '../src/types/index.ts';
 
 console.log('================================================================');
-console.log('AMG ARCHITECTURE SUITE: KLOTER 33, ATOMIC EXECUTION, & CLIENT ID POOL');
+console.log('AMG ARCHITECTURE SUITE: GLOBAL PRESET, ATOMIC, & CLIENT ID POOL');
 console.log('================================================================');
 
 function runTestSuite() {
-  console.log('\n--- TEST GROUP 1: DayScheduleConfig & Flexible Daily Hours ---');
+  console.log('\n--- TEST GROUP 1: GLOBAL_WEEKLY_SCHEDULE & Fallback Hierarchy ---');
+  // 1. Verify Global Weekly Schedule Preset values
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[0], '15:00', 'Minggu (Day 0) must be 15:00');
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[1], '16:00', 'Senin (Day 1) must be 16:00');
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[2], '16:00', 'Selasa (Day 2) must be 16:00');
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[3], '16:00', 'Rabu (Day 3) must be 16:00');
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[4], '16:00', 'Kamis (Day 4) must be 16:00');
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[5], '14:30', 'Jumat (Day 5) must be 14:30');
+  assert.equal(GLOBAL_WEEKLY_SCHEDULE[6], '15:30', 'Sabtu (Day 6) must be 15:30');
+  console.log('✅ PASSED: GLOBAL_WEEKLY_SCHEDULE contains exact audience analytics times');
+
+  // 2. Test Fallback Hierarchy:
+  // Channel A: Has NO custom times -> falls back 100% to GLOBAL_WEEKLY_SCHEDULE
+  const defaultChannel: Channel = {
+    id: 'chan-default-1',
+    youtubeChannelId: 'UC_DEFAULT_1',
+    title: 'Channel Standar',
+    status: 'CONNECTED',
+    publishFrequency: '1/day',
+    publishTime: '16:00',
+    timezone: 'Asia/Jakarta',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  assert.equal(resolveTargetDayPublishTime(0, defaultChannel), '15:00'); // Minggu
+  assert.equal(resolveTargetDayPublishTime(1, defaultChannel), '16:00'); // Senin
+  assert.equal(resolveTargetDayPublishTime(5, defaultChannel), '14:30'); // Jumat
+  assert.equal(resolveTargetDayPublishTime(6, defaultChannel), '15:30'); // Sabtu
+  console.log('✅ PASSED: Default channel without overrides inherits GLOBAL_WEEKLY_SCHEDULE accurately');
+
+  // Channel B: Has custom override for Friday (19:00) and Saturday (20:00)
+  const overriddenChannel: Channel = {
+    ...defaultChannel,
+    id: 'chan-override-1',
+    customWeeklySchedule: {
+      5: '19:00', // Override Friday
+      6: '20:00', // Override Saturday
+    },
+  };
+  assert.equal(resolveTargetDayPublishTime(0, overriddenChannel), '15:00'); // Falls back to Global (Minggu)
+  assert.equal(resolveTargetDayPublishTime(1, overriddenChannel), '16:00'); // Falls back to Global (Senin)
+  assert.equal(resolveTargetDayPublishTime(5, overriddenChannel), '19:00'); // Overridden (Jumat)
+  assert.equal(resolveTargetDayPublishTime(6, overriddenChannel), '20:00'); // Overridden (Sabtu)
+  console.log('✅ PASSED: Channel with custom weekly schedule prioritizes overrides over global preset');
+
+  // 3. Test ISO 8601 UTC output ending with 'Z'
+  const isoUtc = createWibPublishAt(2026, 10, 1, '15:00'); // Nov 1 2026 15:00 WIB (+07:00) -> 08:00 UTC
+  assert.ok(isoUtc.endsWith('Z'), 'ISO string must end with Z');
+  assert.equal(isoUtc, '2026-11-01T08:00:00.000Z');
+  console.log(`✅ PASSED: Valid ISO 8601 UTC string generated: ${isoUtc}`);
+
+  console.log('\n--- TEST GROUP 2: DayScheduleConfig & Flexible Daily Hours ---');
 
   // Custom weekly schedule
   const customConfig: DayScheduleConfig = {

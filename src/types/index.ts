@@ -130,6 +130,7 @@ export interface Channel {
   timezone: string; // e.g. 'Asia/Jakarta'
   scheduleConfig?: ScheduleConfig;
   dayScheduleConfig?: DayScheduleConfig;
+  customWeeklySchedule?: Record<number, string>;
   scheduleTimeMode?: ScheduleTimeMode;
   useProfileSchedule?: boolean; // If true, inherits from assigned ContentProfile scheduleConfig
   eligibilityWindowDays?: number; // Phase 2: default 7 days
