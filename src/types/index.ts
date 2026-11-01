@@ -289,6 +289,8 @@ export interface AutomationBatch {
   failedCount: number;
   lastHeartbeatAt?: string;
   isSeeded?: boolean;
+  failureReason?: string;
+  isRolledBack?: boolean;
 }
 
 export interface AutomationJob {
@@ -356,6 +358,14 @@ export interface SystemSettings {
   googleClientId?: string;
   googleClientSecretConfigured?: boolean;
   youtubeApiKeyConfigured?: boolean;
+}
+
+export interface ClientIdSlot {
+  id: string; // "Project-Slot-1", "Project-Slot-2", dst.
+  clientId: string;
+  usageCount: number; // Estimasi pemakaian unit harian
+  isCooldown: boolean;
+  assignedChannelId?: string | null;
 }
 
 export interface ScheduleCalculationItem {

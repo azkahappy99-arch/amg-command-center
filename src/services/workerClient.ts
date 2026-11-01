@@ -450,7 +450,80 @@ class WorkerClientService {
       });
 
       try {
-        // STEP A: UPDATE JUDUL & PENJADWALAN RESMI YOUTUBE
+        // ====================================================================
+        // TAHAP 1: ATOMIC EXECUTION - UPLOAD CUSTOM THUMBNAIL (thumbnails.set) FIRST
+        // ====================================================================
+        if (assignedThumb && assignedThumb.id) {
+          let thumbBlob: Blob | null = null;
+          try {
+            const rawThumbData = await getThumbnailDataById(assignedThumb.id);
+            if (rawThumbData) {
+              thumbBlob = rawThumbData.startsWith('data:')
+                ? dataUrlToBlob(rawThumbData)
+                : await fetch(rawThumbData).then((r) => r.blob());
+            }
+          } catch (thumbErr) {
+            console.warn(`[WorkerClient] Gagal memuat thumbnail dari IndexedDB:`, thumbErr);
+          }
+
+          if (thumbBlob) {
+            const thumbRes = await this.executeYouTubeThumbnailSet(video.id, thumbBlob, token);
+            if (!thumbRes.success) {
+              console.error(`[WorkerClient] [Atomic Abort] Gagal upload thumbnail video ${video.id}:`, thumbRes.error);
+
+              // STRICT ATOMIC ABORT: DILARANG menjalankan videos.update atau menjadwalkan/mengubah judul
+              const limitMsg =
+                'Batas Upload Thumbnail YouTube Tercapai (Limit 24 Jam). Otomasi dihentikan agar video tidak terjadwal tanpa thumbnail. Silakan lanjutkan kembali besok setelah kuota reset.';
+
+              // Simpan checkpoint agar saat dilanjutkan besok, worker memproses video mentah tersebut secara utuh
+              try {
+                localStorage.setItem(
+                  'amg_thumbnail_limit_paused',
+                  JSON.stringify({
+                    videoId: video.id,
+                    channelId: pureChannelId,
+                    channelTitle: channel.title,
+                    videoTitle: assignedTitle,
+                    batchId,
+                    stoppedAt: new Date().toISOString(),
+                    reason: thumbRes.error || 'UPLOAD_LIMIT_EXCEEDED_24H',
+                  })
+                );
+              } catch {}
+
+              // Update progress & hentikan kloter seketika (Stop & Pause)
+              currentProgress.status = 'PAUSED';
+              currentProgress.processingCount = 0;
+              currentProgress.message = limitMsg;
+              options.onProgress?.(currentProgress);
+
+              this.syncQueueStateToStorage({
+                total: totalCount,
+                processing: 0,
+                completed: completedCount,
+                remainingInQueue: totalCount - completedCount,
+                currentTitle: assignedTitle,
+                batchId,
+                status: 'Dihentikan Sementara (Menunggu Reset Thumbnail 24 Jam)',
+              });
+
+              this.shouldStop = true;
+              this.isRunning = false;
+              batchRecord.status = 'failed';
+              batchRecord.failureReason = limitMsg;
+
+              // Hentikan pemrosesan kloter saat itu juga
+              break;
+            } else {
+              console.log(`[WorkerClient] Thumbnail berhasil diunggah untuk video ${video.id}`);
+            }
+          }
+        }
+
+        // ====================================================================
+        // TAHAP 2 & 3: TERAPKAN JUDUL DETERMINISTIK & KUNCI TANGGAL/JAM PUBLISHAT
+        // Hanya dieksekusi jika Tahap 1 Thumbnail 100% SUKSES!
+        // ====================================================================
         const titleRes = await this.executeYouTubeTitleAndSchedule(
           video.id,
           assignedTitle,
@@ -459,34 +532,36 @@ class WorkerClientService {
         );
 
         if (!titleRes.success) {
+          const errStr = (titleRes.error || '').toLowerCase();
+          if (errStr.includes('quota') || errStr.includes('403') || errStr.includes('quotaexceeded')) {
+            // Auto-Rotation Project Slot Client ID
+            try {
+              const { getActiveSlotForChannel, markSlotCooldown } = await import('../utils/clientIdPoolUtils.ts');
+              const currentSlot = getActiveSlotForChannel(pureChannelId);
+              if (currentSlot) {
+                const { freshSlot, previousSlot } = markSlotCooldown(currentSlot.clientId);
+                const rotMsg = `Kuota Project Slot ${previousSlot?.id || 'lama'} mencapai batas. Beralih otomatis menggunakan Slot ${freshSlot?.id || 'berikutnya'}.`;
+                console.warn(`[WorkerClient] ${rotMsg}`);
+                currentProgress.message = rotMsg;
+                options.onProgress?.(currentProgress);
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('amg_quota_slot_rotated', { detail: { rotMsg, freshSlot } }));
+                }
+              }
+            } catch (rotErr) {
+              console.warn('[WorkerClient] Error rotasi client ID pool:', rotErr);
+            }
+          }
+
           console.error(`[WorkerClient] Gagal mengubah judul/jadwal video ${video.id}:`, titleRes.error);
           failedCount++;
           batchRecord.failedCount = failedCount;
           continue;
         }
 
-        // STEP B: UPDATE THUMBNAIL RESMI DARI INDEXEDDB
-        if (assignedThumb && assignedThumb.id) {
-          try {
-            const rawThumbData = await getThumbnailDataById(assignedThumb.id);
-            if (rawThumbData) {
-              const thumbBlob = rawThumbData.startsWith('data:')
-                ? dataUrlToBlob(rawThumbData)
-                : await fetch(rawThumbData).then((r) => r.blob());
-
-              const thumbRes = await this.executeYouTubeThumbnailSet(video.id, thumbBlob, token);
-              if (thumbRes.success) {
-                console.log(`[WorkerClient] Thumbnail berhasil diunggah untuk video ${video.id}`);
-              } else {
-                console.warn(`[WorkerClient] Peringatan upload thumbnail video ${video.id}:`, thumbRes.error);
-              }
-            }
-          } catch (thumbErr) {
-            console.warn(`[WorkerClient] Gagal memuat thumbnail dari IndexedDB:`, thumbErr);
-          }
-        }
-
-        // STEP C: JIKA GOOGLE MENGEMBALIKAN 200 OK -> UPDATE STATE LOKAL SECARA INSTAN
+        // ====================================================================
+        // TAHAP SUKSES: JIKA GOOGLE MENGEMBALIKAN 200 OK -> UPDATE STATE LOKAL
+        // ====================================================================
         completedCount++;
         batchRecord.completedCount = completedCount;
         batchRecord.processedCount = completedCount;
@@ -526,7 +601,7 @@ class WorkerClientService {
           window.dispatchEvent(new CustomEvent('amg_videos_updated', { detail: { videoId: video.id } }));
         }
 
-        // STEP D: JEDA AMAN 2.5 DETIK (ANTI-THROTTLING) SEBELUM VIDEO BERIKUTNYA
+        // JEDA AMAN 2.5 DETIK (ANTI-THROTTLING) SEBELUM VIDEO BERIKUTNYA
         if (i < itemsToProcess.length - 1 && !this.shouldStop) {
           await new Promise((resolve) => setTimeout(resolve, 2500));
         }
@@ -631,6 +706,7 @@ class WorkerClientService {
     remainingInQueue: number;
     currentTitle: string;
     batchId: string;
+    status?: string;
   }) {
     try {
       localStorage.setItem('amg_phase3_client_queue', JSON.stringify({

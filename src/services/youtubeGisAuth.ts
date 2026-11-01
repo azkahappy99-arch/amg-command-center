@@ -156,16 +156,21 @@ export function clearStoredGisToken(): void {
   }
 }
 
+import { getAvailableClientIdSlot, getActiveSlotForChannel, assignChannelToSlot } from '../utils/clientIdPoolUtils.ts';
+
 /**
  * Prompts Google OAuth popup via GIS to request interactive access token
  */
-export async function requestGisAccessToken(promptConsent: boolean = false): Promise<string> {
+export async function requestGisAccessToken(promptConsent: boolean = false, targetChannelId?: string): Promise<string> {
   await ensureGsiScriptLoaded();
+
+  const activeSlot = targetChannelId ? getActiveSlotForChannel(targetChannelId) : getAvailableClientIdSlot();
+  const clientIdToUse = activeSlot?.clientId || GIS_CONFIG.CLIENT_ID;
 
   return new Promise<string>((resolve, reject) => {
     try {
       const tokenClient = window.google!.accounts.oauth2.initTokenClient({
-        client_id: GIS_CONFIG.CLIENT_ID,
+        client_id: clientIdToUse,
         scope: GIS_CONFIG.SCOPE,
         callback: (resp: any) => {
           if (resp.error) {
@@ -377,10 +382,17 @@ export function unmarkChannelAsUnlinked(channelId: string): void {
  * 2. Fetches ALL YouTube Channels belonging to the authenticated account
  * 3. Returns all channels for comprehensive sync
  */
-export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = false): Promise<GisAuthResult> {
-  const token = await requestGisAccessToken(promptConsent);
+export async function authorizeAndFetchYouTubeChannel(promptConsent: boolean = false, targetChannelId?: string): Promise<GisAuthResult> {
+  const activeSlot = targetChannelId ? getActiveSlotForChannel(targetChannelId) : getAvailableClientIdSlot();
+  const token = await requestGisAccessToken(promptConsent, targetChannelId);
   const allChannels = await fetchAllMyYouTubeChannels(token);
   const channel = allChannels[0];
+
+  if (activeSlot) {
+    for (const ch of allChannels) {
+      assignChannelToSlot(activeSlot.id, ch.id);
+    }
+  }
 
   for (const ch of allChannels) {
     try {

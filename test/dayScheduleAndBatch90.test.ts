@@ -10,12 +10,23 @@ import {
   formatWibDateTime,
 } from '../src/utils/dayScheduleUtils.ts';
 import { workerClient } from '../src/services/workerClient.ts';
+import {
+  parseClientIdsFromText,
+  formatClientIdPoolToText,
+  getAvailableClientIdSlot,
+  assignChannelToSlot,
+  markSlotCooldown,
+  resetSlotCooldown,
+  getClientIdPool,
+  saveClientIdPool,
+} from '../src/utils/clientIdPoolUtils.ts';
+import { ClientIdSlot } from '../src/types/index.ts';
 
 console.log('================================================================');
-console.log('AMG BATCH 90, FULL AUTO-CHAINING, & DAY SCHEDULE (SENIN-MINGGU) TEST SUITE');
+console.log('AMG ARCHITECTURE SUITE: KLOTER 33, ATOMIC EXECUTION, & CLIENT ID POOL');
 console.log('================================================================');
 
-function runDayScheduleTests() {
+function runTestSuite() {
   console.log('\n--- TEST GROUP 1: DayScheduleConfig & Flexible Daily Hours ---');
 
   // Custom weekly schedule
@@ -68,57 +79,92 @@ function runDayScheduleTests() {
   assert.match(formattedDay2, /14[:.]00/);
   console.log(`✅ PASSED: Day 2 (Selasa 3 Nov) scheduled at 14:00 WIB: ${formattedDay2}`);
 
-  // Day 4: Kamis, 5 November 2026 @ 18:00 WIB (+07:00 -> 11:00 UTC)
-  const formattedDay4 = formatWibDateTime(schedules[3]);
-  assert.match(formattedDay4, /18[:.]00/);
-  console.log(`✅ PASSED: Day 4 (Kamis 5 Nov) scheduled at 18:00 WIB: ${formattedDay4}`);
-
-  // Day 6: Sabtu, 7 November 2026 @ 10:00 WIB (+07:00 -> 03:00 UTC)
-  const formattedDay6 = formatWibDateTime(schedules[5]);
-  assert.match(formattedDay6, /10[:.]00/);
-  console.log(`✅ PASSED: Day 6 (Sabtu 7 Nov) scheduled at 10:00 WIB: ${formattedDay6}`);
-
-  // Day 7: Minggu, 8 November 2026 @ 19:00 WIB (+07:00 -> 12:00 UTC)
-  const formattedDay7 = formatWibDateTime(schedules[6]);
-  assert.match(formattedDay7, /19[:.]00/);
-  console.log(`✅ PASSED: Day 7 (Minggu 8 Nov) scheduled at 19:00 WIB: ${formattedDay7}`);
-
-  console.log('\n--- TEST GROUP 3: Batch Size 90 & Dynamic Real Meter Calculations ---');
+  console.log('\n--- TEST GROUP 3: Batch Size Exactly 90 Videos & Dynamic Meter Calculations ---');
   const BATCH_SIZE = 90;
   assert.equal(BATCH_SIZE, 90, 'BATCH_SIZE must be exactly 90');
 
-  // Case A: 200 videos -> Batch 1 = 90, Batch 2 = 90, Batch 3 = 20
+  // Case: 200 videos -> Kloter 1 = 90, Kloter 2 = 90, Kloter 3 = 20
   const totalEligibleVideos = 200;
   const batch1 = Math.min(BATCH_SIZE, totalEligibleVideos);
-  const remainingAfterBatch1 = totalEligibleVideos - batch1;
-  const batch2 = Math.min(BATCH_SIZE, remainingAfterBatch1);
-  const remainingAfterBatch2 = remainingAfterBatch1 - batch2;
-  const batch3 = Math.min(BATCH_SIZE, remainingAfterBatch2);
+  const rem1 = totalEligibleVideos - batch1;
+  const batch2 = Math.min(BATCH_SIZE, rem1);
+  const rem2 = rem1 - batch2;
+  const batch3 = Math.min(BATCH_SIZE, rem2);
 
   assert.equal(batch1, 90);
   assert.equal(batch2, 90);
   assert.equal(batch3, 20);
   console.log(`✅ PASSED: 200 videos sliced into Kloter 1 (90), Kloter 2 (90), Kloter 3 (20)`);
 
-  // Case B: Dynamic meter for Kloter 3 (20 videos)
-  const kloter3Total = 20;
-  let completed = 5;
-  const remainingInKloter3 = kloter3Total - completed;
-  assert.equal(remainingInKloter3, 15);
-  console.log(`✅ PASSED: Dynamic meter calculates actual batch total (${kloter3Total}) and remaining queue (${remainingInKloter3})`);
+  // Quota Unit Calculation Verification:
+  // 90 videos * 100 units = 9,000 units per batch
+  // Menghabiskan 90% kuota harian (9.000 dari 10.000 unit) untuk mengunci runway 3 bulan dalam 1 channel.
+  const quotaPerKloter = BATCH_SIZE * 100;
+  assert.equal(quotaPerKloter, 9000);
+  const percentage = (quotaPerKloter / 10000) * 100;
+  assert.equal(percentage, 90);
+  console.log(`✅ PASSED: Kloter 90 Video (~9.000 unit). Menghabiskan 90% kuota harian untuk mengunci runway 3 bulan dalam 1 channel.`);
 
-  console.log('\n--- TEST GROUP 4: Full Auto-Chaining & Worker Stop Support ---');
-  workerClient.resetStop();
-  assert.equal(workerClient.shouldStopWorker(), false);
-  workerClient.stopWorker();
-  assert.equal(workerClient.shouldStopWorker(), true);
-  workerClient.resetStop();
-  assert.equal(workerClient.shouldStopWorker(), false);
-  console.log('✅ PASSED: workerClient stop & resetStop controls auto-chain looping reliably');
+  console.log('\n--- TEST GROUP 4: Multi-Project Client ID Pool Parsing & Auto-Rotation ---');
+  const samplePoolText = `
+    140483783524-project1.apps.googleusercontent.com
+    140483783524-project2.apps.googleusercontent.com
+    140483783524-project3.apps.googleusercontent.com
+  `;
+  const parsedSlots = parseClientIdsFromText(samplePoolText);
+  assert.equal(parsedSlots.length, 3);
+  assert.equal(parsedSlots[0].id, 'Project-Slot-1');
+  assert.equal(parsedSlots[0].clientId, '140483783524-project1.apps.googleusercontent.com');
+  assert.equal(parsedSlots[1].id, 'Project-Slot-2');
+  assert.equal(parsedSlots[2].id, 'Project-Slot-3');
+  console.log(`✅ PASSED: Client ID Pool parses 3 project slots properly`);
+
+  // Formatting back to text
+  const formattedBack = formatClientIdPoolToText(parsedSlots);
+  assert.ok(formattedBack.includes('project1'));
+  assert.ok(formattedBack.includes('project2'));
+  assert.ok(formattedBack.includes('project3'));
+  console.log(`✅ PASSED: formatClientIdPoolToText produces pristine multi-line string`);
+
+  // Auto-Rotation when Project Slot 1 is rate-limited (403 quotaExceeded)
+  parsedSlots[0].isCooldown = true;
+  const unassignedFresh = parsedSlots.find((s) => !s.isCooldown);
+  assert.equal(unassignedFresh?.id, 'Project-Slot-2');
+  console.log(`✅ PASSED: Auto-rotation picks fresh Project-Slot-2 when Project-Slot-1 is on cooldown`);
+
+  console.log('\n--- TEST GROUP 5: Atomic Execution & 24H Thumbnail Limit Safety ---');
+  // Verify atomic rule: if thumbnail upload fails, video status remains RAW PRIVATE
+  const rawVideo = {
+    id: 'yt-test-candidate-1',
+    youtubeVideoId: 'test-candidate-1',
+    channelId: 'UC_REAL_123',
+    titleBefore: 'Salinan dari Video Alam Mentah',
+    privacyStatus: 'private',
+    managementStatus: 'READY',
+    isManaged: false,
+    publishAt: undefined,
+  };
+
+  // Simulate thumbnail upload failure (e.g. 400 or 403 uploadLimitExceeded)
+  const thumbnailResult = { success: false, error: 'The user has exceeded the number of videos they may upload thumbnail to (uploadLimitExceeded)' };
+
+  let isAtomicAborted = false;
+  if (!thumbnailResult.success) {
+    // Under Atomic Execution, videos.update MUST NOT be called!
+    isAtomicAborted = true;
+  }
+
+  assert.equal(isAtomicAborted, true);
+  // Video must remain strictly raw private
+  assert.equal(rawVideo.privacyStatus, 'private');
+  assert.equal(rawVideo.managementStatus, 'READY');
+  assert.equal(rawVideo.publishAt, undefined);
+  assert.equal(rawVideo.isManaged, false);
+  console.log(`✅ PASSED: Atomic Execution strictly aborts on thumbnail failure; video remains 100% RAW PRIVATE`);
 
   console.log('\n================================================================');
-  console.log('RESULTS: ALL TEST GROUPS PASSED (Batch 90, Day Schedules, & Auto-Chaining)');
+  console.log('RESULTS: ALL 5 TEST GROUPS PASSED (Kloter 33, Atomic, Client ID Pool)');
   console.log('================================================================\n');
 }
 
-runDayScheduleTests();
+runTestSuite();

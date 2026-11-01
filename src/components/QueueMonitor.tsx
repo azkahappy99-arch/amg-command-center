@@ -281,14 +281,18 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
                           ? 'bg-blue-950 text-blue-300 border border-blue-800/60 animate-pulse'
                           : job.status === 'RETRYING'
                           ? 'bg-purple-950 text-purple-300 border border-purple-800/60'
-                          : job.status === 'RATE_LIMITED'
+                          : job.status === 'RATE_LIMITED' || (typeof job.status === 'string' && job.status.includes('Thumbnail'))
                           ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
                           : job.status === 'FAILED'
                           ? 'bg-rose-950 text-rose-300 border border-rose-800/60'
                           : 'bg-neutral-800 text-neutral-300 border border-neutral-700/60'
                       }`}
                     >
-                      {job.status === 'RATE_LIMITED' ? 'MENUNGGU KUOTA' : job.status}
+                      {job.status === 'RATE_LIMITED'
+                        ? 'MENUNGGU KUOTA'
+                        : job.status === 'Dihentikan Sementara (Menunggu Reset Thumbnail 24 Jam)'
+                        ? 'JEDA LIMIT THUMBNAIL 24H'
+                        : job.status}
                     </span>
                     <span className="text-neutral-200 truncate max-w-xs sm:max-w-md font-medium">
                       {job.payload?.title || job.videoId}

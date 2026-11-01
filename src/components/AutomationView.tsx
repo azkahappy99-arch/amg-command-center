@@ -72,7 +72,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [previewFilter, setPreviewFilter] = useState<'ALL' | 'INCLUDED' | 'UNCLASSIFIED' | 'EXCLUDED'>('ALL');
   const BATCH_SIZE = 90;
-  const [pageSize, setPageSize] = useState<number>(BATCH_SIZE); // BATCH_SIZE (Kloter per 90) or 0 (Semua)
+  const [pageSize, setPageSize] = useState<number>(BATCH_SIZE); // BATCH_SIZE (Kloter 90 Video) or 0 (Semua)
   const [currentBatchIndex, setCurrentBatchIndex] = useState<number>(1);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
@@ -84,6 +84,14 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [batchToRollback, setBatchToRollback] = useState<AutomationBatch | null>(null);
   const [isClearingStale, setIsClearingStale] = useState(false);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
+  const [thumbnailLimitPaused, setThumbnailLimitPaused] = useState<any>(() => {
+    try {
+      const raw = localStorage.getItem('amg_thumbnail_limit_paused');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId || c.youtubeChannelId === selectedChannelId || `chan-${c.youtubeChannelId}` === selectedChannelId) || channels[0];
   const pureChannelId = selectedChannel?.youtubeChannelId || (selectedChannelId ? selectedChannelId.replace(/^chan-/, '') : '');
@@ -1006,6 +1014,36 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         </div>
       )}
 
+      {/* 24-Hour Custom Thumbnail Quota/Upload Limit Paused Banner */}
+      {thumbnailLimitPaused && (
+        <div className="p-4 rounded-xl bg-amber-950/70 border border-amber-500/80 text-amber-200 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-xl animate-in fade-in duration-200">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-amber-100 text-sm">
+                Batas Upload Thumbnail YouTube Tercapai (Limit 24 Jam). Otomasi dihentikan agar video tidak terjadwal tanpa thumbnail. Silakan lanjutkan kembali besok setelah kuota reset.
+              </p>
+              {thumbnailLimitPaused.videoTitle && (
+                <p className="text-amber-300 text-[11px] mt-1 font-mono">
+                  Checkpoint Terlindungi: Video "{thumbnailLimitPaused.videoTitle}" tetap dalam status Private Mentah tanpa perubahan judul atau jadwal.
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              try {
+                localStorage.removeItem('amg_thumbnail_limit_paused');
+              } catch {}
+              setThumbnailLimitPaused(null);
+            }}
+            className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold transition whitespace-nowrap cursor-pointer shadow flex items-center gap-1.5 self-start sm:self-auto"
+          >
+            <span>Lanjutkan Kembali (Reset Checkpoint)</span>
+          </button>
+        </div>
+      )}
+
       {/* Master Judul Validation Alert */}
       {channelTitles.length === 0 && (
         <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-600/50 text-amber-300 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-lg">
@@ -1031,6 +1069,19 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
       {/* Preview Section & Action Bar */}
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl p-5 space-y-4">
+        {/* Unit Quota Calculation Note */}
+        <div className="px-3.5 py-2 rounded-xl bg-neutral-950/90 border border-neutral-800 text-[11px] text-neutral-300 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>
+              <strong>Kloter 90 Video (~9.000 unit).</strong> Menghabiskan 90% kuota harian untuk mengunci runway 3 bulan dalam 1 channel.
+            </span>
+          </div>
+          <span className="font-mono text-[10px] text-neutral-500">
+            Kapasitas Kuota Harian YouTube API: 10.000 unit/hari
+          </span>
+        </div>
+
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-neutral-800">
           <div>
             <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
@@ -1309,7 +1360,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     : 'text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                Kloter per 90
+                Kloter 90 Video
               </button>
               <button
                 type="button"
@@ -1561,11 +1612,11 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2 text-[11px]">
                 <div className="font-semibold text-neutral-200">Rencana Eksekusi Berantai (Auto-Chaining):</div>
                 <ul className="list-disc list-inside space-y-1 text-neutral-400">
-                  <li>Kapasitas per kloter: <strong>70 video per eksekusi</strong> (Kloter {currentBatchIndex} dimulai segera).</li>
-                  <li><strong>Auto-Chaining Berantai:</strong> Setelah 70 video selesai, worker otomatis beralih ke kloter berikutnya tanpa reset.</li>
+                  <li>Kapasitas per kloter: <strong>90 video per eksekusi</strong> (Kloter {currentBatchIndex} dimulai segera).</li>
+                  <li><strong>Auto-Chaining Berantai:</strong> Setelah 90 video selesai, worker otomatis beralih ke kloter berikutnya tanpa reset.</li>
                   <li><strong>Anti-Spam Throttling:</strong> Jeda aman 2 hingga 4 detik di antara setiap video untuk mencegah deteksi bot YouTube.</li>
-                  <li><strong>Upload Serial:</strong> Thumbnail diunggah satu per satu secara berurutan (bukan paralel).</li>
-                  <li><strong>Batas Kuota YouTube 70/24 Jam:</strong> Jika kuota mendekati batas, sisa video dialihkan ke 'Menunggu Kuota Besok' untuk mencegah error 403.</li>
+                  <li><strong>Upload Serial & Atomic Execution:</strong> Custom thumbnail diunggah pertama kali. Jika limit 24 jam tercapai, video batal dijadwalkan dan tetap private mentah aman.</li>
+                  <li><strong>Kalkulasi Kuota YouTube:</strong> Kloter 90 Video (~9.000 unit). Menghabiskan 90% kuota harian untuk mengunci runway 3 bulan dalam 1 channel.</li>
                   <li>Verifikasi read-after-write dan pencatatan snapshot otomatis untuk rollback darurat.</li>
                 </ul>
               </div>
