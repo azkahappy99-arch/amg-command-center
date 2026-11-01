@@ -455,22 +455,77 @@ class WorkerClientService {
         // TAHAP 1: ATOMIC EXECUTION - UPLOAD CUSTOM THUMBNAIL (thumbnails.set) FIRST
         // ====================================================================
         if (assignedThumb && assignedThumb.id) {
-          let thumbBlob: Blob | null = null;
+          let rawThumbData: string | null = null;
           try {
-            const rawThumbData = await getThumbnailDataById(assignedThumb.id);
-            if (rawThumbData) {
-              thumbBlob = rawThumbData.startsWith('data:')
-                ? dataUrlToBlob(rawThumbData)
-                : await fetch(rawThumbData).then((r) => r.blob());
-            }
+            rawThumbData = await getThumbnailDataById(assignedThumb.id);
           } catch (thumbErr) {
             console.warn(`[WorkerClient] Gagal memuat thumbnail dari IndexedDB:`, thumbErr);
           }
 
-          if (thumbBlob) {
-            const thumbRes = await this.executeYouTubeThumbnailSet(video.id, thumbBlob, token);
-            if (!thumbRes.success) {
-              console.error(`[WorkerClient] [Atomic Abort] Gagal upload thumbnail video ${video.id}:`, thumbRes.error);
+          if (!rawThumbData || rawThumbData.length < 100 || rawThumbData.startsWith('idb:')) {
+            const missingMsg = `Aset Gambar Hilang - Harap Unggah Ulang pada thumbnail "${assignedThumb.name || assignedThumb.id}". Worker dilarang mengeksekusi antrean jika payload thumbnail tidak ditemukan (Atomic Execution Guard).`;
+            console.error(`[WorkerClient] [Atomic Abort] ${missingMsg}`);
+
+            currentProgress.status = 'PAUSED';
+            currentProgress.processingCount = 0;
+            currentProgress.message = missingMsg;
+            options.onProgress?.(currentProgress);
+
+            this.syncQueueStateToStorage({
+              total: totalCount,
+              processing: 0,
+              completed: completedCount,
+              remainingInQueue: totalCount - completedCount,
+              currentTitle: assignedTitle,
+              batchId,
+              status: `Dihentikan: Aset Gambar Hilang (${assignedThumb.name || assignedThumb.id})`,
+            });
+
+            this.shouldStop = true;
+            this.isRunning = false;
+            batchRecord.status = 'failed';
+            batchRecord.failureReason = missingMsg;
+            break;
+          }
+
+          let thumbBlob: Blob | null = null;
+          try {
+            thumbBlob = rawThumbData.startsWith('data:')
+              ? dataUrlToBlob(rawThumbData)
+              : await fetch(rawThumbData).then((r) => r.blob());
+          } catch (thumbErr) {
+            console.warn(`[WorkerClient] Gagal mengonversi thumbnail ke Blob:`, thumbErr);
+          }
+
+          if (!thumbBlob || thumbBlob.size < 100) {
+            const blobErrMsg = `Aset Gambar Hilang - Harap Unggah Ulang pada thumbnail "${assignedThumb.name || assignedThumb.id}" (Ukuran blob tidak valid).`;
+            console.error(`[WorkerClient] [Atomic Abort] ${blobErrMsg}`);
+
+            currentProgress.status = 'PAUSED';
+            currentProgress.processingCount = 0;
+            currentProgress.message = blobErrMsg;
+            options.onProgress?.(currentProgress);
+
+            this.syncQueueStateToStorage({
+              total: totalCount,
+              processing: 0,
+              completed: completedCount,
+              remainingInQueue: totalCount - completedCount,
+              currentTitle: assignedTitle,
+              batchId,
+              status: `Dihentikan: Aset Gambar Hilang (${assignedThumb.name || assignedThumb.id})`,
+            });
+
+            this.shouldStop = true;
+            this.isRunning = false;
+            batchRecord.status = 'failed';
+            batchRecord.failureReason = blobErrMsg;
+            break;
+          }
+
+          const thumbRes = await this.executeYouTubeThumbnailSet(video.id, thumbBlob, token);
+          if (!thumbRes.success) {
+            console.error(`[WorkerClient] [Atomic Abort] Gagal upload thumbnail video ${video.id}:`, thumbRes.error);
 
               // STRICT ATOMIC ABORT: DILARANG menjalankan videos.update atau menjadwalkan/mengubah judul
               const limitMsg =
@@ -519,7 +574,6 @@ class WorkerClientService {
               console.log(`[WorkerClient] Thumbnail berhasil diunggah untuk video ${video.id}`);
             }
           }
-        }
 
         // ====================================================================
         // TAHAP 2 & 3: TERAPKAN JUDUL DETERMINISTIK & KUNCI TANGGAL/JAM PUBLISHAT

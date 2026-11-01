@@ -27,7 +27,11 @@ import {
 } from 'lucide-react';
 import { Channel, ContentProfile, MasterTitle, MasterThumbnail, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary, ManagedVideo } from '../types/index.ts';
 import { api, isRealTitle } from '../services/api.ts';
-import { getThumbnailDataById, getChannelThumbnailsFromIdb } from '../utils/thumbnailStorage.ts';
+import {
+  getThumbnailDataById,
+  getChannelThumbnailsFromIdb,
+  hydrateThumbnailsWithPayloads,
+} from '../utils/thumbnailStorage.ts';
 import { workerClient } from '../services/workerClient.ts';
 import { Phase2AcceptanceModal } from './Phase2AcceptanceModal.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
@@ -44,6 +48,7 @@ interface AutomationViewProps {
   onAutomationTriggered: () => void;
   onNavigateToQueue: () => void;
   onNavigateToTitles?: (channelId?: string) => void;
+  onNavigateToThumbnails?: (channelId?: string) => void;
 }
 
 export const AutomationView: React.FC<AutomationViewProps> = ({
@@ -53,6 +58,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   onAutomationTriggered,
   onNavigateToQueue,
   onNavigateToTitles,
+  onNavigateToThumbnails,
 }) => {
   const [selectedChannelId, setSelectedChannelId] = useState<string>(
     initialChannelId || channels[0]?.id || ''
@@ -331,14 +337,36 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         }
       }).catch(() => {});
 
-      // Load active channel's Master Thumbnails from IndexedDB
-      getChannelThumbnailsFromIdb(selectedChannelId).then((thumbs) => {
+      // Load active channel's Master Thumbnails from IndexedDB (with fallback to storage)
+      getChannelThumbnailsFromIdb(selectedChannelId).then(async (thumbs) => {
         if (Array.isArray(thumbs) && thumbs.length > 0) {
           setChannelThumbnails(thumbs);
+        } else {
+          // Check localStorage as fallback and hydrate
+          const cleanId = selectedChannelId.replace(/^chan-/, '');
+          const raw =
+            localStorage.getItem(`amg_master_thumbnails_${selectedChannelId}`) ||
+            localStorage.getItem(`amg_master_thumbnails_${cleanId}`) ||
+            localStorage.getItem(`amg_master_thumbnails_chan-${cleanId}`);
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                const hydrated = await hydrateThumbnailsWithPayloads(parsed);
+                setChannelThumbnails(hydrated);
+              }
+            } catch {}
+          }
         }
       }).catch(() => {});
     }
   }, [selectedChannelId]);
+
+  // Image Corruption & Missing Asset Detection for Atomic Execution Guard
+  const corruptThumbnails = React.useMemo(() => {
+    return channelThumbnails.filter((th) => (th as any).isCorrupt || !th.url || th.url.startsWith('idb:'));
+  }, [channelThumbnails]);
+  const hasCorruptThumbnails = corruptThumbnails.length > 0;
 
   const handleRunDryRun = async () => {
     if (channelTitles.length === 0) {
@@ -369,6 +397,14 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const handleStartAutomation = async () => {
     if (channelTitles.length === 0) {
       alert('Silakan masukkan Master Judul sebelum memulai otomasi');
+      return;
+    }
+
+    if (hasCorruptThumbnails) {
+      alert(
+        `Otomasi Dilarang: Terdeteksi ${corruptThumbnails.length} master thumbnail dengan file gambar hilang (${corruptThumbnails.map((t) => t.name).join(', ')}).\n\nSesuai prinsip ATOMIC EXECUTION, worker dilarang mengeksekusi antrean jika payload thumbnail tidak ditemukan agar tidak gagal di YouTube API.\n\nSilakan buka Master Thumbnail dan unggah ulang file gambar.`
+      );
+      setShowConfirmModal(false);
       return;
     }
 
@@ -1122,10 +1158,22 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   alert('Silakan masukkan Master Judul sebelum memulai otomasi');
                   return;
                 }
+                if (hasCorruptThumbnails) {
+                  alert(
+                    `Otomasi Dilarang: Terdeteksi ${corruptThumbnails.length} master thumbnail dengan aset gambar hilang (${corruptThumbnails.map(t => t.name).join(', ')}).\n\nSesuai prinsip ATOMIC EXECUTION, worker dilarang mengeksekusi antrean jika payload thumbnail tidak ditemukan.\n\nHarap unggah ulang file gambar di Master Thumbnail.`
+                  );
+                  return;
+                }
                 setShowConfirmModal(true);
               }}
-              disabled={isExecuting || sisaVideo === 0 || jumlahVideoKloterN === 0 || channelTitles.length === 0}
-              title={channelTitles.length === 0 ? "Silakan masukkan Master Judul sebelum memulai otomasi" : undefined}
+              disabled={isExecuting || sisaVideo === 0 || jumlahVideoKloterN === 0 || channelTitles.length === 0 || hasCorruptThumbnails}
+              title={
+                hasCorruptThumbnails
+                  ? `Otomasi Dilarang: Aset Gambar Hilang (${corruptThumbnails.map(t => t.name).join(', ')}) - Harap Unggah Ulang di Master Thumbnail`
+                  : channelTitles.length === 0
+                  ? "Silakan masukkan Master Judul sebelum memulai otomasi"
+                  : undefined
+              }
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-red-900/30 transition active:scale-95 cursor-pointer"
             >
               {isExecuting ? (
@@ -1142,6 +1190,32 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Warning Alert if thumbnail assets are missing in IndexedDB */}
+        {hasCorruptThumbnails && (
+          <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/80 text-rose-200 flex items-start justify-between gap-3 shadow-lg">
+            <div className="flex items-start gap-2.5">
+              <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5 animate-pulse" />
+              <div className="space-y-1">
+                <div className="text-xs font-bold uppercase tracking-wider text-rose-300">
+                  Aset Gambar Hilang - Harap Unggah Ulang ({corruptThumbnails.length} Thumbnail Terdeteksi)
+                </div>
+                <p className="text-[11px] text-rose-200/90 leading-relaxed">
+                  Sebagian master thumbnail ({corruptThumbnails.map((t) => t.name).join(', ')}) kehilangan data gambar di database browser. Sesuai prinsip <strong>Atomic Execution</strong>, tombol mulai otomasi dikunci dan worker dilarang mengeksekusi antrean video agar tidak gagal di YouTube API (thumbnails.set).
+                </p>
+              </div>
+            </div>
+            {onNavigateToThumbnails && (
+              <button
+                type="button"
+                onClick={() => onNavigateToThumbnails(selectedChannelId)}
+                className="shrink-0 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-sm cursor-pointer"
+              >
+                Buka Master Thumbnail
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Table Container with max-height & smooth mobile swipe/scroll */}
         <div
@@ -1233,16 +1307,31 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     <td className="py-3 px-3">
                       <div className="flex items-center gap-2">
                         {(() => {
-                          const isMock = (url?: string) => {
-                            if (!url) return true;
-                            if (url.includes('images.unsplash.com')) return true;
-                            if (url.includes('thumb-gen-') || url.includes('thumb-default-')) return true;
-                            return false;
-                          };
                           const vId = item.videoId?.replace(/^yt-vid-|^yt-/, '');
                           const nativeYtThumb = item.originalThumbnail || (vId ? `https://i.ytimg.com/vi/${vId}/hqdefault.jpg` : '');
-                          const hasCustom = Boolean(item.isCustomThumbnail && item.assignedThumbnail && !isMock(item.assignedThumbnail));
-                          const effectiveThumb = hasCustom ? item.assignedThumbnail : nativeYtThumb;
+
+                          // Match with channel master thumbnail rotation
+                          const assignedChannelThumb = channelThumbnails.length > 0
+                            ? channelThumbnails[(item.sequence - 1) % channelThumbnails.length]
+                            : null;
+                          const isAssignedCorrupt = Boolean(
+                            assignedChannelThumb &&
+                            ((assignedChannelThumb as any).isCorrupt || !assignedChannelThumb.url || assignedChannelThumb.url.startsWith('idb:'))
+                          );
+
+                          if (isAssignedCorrupt) {
+                            return (
+                              <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-rose-950/80 border border-rose-700/60 text-rose-300 text-[10px] font-bold">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0 animate-pulse" />
+                                <span>Aset Gambar Hilang - Harap Unggah Ulang</span>
+                              </div>
+                            );
+                          }
+
+                          const effectiveThumb = (assignedChannelThumb && assignedChannelThumb.url && !assignedChannelThumb.url.startsWith('idb:'))
+                            ? assignedChannelThumb.url
+                            : (item.assignedThumbnail && !item.assignedThumbnail.startsWith('idb:') ? item.assignedThumbnail : nativeYtThumb);
+                          const hasCustom = Boolean(assignedChannelThumb || item.isCustomThumbnail);
 
                           return (
                             <>
@@ -1263,9 +1352,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                                 </div>
                               )}
                               <span className={`text-[11px] font-medium ${hasCustom ? 'text-amber-400' : 'text-neutral-400'}`}>
-                                {hasCustom
-                                  ? (item.thumbnailLabel || `Kustom (TH${((item.sequence - 1) % 4) + 1})`)
-                                  : 'Bawaan YouTube'}
+                                {assignedChannelThumb
+                                  ? (assignedChannelThumb.name || `Kustom (TH${((item.sequence - 1) % channelThumbnails.length) + 1})`)
+                                  : (item.thumbnailLabel || 'Bawaan YouTube')}
                               </span>
                             </>
                           );
@@ -1632,7 +1721,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                 <button
                   type="button"
                   onClick={handleStartAutomation}
-                  disabled={isExecuting || sisaVideo === 0 || jumlahVideoKloterN === 0}
+                  disabled={isExecuting || sisaVideo === 0 || jumlahVideoKloterN === 0 || hasCorruptThumbnails}
                   className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shadow-lg shadow-red-900/30 cursor-pointer disabled:opacity-50"
                 >
                   {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${sisaVideo} Video) - Kloter ${currentBatchIndex} (${jumlahVideoKloterN} Video)`}

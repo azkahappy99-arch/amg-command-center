@@ -17,6 +17,8 @@ import {
   getChannelThumbnailsFromIdb,
   appendThumbnailToIdb,
   deleteThumbnailFromIdb,
+  hydrateThumbnailsWithPayloads,
+  validateThumbnailPayload,
 } from '../utils/thumbnailStorage.ts';
 
 interface MasterThumbnailsViewProps {
@@ -160,6 +162,29 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
 
     return list.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
   }, [thumbnails, channelThumbsFromStorage, idbThumbnails, activeChannel?.id, currentBlockId, activeProfile?.id]);
+
+  // Real-time IndexedDB Hydration & Image Corruption Detection
+  const [hydratedThumbnails, setHydratedThumbnails] = useState<Array<MasterThumbnail & { isCorrupt?: boolean; error?: string }>>([]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    hydrateThumbnailsWithPayloads(profileThumbnails).then((hydrated) => {
+      if (!isCancelled) {
+        setHydratedThumbnails(hydrated);
+      }
+    });
+    return () => {
+      isCancelled = true;
+    };
+  }, [profileThumbnails]);
+
+  // Filter corrupt / missing thumbnail assets
+  const corruptThumbnails = React.useMemo(() => {
+    return hydratedThumbnails.filter((t) => t.isCorrupt || !t.url || t.url.startsWith('idb:'));
+  }, [hydratedThumbnails]);
+
+  // Use hydrated thumbnails with fallback to profileThumbnails during initial tick
+  const activeThumbnailsList = hydratedThumbnails.length > 0 ? hydratedThumbnails : profileThumbnails;
 
   // Merge titles from props with direct channel localStorage (amg_master_titles_{channelId})
   const channelTitlesFromStorage = React.useMemo(() => {
@@ -607,14 +632,29 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
       </form>
 
 
+      {/* Warning Alert if any thumbnail asset is missing/corrupt in IndexedDB */}
+      {corruptThumbnails.length > 0 && (
+        <div className="p-4 rounded-2xl bg-rose-950/40 border border-rose-800/80 text-rose-200 flex items-start gap-3 shadow-lg">
+          <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5 animate-pulse" />
+          <div className="space-y-1">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-rose-300">
+              Peringatan: Aset Gambar Hilang - Harap Unggah Ulang ({corruptThumbnails.length} Thumbnail Terdeteksi)
+            </h4>
+            <p className="text-[11px] text-rose-200/90 leading-relaxed">
+              Sebagian master thumbnail ({corruptThumbnails.map((t) => t.name).join(', ')}) kehilangan data gambar di database browser. Sesuai prinsip <strong>Atomic Execution</strong>, worker tidak akan mengeksekusi slot thumbnail yang gambarnya hilang. Silakan klik tombol "Unggah Ulang" untuk memperbarui aset gambar.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Thumbnails Gallery Grid */}
       <div className="space-y-3">
         <div className="flex items-center justify-between text-xs font-bold text-neutral-300 uppercase tracking-wider">
-          <span>MASTER THUMBNAIL TERKONFIGURASI KHUSUS {activeChannel?.title?.toUpperCase() || 'CHANNEL'} ({profileThumbnails.length})</span>
+          <span>MASTER THUMBNAIL TERKONFIGURASI KHUSUS {activeChannel?.title?.toUpperCase() || 'CHANNEL'} ({activeThumbnailsList.length})</span>
           <span className="text-neutral-500 font-normal">URUTAN MODULO INDEPENDEN</span>
         </div>
 
-        {profileThumbnails.length === 0 ? (
+        {activeThumbnailsList.length === 0 ? (
           <div className="p-8 rounded-2xl bg-neutral-900/40 border border-neutral-800 text-center text-neutral-400 text-xs space-y-1">
             <div className="text-amber-400 font-semibold flex items-center justify-center gap-1.5">
               <AlertTriangle className="w-4 h-4" />
@@ -626,51 +666,83 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {profileThumbnails.map((thumb, idx) => (
-              <div
-                key={thumb.id}
-                className="p-3 rounded-2xl bg-neutral-900/60 border border-neutral-800 hover:border-neutral-700 flex flex-col justify-between transition group"
-              >
-                <div className="space-y-2">
-                  <div className="relative aspect-video rounded-xl overflow-hidden bg-neutral-950 border border-neutral-800">
-                    <img
-                      src={thumb.url}
-                      alt={thumb.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                    />
-                    <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-sm text-[10px] font-bold text-neutral-200">
-                      TH{idx + 1}
-                    </span>
+            {activeThumbnailsList.map((thumb, idx) => {
+              const isCorrupt = (thumb as any).isCorrupt || !thumb.url || thumb.url.startsWith('idb:');
+
+              return (
+                <div
+                  key={thumb.id}
+                  className={`p-3 rounded-2xl bg-neutral-900/60 border ${
+                    isCorrupt ? 'border-rose-800/80 bg-rose-950/20' : 'border-neutral-800 hover:border-neutral-700'
+                  } flex flex-col justify-between transition group`}
+                >
+                  <div className="space-y-2">
+                    {isCorrupt ? (
+                      <div className="relative aspect-video rounded-xl overflow-hidden bg-rose-950/40 border border-rose-800/60 flex flex-col items-center justify-center p-3 text-center">
+                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-rose-900/90 text-[10px] font-bold text-rose-200">
+                          TH{idx + 1}
+                        </span>
+                        <AlertTriangle className="w-5 h-5 text-rose-500 mb-1 animate-pulse" />
+                        <span className="text-[10px] font-black text-rose-300 uppercase tracking-tight">
+                          Aset Gambar Hilang - Harap Unggah Ulang
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(thumb)}
+                          className="mt-2 px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold shadow cursor-pointer transition active:scale-95"
+                        >
+                          Unggah Ulang
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="relative aspect-video rounded-xl overflow-hidden bg-neutral-950 border border-neutral-800">
+                        <img
+                          src={thumb.url}
+                          alt={thumb.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                        />
+                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/80 backdrop-blur-sm text-[10px] font-bold text-neutral-200">
+                          TH{idx + 1}
+                        </span>
+                      </div>
+                    )}
+                    <div>
+                      <div className="font-semibold text-xs text-neutral-200 truncate">{thumb.name}</div>
+                      <div className="text-[10px] text-neutral-500 truncate mt-0.5 font-mono">
+                        Indeks Urutan: #{idx}
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-semibold text-xs text-neutral-200 truncate">{thumb.name}</div>
-                    <div className="text-[10px] text-neutral-500 truncate mt-0.5 font-mono">
-                      Indeks Urutan: #{idx}
+
+                  <div className="pt-2 flex items-center justify-between border-t border-neutral-800/60 mt-3">
+                    {isCorrupt ? (
+                      <span className="text-[10px] text-rose-400 font-bold flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" />
+                        Aset Hilang
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-400 font-medium">Siap</span>
+                    )}
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => handleOpenEdit(thumb)}
+                        className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition cursor-pointer"
+                        title="Ubah label / gambar thumbnail"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(thumb)}
+                        className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
+                        title="Hapus thumbnail"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
                 </div>
-
-                <div className="pt-2 flex items-center justify-between border-t border-neutral-800/60 mt-3">
-                  <span className="text-[10px] text-emerald-400 font-medium">Siap</span>
-                  <div className="flex items-center space-x-1">
-                    <button
-                      onClick={() => handleOpenEdit(thumb)}
-                      className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition cursor-pointer"
-                      title="Ubah label / gambar thumbnail"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(thumb)}
-                      className="p-1.5 rounded-lg text-neutral-500 hover:text-rose-400 hover:bg-neutral-800 transition cursor-pointer"
-                      title="Hapus thumbnail"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -684,21 +756,21 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
               Matriks Rotasi Dinamis - Channel {activeChannel?.title || 'Aktif'}
             </h3>
             <p className="text-xs text-neutral-400 mt-0.5">
-              Kombinasi deterministik antara Master Judul {activeChannel?.title} ({profileTitles.length}) dan Master Thumbnail {activeChannel?.title} ({profileThumbnails.length}). Data terisolasi 100% per channel.
+              Kombinasi deterministik antara Master Judul {activeChannel?.title} ({profileTitles.length}) dan Master Thumbnail {activeChannel?.title} ({activeThumbnailsList.length}). Data terisolasi 100% per channel.
             </p>
           </div>
           <span className="text-xs font-mono px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-300 font-semibold self-start sm:self-auto">
-            {profileTitles.length} Judul × {profileThumbnails.length} Thumbnail
+            {profileTitles.length} Judul × {activeThumbnailsList.length} Thumbnail
           </span>
         </div>
 
-        {profileTitles.length === 0 || profileThumbnails.length === 0 ? (
+        {profileTitles.length === 0 || activeThumbnailsList.length === 0 ? (
           <div className="p-8 rounded-xl bg-neutral-950/60 border border-neutral-800/80 text-center text-xs text-neutral-400 space-y-1.5">
             <p className="font-semibold text-neutral-300">
               Matriks Rotasi Memerlukan Aset Lengkap
             </p>
             <p className="text-neutral-500 text-[11px]">
-              Channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong> saat ini memiliki {profileTitles.length} Master Judul dan {profileThumbnails.length} Master Thumbnail.
+              Channel <strong className="text-neutral-300">{activeChannel?.title || 'ini'}</strong> saat ini memiliki {profileTitles.length} Master Judul dan {activeThumbnailsList.length} Master Thumbnail.
               Matriks akan otomatis terbentuk saat kedua aset terisi minimal 1 item.
             </p>
           </div>
@@ -717,7 +789,8 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
               <tbody className="divide-y divide-neutral-800/60">
                 {Array.from({ length: 12 }).map((_, idx) => {
                   const assignedTitle = profileTitles[idx % profileTitles.length];
-                  const assignedThumb = profileThumbnails[idx % profileThumbnails.length];
+                  const assignedThumb = activeThumbnailsList[idx % activeThumbnailsList.length];
+                  const isThumbCorrupt = (assignedThumb as any)?.isCorrupt || !assignedThumb?.url || assignedThumb.url.startsWith('idb:');
 
                   return (
                     <tr key={idx} className="hover:bg-neutral-800/30 transition font-mono">
@@ -725,9 +798,15 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
                         Video #{idx + 1}
                       </td>
                       <td className="py-2.5 px-3 font-sans">
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/40">
-                          TERVERIFIKASI
-                        </span>
+                        {isThumbCorrupt ? (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-950 text-rose-400 font-bold border border-rose-800/40">
+                            ASET HILANG
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-400 font-bold border border-emerald-800/40">
+                            TERVERIFIKASI
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 font-sans text-neutral-300">
                         Slot #{idx + 1}
@@ -736,16 +815,25 @@ export const MasterThumbnailsView: React.FC<MasterThumbnailsViewProps> = ({
                         {assignedTitle?.text || `Judul ${idx + 1}`}
                       </td>
                       <td className="py-2.5 px-3 font-sans flex items-center gap-2">
-                        {assignedThumb?.url && (
-                          <img
-                            src={assignedThumb.url}
-                            alt=""
-                            className="w-10 h-6 rounded object-cover border border-neutral-700"
-                          />
+                        {isThumbCorrupt ? (
+                          <span className="px-2 py-0.5 rounded bg-rose-950 text-rose-400 font-bold border border-rose-800/60 text-[10px] flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-rose-400" />
+                            Aset Gambar Hilang - Harap Unggah Ulang
+                          </span>
+                        ) : (
+                          <>
+                            {assignedThumb?.url && (
+                              <img
+                                src={assignedThumb.url}
+                                alt=""
+                                className="w-10 h-6 rounded object-cover border border-neutral-700"
+                              />
+                            )}
+                            <span className="text-neutral-300">
+                              {assignedThumb?.name || `Thumbnail ${idx + 1}`}
+                            </span>
+                          </>
                         )}
-                        <span className="text-neutral-300">
-                          {assignedThumb?.name || `Thumbnail ${idx + 1}`}
-                        </span>
                       </td>
                     </tr>
                   );

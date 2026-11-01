@@ -59,6 +59,10 @@ import {
   fetchChannelVideosFromYouTube,
   getStoredGisToken,
 } from './services/youtubeGisAuth.ts';
+import {
+  getChannelThumbnailsFromIdb,
+  hydrateThumbnailsWithPayloads,
+} from './utils/thumbnailStorage.ts';
 
 // Run immediate purge check of any leftover mock or test IDs
 if (typeof window !== 'undefined') {
@@ -492,13 +496,26 @@ export default function App() {
             ...(raw2 ? JSON.parse(raw2) : []),
             ...(raw3 ? JSON.parse(raw3) : []),
           ].filter(isRealThumbnail);
+
+          try {
+            const idbThumbs = await getChannelThumbnailsFromIdb(targetChan);
+            if (Array.isArray(idbThumbs) && idbThumbs.length > 0) {
+              combined.push(...idbThumbs);
+            }
+          } catch {}
+
           for (const lt of combined) {
             if (!cleanThumbs.some((t) => t.id === lt.id)) {
               cleanThumbs.push(lt);
             }
           }
         }
-        setThumbnails(cleanThumbs);
+        try {
+          const hydrated = await hydrateThumbnailsWithPayloads(cleanThumbs);
+          setThumbnails(hydrated);
+        } catch {
+          setThumbnails(cleanThumbs);
+        }
       }
       if (videosData && Array.isArray(videosData) && videosData.length > 0) {
         let cleanVids = videosData.filter(isRealVideo);
@@ -1057,6 +1074,10 @@ export default function App() {
               onNavigateToTitles={(chanId) => {
                 if (chanId) setSelectedChannelId(chanId);
                 setCurrentSection('titles');
+              }}
+              onNavigateToThumbnails={(chanId) => {
+                if (chanId) setSelectedChannelId(chanId);
+                setCurrentSection('thumbnails');
               }}
             />
           )}
