@@ -6,6 +6,7 @@
 
 import { ManagedVideo, ManagementScope, VideoManagementStatus } from '../types/index.ts';
 import { isRawStudioTitle, isAmgRegulerEligible } from './candidateDetectionService.ts';
+import { safeSetItem, saveCachedVideosToIdb } from '../utils/videoStorage.ts';
 
 export const GIS_CONFIG = {
   CLIENT_ID: '140483783524-8gqs0lc2p401mopm32hvrk1ej7kkqtof.apps.googleusercontent.com',
@@ -136,8 +137,8 @@ export function getStoredGisToken(): string | null {
 export function storeGisToken(token: string, expiresInSeconds: number = 3600): void {
   try {
     const expiresAt = Date.now() + expiresInSeconds * 1000;
-    localStorage.setItem(GIS_CONFIG.STORAGE_KEY_TOKEN, token);
-    localStorage.setItem(GIS_CONFIG.STORAGE_KEY_EXPIRES, expiresAt.toString());
+    safeSetItem(GIS_CONFIG.STORAGE_KEY_TOKEN, token);
+    safeSetItem(GIS_CONFIG.STORAGE_KEY_EXPIRES, expiresAt.toString());
   } catch (err) {
     console.warn('Could not store token in localStorage:', err);
   }
@@ -280,7 +281,7 @@ export async function fetchAllMyYouTubeChannels(accessToken: string): Promise<Yo
 
   try {
     if (channelsList.length > 0) {
-      localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelsList[0]));
+      safeSetItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(channelsList[0]));
       for (const ch of channelsList) {
         savePersistedConnectedChannel(ch);
       }
@@ -319,7 +320,7 @@ export function savePersistedConnectedChannel(channel: YouTubeChannelSnippet): v
     } else {
       list.push(channel);
     }
-    localStorage.setItem('amg_persistent_channels_list', JSON.stringify(list));
+    safeSetItem('amg_persistent_channels_list', JSON.stringify(list));
   } catch (e) {
     console.warn('Could not persist channel list to localStorage:', e);
   }
@@ -331,7 +332,7 @@ export function removePersistedConnectedChannel(channelId: string): void {
     const list = getPersistedConnectedChannels().filter(
       (c) => c.id !== channelId && c.id !== cleanId && `chan-${c.id}` !== channelId
     );
-    localStorage.setItem('amg_persistent_channels_list', JSON.stringify(list));
+    safeSetItem('amg_persistent_channels_list', JSON.stringify(list));
 
     const storedConnectedRaw = localStorage.getItem(GIS_CONFIG.STORAGE_KEY_CHANNEL);
     if (storedConnectedRaw) {
@@ -339,7 +340,7 @@ export function removePersistedConnectedChannel(channelId: string): void {
         const parsed = JSON.parse(storedConnectedRaw);
         if (parsed.id === channelId || parsed.id === cleanId || `chan-${parsed.id}` === channelId) {
           if (list.length > 0) {
-            localStorage.setItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(list[0]));
+            safeSetItem(GIS_CONFIG.STORAGE_KEY_CHANNEL, JSON.stringify(list[0]));
           } else {
             localStorage.removeItem(GIS_CONFIG.STORAGE_KEY_CHANNEL);
           }
@@ -360,7 +361,7 @@ export function markChannelAsUnlinked(channelId: string): void {
     if (!list.includes(channelId)) list.push(channelId);
     if (!list.includes(cleanId)) list.push(cleanId);
     if (!list.includes(`chan-${cleanId}`)) list.push(`chan-${cleanId}`);
-    localStorage.setItem('amg_unlinked_channel_ids', JSON.stringify(list));
+    safeSetItem('amg_unlinked_channel_ids', JSON.stringify(list));
   } catch {}
 }
 
@@ -372,7 +373,7 @@ export function unmarkChannelAsUnlinked(channelId: string): void {
     if (!raw) return;
     const list: string[] = JSON.parse(raw);
     const filtered = list.filter((id) => id !== channelId && id !== cleanId && id !== `chan-${cleanId}`);
-    localStorage.setItem('amg_unlinked_channel_ids', JSON.stringify(filtered));
+    safeSetItem('amg_unlinked_channel_ids', JSON.stringify(filtered));
   } catch {}
 }
 
@@ -869,13 +870,12 @@ function updateChannelVideosInStorage(
     }
     const mergedCurrentChanVideos = Array.from(videoMap.values());
     const mergedVideos = [...mergedCurrentChanVideos, ...otherChannelsVideos];
-    localStorage.setItem('amg_videos', JSON.stringify(mergedVideos));
+    safeSetItem('amg_videos', JSON.stringify(mergedVideos));
 
-    // Persist real videos per channel key: amg_real_videos_{channelId}
+    // Persist real videos directly to IndexedDB 'amg_system_db' (DILARANG simpan payload video ke localStorage)
     const cleanChanId = youtubeChannelId || channelId.replace(/^chan-/, '');
-    localStorage.setItem(`amg_real_videos_${channelId}`, JSON.stringify(mergedCurrentChanVideos));
-    localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(mergedCurrentChanVideos));
-    localStorage.setItem(`amg_real_videos_chan-${cleanChanId}`, JSON.stringify(mergedCurrentChanVideos));
+    saveCachedVideosToIdb(channelId, mergedCurrentChanVideos).catch(() => {});
+    saveCachedVideosToIdb(cleanChanId, mergedCurrentChanVideos).catch(() => {});
 
     // Also update channel's videoCount in amg_channels
     const rawChannels = localStorage.getItem('amg_channels');
@@ -953,7 +953,7 @@ function updateChannelVideosInStorage(
             return true;
           }).length;
           parsedChannels[cIdx].lastSyncAt = new Date().toISOString();
-          localStorage.setItem('amg_channels', JSON.stringify(parsedChannels));
+          safeSetItem('amg_channels', JSON.stringify(parsedChannels));
         }
       }
     }

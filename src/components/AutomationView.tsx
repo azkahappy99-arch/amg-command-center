@@ -40,6 +40,7 @@ import { WeeklyScheduleModal } from './WeeklyScheduleModal.tsx';
 import { QueueMonitor } from './QueueMonitor.tsx';
 import { NicheBadge } from '../utils/nicheCategories';
 import { getChannelDaySchedule } from '../utils/dayScheduleUtils.ts';
+import { safeSetItem } from '../utils/videoStorage.ts';
 
 interface AutomationViewProps {
   channels: Channel[];
@@ -676,9 +677,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     setIsClearingStale(false);
     try {
       localStorage.removeItem('youtube_managed_batches');
-      localStorage.setItem('youtube_managed_batches', JSON.stringify([]));
+      safeSetItem('youtube_managed_batches', JSON.stringify([]));
       localStorage.removeItem('youtube_automation_batches');
-      localStorage.setItem('youtube_automation_batches', JSON.stringify([]));
+      safeSetItem('youtube_automation_batches', JSON.stringify([]));
     } catch {}
 
     setExecutionMessage('Seluruh riwayat batch (termasuk batch berjalan) berhasil dibersihkan dan direset.');

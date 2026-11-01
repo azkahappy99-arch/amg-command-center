@@ -11,6 +11,7 @@ import { getThumbnailDataById } from '../utils/thumbnailStorage.ts';
 import { requestGisAccessToken, GIS_CONFIG } from './youtubeGisAuth.ts';
 import { getChannelDaySchedule, generateSequentialSchedulesWithDayConfig } from '../utils/dayScheduleUtils.ts';
 import { formatWibDateTime } from '../utils/scheduleAndUnmanagedUtils.ts';
+import { safeSetItem, saveCachedVideosToIdb, getCachedVideosFromIdb } from '../utils/videoStorage.ts';
 
 export interface WorkerClientProgress {
   batchId: string;
@@ -120,8 +121,8 @@ class WorkerClientService {
       console.log('[WorkerClient] Memperbarui access token melalui Google Identity Services...');
       token = await requestGisAccessToken(promptConsent);
       if (token) {
-        localStorage.setItem(GIS_CONFIG.STORAGE_KEY_TOKEN, token);
-        localStorage.setItem('amg_youtube_access_token', token);
+        safeSetItem(GIS_CONFIG.STORAGE_KEY_TOKEN, token);
+        safeSetItem('amg_youtube_access_token', token);
       }
     }
 
@@ -140,8 +141,8 @@ class WorkerClientService {
     try {
       const newToken = await requestGisAccessToken(promptConsent);
       if (newToken) {
-        localStorage.setItem(GIS_CONFIG.STORAGE_KEY_TOKEN, newToken);
-        localStorage.setItem('amg_youtube_access_token', newToken);
+        safeSetItem(GIS_CONFIG.STORAGE_KEY_TOKEN, newToken);
+        safeSetItem('amg_youtube_access_token', newToken);
         return newToken;
       }
     } catch (e: any) {
@@ -532,20 +533,18 @@ class WorkerClientService {
                 'Batas Upload Thumbnail YouTube Tercapai (Limit 24 Jam). Otomasi dihentikan agar video tidak terjadwal tanpa thumbnail. Silakan lanjutkan kembali besok setelah kuota reset.';
 
               // Simpan checkpoint agar saat dilanjutkan besok, worker memproses video mentah tersebut secara utuh
-              try {
-                localStorage.setItem(
-                  'amg_thumbnail_limit_paused',
-                  JSON.stringify({
-                    videoId: video.id,
-                    channelId: pureChannelId,
-                    channelTitle: channel.title,
-                    videoTitle: assignedTitle,
-                    batchId,
-                    stoppedAt: new Date().toISOString(),
-                    reason: thumbRes.error || 'UPLOAD_LIMIT_EXCEEDED_24H',
-                  })
-                );
-              } catch {}
+              safeSetItem(
+                'amg_thumbnail_limit_paused',
+                JSON.stringify({
+                  videoId: video.id,
+                  channelId: pureChannelId,
+                  channelTitle: channel.title,
+                  videoTitle: assignedTitle,
+                  batchId,
+                  stoppedAt: new Date().toISOString(),
+                  reason: thumbRes.error || 'UPLOAD_LIMIT_EXCEEDED_24H',
+                })
+              );
 
               // Update progress & hentikan kloter seketika (Stop & Pause)
               currentProgress.status = 'PAUSED';
@@ -727,21 +726,20 @@ class WorkerClientService {
           updatedAt: new Date().toISOString(),
         };
 
-        localStorage.setItem('amg_videos', JSON.stringify(videos));
+        safeSetItem('amg_videos', JSON.stringify(videos));
 
-        // Update juga cache per-channel
-        const chanKey = `amg_real_videos_${cleanChanId}`;
-        const chanRaw = localStorage.getItem(chanKey);
-        if (chanRaw) {
-          const chanVids: ManagedVideo[] = JSON.parse(chanRaw);
-          if (Array.isArray(chanVids)) {
-            const cIdx = chanVids.findIndex((v) => v.id === videoId || v.youtubeVideoId === videoId);
-            if (cIdx >= 0) {
-              chanVids[cIdx] = videos[idx];
-              localStorage.setItem(chanKey, JSON.stringify(chanVids));
+        // Update cache per-channel langsung ke IndexedDB 'amg_system_db' (DILARANG simpan payload video ke localStorage)
+        getCachedVideosFromIdb(cleanChanId)
+          .then((chanVids) => {
+            if (Array.isArray(chanVids) && chanVids.length > 0) {
+              const cIdx = chanVids.findIndex((v) => v.id === videoId || v.youtubeVideoId === videoId);
+              if (cIdx >= 0) {
+                chanVids[cIdx] = videos[idx];
+                saveCachedVideosToIdb(cleanChanId, chanVids).catch(() => {});
+              }
             }
-          }
-        }
+          })
+          .catch(() => {});
 
         return videos[idx];
       }
@@ -763,12 +761,10 @@ class WorkerClientService {
     batchId: string;
     status?: string;
   }) {
-    try {
-      localStorage.setItem('amg_phase3_client_queue', JSON.stringify({
-        ...state,
-        updatedAt: Date.now(),
-      }));
-    } catch {}
+    safeSetItem('amg_phase3_client_queue', JSON.stringify({
+      ...state,
+      updatedAt: Date.now(),
+    }));
   }
 }
 

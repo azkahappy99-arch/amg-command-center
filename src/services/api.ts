@@ -79,6 +79,12 @@ import {
   appendThumbnailToIdb,
   deleteThumbnailFromIdb,
 } from '../utils/thumbnailStorage.ts';
+import {
+  safeSetItem,
+  saveCachedVideosToIdb,
+  getCachedVideosFromIdb,
+  deleteCachedVideosFromIdb,
+} from '../utils/videoStorage.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -121,7 +127,7 @@ function setStorageItem<T>(key: string, val: T): void {
   try {
     const serialized = JSON.stringify(val);
     if (!safeLocalStorageSet(key, serialized)) {
-      localStorage.setItem(key, serialized);
+      safeSetItem(key, serialized);
     }
   } catch (err) {
     console.warn(`[LocalStorage] Error writing "${key}":`, err);
@@ -302,7 +308,7 @@ export function purgeMockDataFromLocalStorage(): void {
       if (Array.isArray(parsed)) {
         const clean = parsed.filter(isRealChannel);
         if (clean.length !== parsed.length) {
-          localStorage.setItem('amg_persistent_channels', JSON.stringify(clean));
+          safeSetItem('amg_persistent_channels', JSON.stringify(clean));
         }
       }
     }
@@ -313,10 +319,10 @@ export function purgeMockDataFromLocalStorage(): void {
       if (Array.isArray(parsed)) {
         const clean = parsed.filter(isRealChannel);
         if (clean.length !== parsed.length) {
-          localStorage.setItem('amg_channels', JSON.stringify(clean));
+          safeSetItem('amg_channels', JSON.stringify(clean));
         }
         if (clean.length === 0) {
-          localStorage.setItem('amg_channels', JSON.stringify([]));
+          safeSetItem('amg_channels', JSON.stringify([]));
           const activeId = localStorage.getItem('amg_active_channel_id');
           if (
             activeId &&
@@ -331,7 +337,7 @@ export function purgeMockDataFromLocalStorage(): void {
         }
       }
     } else {
-      localStorage.setItem('amg_channels', JSON.stringify([]));
+      safeSetItem('amg_channels', JSON.stringify([]));
     }
 
     const rawVideos = localStorage.getItem('amg_videos');
@@ -340,7 +346,7 @@ export function purgeMockDataFromLocalStorage(): void {
       if (Array.isArray(parsed)) {
         const clean = parsed.filter(isRealVideo);
         if (clean.length !== parsed.length) {
-          localStorage.setItem('amg_videos', JSON.stringify(clean));
+          safeSetItem('amg_videos', JSON.stringify(clean));
         }
       }
     }
@@ -791,7 +797,7 @@ export const api = {
         if (Array.isArray(backendChannels) && backendChannels.length > 0) {
           const sanitized = backendChannels.map(sanitizeChannel);
           setStorageItem(KEYS.CHANNELS, sanitized);
-          localStorage.setItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(sanitized));
+          safeSetItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(sanitized));
           return sanitized;
         }
       }
@@ -966,12 +972,15 @@ export const api = {
         c.id !== `chan-${targetYoutubeId}`
     );
     setStorageItem(KEYS.CHANNELS, channels);
-    localStorage.setItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(channels));
+    safeSetItem(KEYS.PERSISTENT_CHANNELS, JSON.stringify(channels));
 
     // 3. Remove from GIS persistent list & connected channel
     removePersistedConnectedChannel(targetId);
     removePersistedConnectedChannel(targetYoutubeId);
     removePersistedConnectedChannel(id);
+    deleteCachedVideosFromIdb(targetId).catch(() => {});
+    deleteCachedVideosFromIdb(targetYoutubeId).catch(() => {});
+    deleteCachedVideosFromIdb(id).catch(() => {});
 
     // 4. Update permanent channel ids cache
     try {
@@ -979,7 +988,7 @@ export const api = {
       if (permRaw) {
         const permList: string[] = JSON.parse(permRaw);
         const filtered = permList.filter((cid) => cid !== targetId && cid !== targetYoutubeId && cid !== id);
-        localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(filtered));
+        safeSetItem('amg_permanent_channel_ids', JSON.stringify(filtered));
       }
     } catch {}
 
@@ -989,12 +998,12 @@ export const api = {
         setStorageItem(KEYS.VIDEOS, []);
         setStorageItem(KEYS.BATCHES, []);
         setStorageItem(KEYS.JOBS, []);
-        localStorage.setItem('amg_channels', JSON.stringify([]));
-        localStorage.setItem('amg_persistent_channels', JSON.stringify([]));
+        safeSetItem('amg_channels', JSON.stringify([]));
+        safeSetItem('amg_persistent_channels', JSON.stringify([]));
         localStorage.removeItem(KEYS.PERSISTENT_CHANNELS);
-        localStorage.setItem('amg_videos', JSON.stringify([]));
-        localStorage.setItem('amg_batches', JSON.stringify([]));
-        localStorage.setItem('amg_jobs', JSON.stringify([]));
+        safeSetItem('amg_videos', JSON.stringify([]));
+        safeSetItem('amg_batches', JSON.stringify([]));
+        safeSetItem('amg_jobs', JSON.stringify([]));
         localStorage.removeItem('amg_active_channel');
         localStorage.removeItem('amg_active_channel_id');
         localStorage.removeItem('amg_youtube_access_token');
@@ -1803,9 +1812,9 @@ export const api = {
 
       existingChan.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
       const serialized = JSON.stringify(existingChan);
-      localStorage.setItem(chanKey1, serialized);
-      localStorage.setItem(chanKey2, serialized);
-      localStorage.setItem(chanKey3, serialized);
+      safeSetItem(chanKey1, serialized);
+      safeSetItem(chanKey2, serialized);
+      safeSetItem(chanKey3, serialized);
     }
 
     return created;
@@ -1890,7 +1899,7 @@ export const api = {
                 const itemIdx = arr.findIndex((t: any) => t && t.id === id);
                 if (itemIdx >= 0) {
                   arr[itemIdx] = mergedTarget;
-                  localStorage.setItem(k, JSON.stringify(arr));
+                  safeSetItem(k, JSON.stringify(arr));
                 }
               }
             } catch {}
@@ -1910,7 +1919,7 @@ export const api = {
           } else {
             chanList.push(mergedTarget);
           }
-          localStorage.setItem(k, JSON.stringify(chanList));
+          safeSetItem(k, JSON.stringify(chanList));
         }
       }
     } catch {}
@@ -1945,7 +1954,7 @@ export const api = {
           try {
             const arr = JSON.parse(raw);
             if (Array.isArray(arr)) {
-              localStorage.setItem(k, JSON.stringify(arr.filter((t: any) => t && t.id !== id)));
+              safeSetItem(k, JSON.stringify(arr.filter((t: any) => t && t.id !== id)));
             }
           } catch {}
         }
@@ -2443,23 +2452,16 @@ export const api = {
 
   // Videos (Synchronized with Backend & Persistent Frontend State)
   getVideos: async (params?: { channelId?: string; status?: string; isManaged?: boolean; scope?: string }) => {
-    // 1. Instant check from channel-specific persistent key (Anti-Reset Serverless)
+    // 1. Instant check from channel-specific persistent IndexedDB cache ('amg_system_db' -> 'amg_cached_videos')
     let localRealVideos: ManagedVideo[] = [];
     const targetChanId = params?.channelId && params.channelId !== 'ALL' ? params.channelId : undefined;
     if (targetChanId) {
-      const cleanTargetId = targetChanId.replace(/^chan-/, '');
-      const raw1 = localStorage.getItem(`amg_real_videos_${targetChanId}`);
-      const raw2 = localStorage.getItem(`amg_real_videos_${cleanTargetId}`);
-      const raw3 = localStorage.getItem(`amg_real_videos_chan-${cleanTargetId}`);
-      const storedJson = raw1 || raw2 || raw3;
-      if (storedJson) {
-        try {
-          const parsed = JSON.parse(storedJson);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            localRealVideos = parsed.filter(isRealVideo);
-          }
-        } catch {}
-      }
+      try {
+        const idbCached = await getCachedVideosFromIdb(targetChanId);
+        if (Array.isArray(idbCached) && idbCached.length > 0) {
+          localRealVideos = idbCached.filter(isRealVideo);
+        }
+      } catch {}
     }
 
     try {
@@ -2503,9 +2505,8 @@ export const api = {
                   v.channelId === `chan-${cleanTargetId}`
               );
               if (chanVids.length > 0) {
-                localStorage.setItem(`amg_real_videos_${targetChanId}`, JSON.stringify(chanVids));
-                localStorage.setItem(`amg_real_videos_${cleanTargetId}`, JSON.stringify(chanVids));
-                localStorage.setItem(`amg_real_videos_chan-${cleanTargetId}`, JSON.stringify(chanVids));
+                saveCachedVideosToIdb(targetChanId, chanVids).catch(() => {});
+                saveCachedVideosToIdb(cleanTargetId, chanVids).catch(() => {});
               }
             }
             let list = clean;
@@ -2826,17 +2827,12 @@ export const api = {
 
     const cleanChanId = (channel.youtubeChannelId || channel.id).replace(/^chan-/, '');
     if (channelVideos.length === 0) {
-      const rawCached = localStorage.getItem(`amg_real_videos_${channel.id}`) ||
-        localStorage.getItem(`amg_real_videos_${cleanChanId}`) ||
-        localStorage.getItem(`amg_real_videos_chan-${cleanChanId}`);
-      if (rawCached) {
-        try {
-          const parsed = JSON.parse(rawCached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            channelVideos = parsed.filter(isRealVideo);
-          }
-        } catch {}
-      }
+      try {
+        const idbCached = await getCachedVideosFromIdb(channel.id);
+        if (Array.isArray(idbCached) && idbCached.length > 0) {
+          channelVideos = idbCached.filter(isRealVideo);
+        }
+      } catch {}
     }
 
     if (channelVideos.length === 0) {
@@ -3337,9 +3333,8 @@ export const api = {
                   v.channelId === `chan-${cleanId}`
               );
               if (chanVids.length > 0) {
-                localStorage.setItem(`amg_real_videos_${targetChanId}`, JSON.stringify(chanVids));
-                localStorage.setItem(`amg_real_videos_${cleanId}`, JSON.stringify(chanVids));
-                localStorage.setItem(`amg_real_videos_chan-${cleanId}`, JSON.stringify(chanVids));
+                saveCachedVideosToIdb(targetChanId, chanVids).catch(() => {});
+                saveCachedVideosToIdb(cleanId, chanVids).catch(() => {});
               }
 
               // Update anchor channel di amg_channels

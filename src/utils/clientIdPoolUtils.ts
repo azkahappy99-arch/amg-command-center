@@ -1,4 +1,5 @@
 import { ClientIdSlot } from '../types/index.ts';
+import { safeSetItem } from './videoStorage.ts';
 
 const CLIENT_ID_POOL_KEY = 'amg_client_id_pool';
 
@@ -27,9 +28,9 @@ export function getClientIdPool(): ClientIdSlot[] {
  * Menyimpan seluruh Client ID Pool ke localStorage
  */
 export function saveClientIdPool(slots: ClientIdSlot[]): void {
-  if (typeof window === 'undefined' || !window.localStorage) return;
+  if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(CLIENT_ID_POOL_KEY, JSON.stringify(slots));
+    safeSetItem(CLIENT_ID_POOL_KEY, JSON.stringify(slots));
     window.dispatchEvent(new CustomEvent('amg_client_id_pool_updated', { detail: { count: slots.length } }));
   } catch (err) {
     console.warn('[ClientIdPool] Gagal menyimpan client id pool:', err);

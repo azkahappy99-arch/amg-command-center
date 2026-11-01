@@ -1,4 +1,5 @@
 import { Channel, DayScheduleConfig, ScheduleTimeMode } from '../types/index.ts';
+import { safeSetItem } from './videoStorage.ts';
 
 export type { DayScheduleConfig, ScheduleTimeMode };
 
@@ -126,10 +127,10 @@ export function saveChannelDaySchedule(
 
   try {
     const configStr = JSON.stringify(config);
-    localStorage.setItem(`amg_day_schedule_${channelId}`, configStr);
-    localStorage.setItem(`amg_day_schedule_${cleanId}`, configStr);
-    localStorage.setItem(`amg_day_schedule_chan-${cleanId}`, configStr);
-    localStorage.setItem(`amg_day_schedule_mode_${cleanId}`, mode);
+    safeSetItem(`amg_day_schedule_${channelId}`, configStr);
+    safeSetItem(`amg_day_schedule_${cleanId}`, configStr);
+    safeSetItem(`amg_day_schedule_chan-${cleanId}`, configStr);
+    safeSetItem(`amg_day_schedule_mode_${cleanId}`, mode);
 
     // Update juga di amg_persistent_channels dan amg_channels
     const keys = ['amg_persistent_channels', 'amg_channels'];
@@ -163,7 +164,7 @@ export function saveChannelDaySchedule(
                 customWeekly[idxDay] = config[key];
               });
               channels[idx].customWeeklySchedule = customWeekly;
-              localStorage.setItem(key, JSON.stringify(channels));
+              safeSetItem(key, JSON.stringify(channels));
             }
           }
         } catch {}

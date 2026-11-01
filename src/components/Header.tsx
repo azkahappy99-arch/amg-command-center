@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { Menu, RefreshCw, Bell, Shield, Radio, CheckCircle, AlertCircle, Crown, User, LogIn, Tv } from 'lucide-react';
 import { Channel } from '../types/index.ts';
 import { UserSessionData } from './AuthModal.tsx';
+import { safeSetItem } from '../utils/videoStorage.ts';
 
 interface HeaderProps {
   onToggleMobile: () => void;
@@ -120,8 +121,8 @@ export const Header: React.FC<HeaderProps> = ({
               value={effectiveSelectedId}
               onChange={(e) => {
                 const val = e.target.value;
-                localStorage.setItem('amg_active_channel_id', val);
-                localStorage.setItem('amg_active_channel', val);
+                safeSetItem('amg_active_channel_id', val);
+                safeSetItem('amg_active_channel', val);
                 onSelectChannel(val);
               }}
               className="w-full min-w-0 bg-neutral-900 border border-neutral-800 text-neutral-100 text-xs font-semibold rounded-lg px-2 sm:px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-red-500 hover:border-neutral-700 cursor-pointer truncate"

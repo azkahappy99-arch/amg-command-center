@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Film,
   Search,
@@ -22,6 +22,7 @@ import {
 import { ManagedVideo, Channel, VideoManagementStatus, ManagementScope } from '../types/index.ts';
 import { api } from '../services/api.ts';
 import { NicheBadge, NICHE_PRESETS } from '../utils/nicheCategories';
+import { getCachedVideosFromIdb } from '../utils/videoStorage.ts';
 
 interface VideosViewProps {
   videos: ManagedVideo[];
@@ -121,28 +122,29 @@ export const VideosView: React.FC<VideosViewProps> = ({
     v.managementStatus !== 'COMPLETED' &&
     v.managementScope !== 'EXCLUDED';
 
-  // Persistent fallback for real videos per channel (Anti-Reset Serverless)
+  // Persistent fallback for real videos per channel from IndexedDB ('amg_system_db')
+  const [idbVideos, setIdbVideos] = useState<ManagedVideo[]>([]);
+  useEffect(() => {
+    let isSubscribed = true;
+    if (selectedChannelId && selectedChannelId !== 'ALL') {
+      getCachedVideosFromIdb(selectedChannelId).then((cached) => {
+        if (isSubscribed && Array.isArray(cached) && cached.length > 0) {
+          setIdbVideos(cached);
+        }
+      }).catch(() => {});
+    } else {
+      setIdbVideos([]);
+    }
+    return () => {
+      isSubscribed = false;
+    };
+  }, [selectedChannelId]);
+
   const effectiveVideos = useMemo(() => {
     if (videos && videos.length > 0) return videos;
-    if (selectedChannelId && selectedChannelId !== 'ALL') {
-      const cleanId = selectedChannelId.replace(/^chan-/, '');
-      const raw = localStorage.getItem(`amg_real_videos_${selectedChannelId}`) || localStorage.getItem(`amg_real_videos_${cleanId}`);
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        } catch {}
-      }
-    }
-    const rawAll = localStorage.getItem('amg_videos');
-    if (rawAll) {
-      try {
-        const parsed = JSON.parse(rawAll);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch {}
-    }
+    if (idbVideos && idbVideos.length > 0) return idbVideos;
     return videos;
-  }, [videos, selectedChannelId]);
+  }, [videos, idbVideos]);
 
   // Scope statistics across current channel or all channels
   const channelVideos =

@@ -63,6 +63,11 @@ import {
   getChannelThumbnailsFromIdb,
   hydrateThumbnailsWithPayloads,
 } from './utils/thumbnailStorage.ts';
+import {
+  safeSetItem,
+  saveCachedVideosToIdb,
+  getCachedVideosFromIdb,
+} from './utils/videoStorage.ts';
 
 // Run immediate purge check of any leftover mock or test IDs
 if (typeof window !== 'undefined') {
@@ -337,22 +342,16 @@ export default function App() {
   const handleSelectChannel = (chanId: string) => {
     setSelectedChannelId(chanId);
     if (chanId) {
-      localStorage.setItem('amg_active_channel_id', chanId);
-      localStorage.setItem('amg_active_channel', chanId);
-      const cleanId = chanId.replace(/^chan-/, '');
-      const raw =
-        localStorage.getItem(`amg_real_videos_${chanId}`) ||
-        localStorage.getItem(`amg_real_videos_${cleanId}`) ||
-        localStorage.getItem(`amg_real_videos_chan-${cleanId}`);
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const clean = parsed.filter(isRealVideo);
-            if (clean.length > 0) setVideos(clean);
-          }
-        } catch {}
-      }
+      safeSetItem('amg_active_channel_id', chanId);
+      safeSetItem('amg_active_channel', chanId);
+
+      // Baca cache video riil langsung dari IndexedDB 'amg_system_db' (DILARANG baca localStorage payload)
+      getCachedVideosFromIdb(chanId).then((cached) => {
+        if (Array.isArray(cached) && cached.length > 0) {
+          const clean = cached.filter(isRealVideo);
+          if (clean.length > 0) setVideos(clean);
+        }
+      }).catch(() => {});
 
       // Otomatis sinkronisasi video dari YouTube API untuk channel yang dipilih
       const token = localStorage.getItem('amg_youtube_access_token');
@@ -402,22 +401,18 @@ export default function App() {
 
         if (cleanChannels.length > 0) {
           setChannels(cleanChannels);
-          localStorage.setItem('amg_persistent_channels', JSON.stringify(cleanChannels));
-          localStorage.setItem('amg_channels', JSON.stringify(cleanChannels));
+          safeSetItem('amg_persistent_channels', JSON.stringify(cleanChannels));
+          safeSetItem('amg_channels', JSON.stringify(cleanChannels));
           if (!selectedChannelId || !cleanChannels.some((c: Channel) => c.id === selectedChannelId)) {
             const nextActive = cleanChannels[0].id;
             setSelectedChannelId(nextActive);
-            localStorage.setItem('amg_active_channel_id', nextActive);
-            localStorage.setItem('amg_active_channel', nextActive);
+            safeSetItem('amg_active_channel_id', nextActive);
+            safeSetItem('amg_active_channel', nextActive);
           }
 
           // Cache connected channel IDs in localStorage for client resilience
           const connectedReal = cleanChannels.filter((c: Channel) => !c.isSeeded && (c.status === 'CONNECTED' || c.status === 'Connected'));
-          try {
-            localStorage.setItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
-          } catch {
-            // ignore
-          }
+          safeSetItem('amg_permanent_channel_ids', JSON.stringify(connectedReal.map(c => c.youtubeChannelId)));
         }
       } else {
         // ANTI-OVERWRITE: Backend returned empty [] or error.
@@ -536,7 +531,7 @@ export default function App() {
               }
             }
             const merged = Array.from(videoMap.values());
-            localStorage.setItem('amg_videos', JSON.stringify(merged));
+            safeSetItem('amg_videos', JSON.stringify(merged));
             const targetChan = targetChanId || selectedChannelId || cleanChannels?.[0]?.id;
             if (targetChan) {
               const cleanChanId = targetChan.replace(/^chan-/, '');
@@ -547,9 +542,8 @@ export default function App() {
                 v.channelId === `chan-${cleanChanId}`
               );
               if (chanVids.length > 0) {
-                localStorage.setItem(`amg_real_videos_${targetChan}`, JSON.stringify(chanVids));
-                localStorage.setItem(`amg_real_videos_${cleanChanId}`, JSON.stringify(chanVids));
-                localStorage.setItem(`amg_real_videos_chan-${cleanChanId}`, JSON.stringify(chanVids));
+                saveCachedVideosToIdb(targetChan, chanVids).catch(() => {});
+                saveCachedVideosToIdb(cleanChanId, chanVids).catch(() => {});
               }
             }
             return merged;
@@ -589,7 +583,8 @@ export default function App() {
                       }
                     }
                     const merged = Array.from(videoMap.values());
-                    localStorage.setItem('amg_videos', JSON.stringify(merged));
+                    safeSetItem('amg_videos', JSON.stringify(merged));
+                    saveCachedVideosToIdb(activeChan, real).catch(() => {});
                     return merged;
                   });
                   setToastMessage({
@@ -676,7 +671,7 @@ export default function App() {
               contentProfileId: 'block-general',
               nicheCategory: 'General',
             });
-            localStorage.setItem('amg_channels', JSON.stringify(realChannels));
+            safeSetItem('amg_channels', JSON.stringify(realChannels));
             setChannels(realChannels);
           }
         }
@@ -688,8 +683,8 @@ export default function App() {
       } else if (realChannels.length > 0) {
         const firstId = realChannels[0].id;
         setSelectedChannelId(firstId);
-        localStorage.setItem('amg_active_channel_id', firstId);
-        localStorage.setItem('amg_active_channel', firstId);
+        safeSetItem('amg_active_channel_id', firstId);
+        safeSetItem('amg_active_channel', firstId);
       }
 
       const initialVids = getStoredVideos(initialActive);
@@ -787,11 +782,9 @@ export default function App() {
 
       for (const chan of channelsToSync) {
         // Store per-channel token isolated in localStorage
-        try {
-          const cleanId = chan.id.replace(/^chan-/, '');
-          localStorage.setItem(`amg_token_${cleanId}`, result.accessToken);
-          localStorage.setItem(`amg_expires_${cleanId}`, (Date.now() + 3600 * 1000).toString());
-        } catch {}
+        const cleanId = chan.id.replace(/^chan-/, '');
+        safeSetItem(`amg_token_${cleanId}`, result.accessToken);
+        safeSetItem(`amg_expires_${cleanId}`, (Date.now() + 3600 * 1000).toString());
 
         await api.gisSyncChannel({
           channelId: undefined, // Never pass existing channel ID to avoid replacing other channels!
@@ -865,12 +858,8 @@ export default function App() {
           }
         }
 
-        try {
-          localStorage.setItem('amg_persistent_channels', JSON.stringify(updated));
-          localStorage.setItem('amg_channels', JSON.stringify(updated));
-        } catch (e) {
-          console.error('Gagal simpan channels ke localStorage', e);
-        }
+        safeSetItem('amg_persistent_channels', JSON.stringify(updated));
+        safeSetItem('amg_channels', JSON.stringify(updated));
         return updated;
       });
 
@@ -878,10 +867,8 @@ export default function App() {
       if (activeChan) {
         const nextId = `chan-${activeChan.id}`;
         setSelectedChannelId(nextId);
-        try {
-          localStorage.setItem('amg_active_channel_id', nextId);
-          localStorage.setItem('amg_active_channel', nextId);
-        } catch {}
+        safeSetItem('amg_active_channel_id', nextId);
+        safeSetItem('amg_active_channel', nextId);
       }
 
       setToastMessage({

@@ -43,6 +43,7 @@ import { YouTubeOAuthModal } from './YouTubeOAuthModal.tsx';
 import { ScheduleConfigEditor } from './ScheduleConfigEditor.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
 import { ChannelEligibilityModal } from './ChannelEligibilityModal.tsx';
+import { safeSetItem } from '../utils/videoStorage.ts';
 import { NicheBadge, getNicheMeta, NICHE_PRESETS } from '../utils/nicheCategories';
 import { MonetizationBadge, formatIDR } from './MonetizationBadge';
 import { ScheduleBufferBadge } from './ScheduleBufferBadge';
@@ -273,8 +274,8 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
   }, [selectedChannelId, channels]);
 
   const handleSetActiveChannel = (chanId: string) => {
-    localStorage.setItem('amg_active_channel_id', chanId);
-    localStorage.setItem('amg_active_channel', chanId);
+    safeSetItem('amg_active_channel_id', chanId);
+    safeSetItem('amg_active_channel', chanId);
     if (onSelectChannel) {
       onSelectChannel(chanId);
     }
