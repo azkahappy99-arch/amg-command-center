@@ -6,9 +6,11 @@
  * OAuth tokens and active channel credentials reside.
  */
 
-import { Channel, ManagedVideo, MasterTitle, MasterThumbnail, AutomationBatch } from '../types/index.ts';
+import { Channel, ManagedVideo, MasterTitle, MasterThumbnail, AutomationBatch, DayScheduleConfig } from '../types/index.ts';
 import { getThumbnailDataById } from '../utils/thumbnailStorage.ts';
 import { requestGisAccessToken, GIS_CONFIG } from './youtubeGisAuth.ts';
+import { getChannelDaySchedule, generateSequentialSchedulesWithDayConfig } from '../utils/dayScheduleUtils.ts';
+import { formatWibDateTime } from '../utils/scheduleAndUnmanagedUtils.ts';
 
 export interface WorkerClientProgress {
   batchId: string;
@@ -54,6 +56,14 @@ class WorkerClientService {
 
   public getIsRunning(): boolean {
     return this.isRunning;
+  }
+
+  public shouldStopWorker(): boolean {
+    return this.shouldStop;
+  }
+
+  public resetStop(): void {
+    this.shouldStop = false;
   }
 
   public getCurrentProgress(): WorkerClientProgress | null {
@@ -188,39 +198,16 @@ class WorkerClientService {
   }
 
   /**
-   * Menghasilkan deretan slot tanggal jadwal berurutan bertahap +1 hari pada jam 16:00 WIB (09:00 UTC).
-   * Jadwal dimulai dari (Titik Acuan Terjauh + 1 Hari).
+   * Menghasilkan deretan slot tanggal jadwal berurutan bertahap +1 hari.
+   * Menggunakan konfigurasi jadwal harian channel (Senin - Minggu) dengan zona waktu Asia/Jakarta (WIB).
+   * Jadwal dimulai dari (Titik Acuan Terjauh + 1 Hari) atau Besok jika belum ada jadwal.
    */
-  public generateSequentialSchedules(count: number, anchorIsoDate: string | null): string[] {
-    const results: string[] = [];
-    let start: Date;
-
-    if (anchorIsoDate) {
-      const latestScheduledDate = new Date(anchorIsoDate);
-      if (!isNaN(latestScheduledDate.getTime())) {
-        // Mulai dari (latestScheduledDate + 1 Hari)
-        start = new Date(latestScheduledDate.getTime());
-        start.setUTCDate(start.getUTCDate() + 1);
-      } else {
-        start = new Date();
-        start.setUTCDate(start.getUTCDate() + 1);
-      }
-    } else {
-      // TIDAK ADA video terjadwal: Jadwalkan video pertama mulai BESOK (Hari Ini + 1 Hari) jam 16:00 WIB
-      start = new Date();
-      start.setUTCDate(start.getUTCDate() + 1);
-    }
-
-    for (let i = 0; i < count; i++) {
-      const current = new Date(start.getTime());
-      current.setUTCDate(current.getUTCDate() + i);
-
-      // 16:00 WIB = 09:00 UTC
-      current.setUTCHours(9, 0, 0, 0);
-      results.push(current.toISOString());
-    }
-
-    return results;
+  public generateSequentialSchedules(
+    count: number,
+    anchorIsoDate: string | null,
+    daySchedule?: DayScheduleConfig
+  ): string[] {
+    return generateSequentialSchedulesWithDayConfig(count, anchorIsoDate, daySchedule);
   }
 
   /**
@@ -370,7 +357,7 @@ class WorkerClientService {
     this.shouldStop = false;
 
     const pureChannelId = channel.youtubeChannelId || channel.id.replace(/^chan-/, '');
-    const batchSize = options.batchSize || 70;
+    const batchSize = options.batchSize || 90;
     const itemsToProcess = candidates.slice(0, batchSize);
     const totalCount = itemsToProcess.length;
 
@@ -405,8 +392,9 @@ class WorkerClientService {
       if (raw) localVideos = JSON.parse(raw);
     } catch {}
 
+    const channelDaySchedule = getChannelDaySchedule(channel);
     const anchorDate = this.getChannelVerifiedAnchor(pureChannelId, localVideos);
-    const calculatedSchedules = this.generateSequentialSchedules(totalCount, anchorDate);
+    const calculatedSchedules = this.generateSequentialSchedules(totalCount, anchorDate, channelDaySchedule);
 
     // Siapkan daftar judul & thumbnail yang siap dipakai
     const titleStrings: string[] = masterTitles
@@ -446,7 +434,7 @@ class WorkerClientService {
         completedCount,
         remainingCount: totalCount - completedCount,
         totalCount,
-        message: `[Worker Phase 3] Memproses ${i + 1}/${totalCount}: "${assignedTitle}"...`,
+        message: `[Worker Phase 3] Memproses ${i + 1} dari ${totalCount} video: "${assignedTitle}"... (Sisa Antrean: ${totalCount - completedCount} video)`,
       };
       this.currentProgress = currentProgress;
       options.onProgress?.(currentProgress);
@@ -521,7 +509,7 @@ class WorkerClientService {
         currentProgress.remainingCount = totalCount - completedCount;
         currentProgress.processingCount = 0;
         currentProgress.lastUpdatedVideo = updatedVideo;
-        currentProgress.message = `[Worker Phase 3] Selesai ${completedCount}/${totalCount}: Video "${assignedTitle}" dijadwalkan jam 16:00 WIB.`;
+        currentProgress.message = `[Worker Phase 3] Selesai ${completedCount}/${totalCount}: Video "${assignedTitle}" dijadwalkan (${formatWibDateTime(assignedSchedule)}).`;
         options.onProgress?.(currentProgress);
 
         this.syncQueueStateToStorage({

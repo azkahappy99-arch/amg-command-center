@@ -69,6 +69,10 @@ import {
   isRawStudioTitle,
 } from './candidateDetectionService.ts';
 import {
+  getChannelDaySchedule,
+  generateSequentialSchedulesWithDayConfig,
+} from '../utils/dayScheduleUtils.ts';
+import {
   safeLocalStorageSet,
   getChannelThumbnailsFromIdb,
   saveChannelThumbnailsToIdb,
@@ -2951,20 +2955,18 @@ export const api = {
       }
     }
 
-    // JIKA ADA video terjadwal: mulai dari (latestScheduledDate + 1 Hari) pada jam 16:00 WIB
-    // JIKA TIDAK ADA video terjadwal: mulai BESOK (Hari Ini + 1 Hari) pada jam 16:00 WIB
-    let startSlotDate: Date;
-    if (latestScheduledDate) {
-      startSlotDate = new Date(latestScheduledDate.getTime());
-      startSlotDate.setUTCDate(startSlotDate.getUTCDate() + 1);
-    } else {
-      startSlotDate = new Date();
-      startSlotDate.setUTCDate(startSlotDate.getUTCDate() + 1);
-    }
+    // Titik acuan jadwal dinamis dengan konfigurasi mingguan per hari (Senin-Minggu):
+    const channelDaySchedule = getChannelDaySchedule(channel);
+    const anchorIso = latestScheduledDate ? latestScheduledDate.toISOString() : null;
+    const generatedSlots = generateSequentialSchedulesWithDayConfig(
+      candidateVideos.length,
+      anchorIso,
+      channelDaySchedule
+    );
 
     // Map ALL candidate videos (without capping or slicing at 10)
-    // Jadwal video baru yang dieksekusi otomasi WAJIB dimulai dari (Titik Acuan Terjauh + 1 Hari) pada jam 16:00 WIB (Asia/Jakarta),
-    // berlanjut bertahap +1 hari untuk tiap video berikutnya secara urut tanpa tumpang tindih.
+    // Jadwal video baru yang dieksekusi otomasi WAJIB dimulai dari (Titik Acuan Terjauh + 1 Hari),
+    // berlanjut bertahap +1 hari untuk tiap video berikutnya dengan jam hari tersebut sesuai konfigurasi pengguna.
     const preview: AutomationPreviewItem[] = candidateVideos.map((v, i) => {
       const assignedT = titles.length > 0
         ? titles[i % titles.length].text
@@ -2974,11 +2976,11 @@ export const api = {
       const hasCustomMasterThumb = realCustomThumbnails.length > 0;
       const assignedThumb = hasCustomMasterThumb ? realCustomThumbnails[i % realCustomThumbnails.length].url : rawNativeThumb;
 
-      // Slot berurutan bertambah +1 hari pada jam 16:00 WIB (09:00 UTC)
-      const candSlotDate = new Date(startSlotDate.getTime());
-      candSlotDate.setUTCDate(startSlotDate.getUTCDate() + i);
-      candSlotDate.setUTCHours(9, 0, 0, 0); // 16:00 WIB
-      const publishDateStr = candSlotDate.toISOString().split('T')[0];
+      const slotIso = generatedSlots[i] || new Date().toISOString();
+      const slotDate = new Date(slotIso);
+      const publishDateStr = slotDate.toISOString().split('T')[0];
+      const timeParts = formatWibDateTime(slotIso).split(' ');
+      const timeStr = `${timeParts[1] || '16:00'} WIB`;
 
       return {
         sequence: i + 1,
@@ -2990,7 +2992,7 @@ export const api = {
         isCustomThumbnail: hasCustomMasterThumb,
         thumbnailLabel: hasCustomMasterThumb ? `Master Kustom TH${(i % realCustomThumbnails.length) + 1}` : 'Bawaan YouTube',
         publishDate: publishDateStr,
-        publishTime: '16:00 WIB',
+        publishTime: timeStr,
         targetChannelId: channel.id,
         targetChannelTitle: channel.title,
         contentProfileName: targetBlock.name,

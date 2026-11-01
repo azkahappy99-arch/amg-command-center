@@ -51,7 +51,7 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
     waitingQuotaBesokCount: 0,
     channelRemainingRawCount: 0,
     quotaUsed24h: 0,
-    quotaLimit: 70,
+    quotaLimit: 90,
     jobs: [],
   });
 
@@ -75,7 +75,7 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
           waitingQuotaBesokCount: res.waitingQuotaBesokCount ?? 0,
           channelRemainingRawCount: res.channelRemainingRawCount ?? 0,
           quotaUsed24h: res.quotaUsed24h ?? 0,
-          quotaLimit: res.quotaLimit ?? 70,
+          quotaLimit: res.quotaLimit ?? 90,
           jobs: res.jobs || [],
           isProcessing: res.isProcessing ?? false,
         });
@@ -128,7 +128,7 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
             <span className="truncate">Pemantau Antrean Worker Phase 3</span>
           </span>
           <span className="hidden sm:inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-neutral-800 text-neutral-300 border border-neutral-700 shrink-0">
-            Auto-Chaining (50/Kloter)
+            Auto-Chaining (90/Kloter)
           </span>
           <span className="hidden md:inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-neutral-800 text-neutral-300 border border-neutral-700 shrink-0">
             Anti-Spam Throttling (2-4s)
@@ -258,7 +258,7 @@ export const QueueMonitor: React.FC<QueueMonitorProps> = ({
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-500/80" />
               <span>
-                Antrean pekerja siaga. Pemrosesan kloter per 70 video & auto-chaining siap dieksekusi.
+                Antrean pekerja siaga. Pemrosesan kloter per 90 video & auto-chaining siap dieksekusi.
               </span>
             </div>
             <span className="text-[11px] font-mono text-neutral-500">0 tugas aktif</span>

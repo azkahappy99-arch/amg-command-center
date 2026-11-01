@@ -52,6 +52,18 @@ export type ScheduleMode = 'DAILY' | 'CUSTOM_DAILY_TIMES' | 'CUSTOM_INTERVAL' | 
 
 export type StartPolicy = 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE' | 'START_FROM_SPECIFIC_DATE';
 
+export interface DayScheduleConfig {
+  senin: string;   // format "HH:mm", misal "12:00"
+  selasa: string;  // misal "14:00"
+  rabu: string;    // misal "12:00"
+  kamis: string;   // misal "18:00"
+  jumat: string;   // misal "15:00"
+  sabtu: string;   // misal "10:00"
+  minggu: string;  // misal "19:00"
+}
+
+export type ScheduleTimeMode = 'SAME_ALL_DAYS' | 'DIFFERENT_PER_DAY';
+
 export interface ScheduleConfig {
   mode: ScheduleMode;
   videosPerDay: number;
@@ -60,6 +72,8 @@ export interface ScheduleConfig {
   startPolicy?: StartPolicy;
   intervalHours?: number; // Used when mode is CUSTOM_INTERVAL (e.g. 4)
   intervalStartTime?: string; // Used when mode is CUSTOM_INTERVAL (e.g. '08:00')
+  dayScheduleConfig?: DayScheduleConfig;
+  scheduleTimeMode?: ScheduleTimeMode;
   advancedConfig?: {
     activeDaysOfWeek?: number[]; // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
     blackoutDates?: string[]; // YYYY-MM-DD
@@ -115,6 +129,8 @@ export interface Channel {
   publishTime: string; // e.g. '16:00' or '08:00, 14:00, 20:00' (display)
   timezone: string; // e.g. 'Asia/Jakarta'
   scheduleConfig?: ScheduleConfig;
+  dayScheduleConfig?: DayScheduleConfig;
+  scheduleTimeMode?: ScheduleTimeMode;
   useProfileSchedule?: boolean; // If true, inherits from assigned ContentProfile scheduleConfig
   eligibilityWindowDays?: number; // Phase 2: default 7 days
   eligibleTitlePatterns?: string[]; // Phase 2: e.g. ['Salinan dari A', 'Copy of A']

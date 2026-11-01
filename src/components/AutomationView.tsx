@@ -22,6 +22,8 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
+  Clock,
+  Square,
 } from 'lucide-react';
 import { Channel, ContentProfile, MasterTitle, MasterThumbnail, AutomationBatch, AutomationPreviewItem, AutomationScopeSummary, ManagedVideo } from '../types/index.ts';
 import { api, isRealTitle } from '../services/api.ts';
@@ -30,8 +32,10 @@ import { workerClient } from '../services/workerClient.ts';
 import { Phase2AcceptanceModal } from './Phase2AcceptanceModal.tsx';
 import { CandidateDetectionModal } from './CandidateDetectionModal.tsx';
 import { ChannelEligibilityModal } from './ChannelEligibilityModal.tsx';
+import { WeeklyScheduleModal } from './WeeklyScheduleModal.tsx';
 import { QueueMonitor } from './QueueMonitor.tsx';
 import { NicheBadge } from '../utils/nicheCategories';
+import { getChannelDaySchedule } from '../utils/dayScheduleUtils.ts';
 
 interface AutomationViewProps {
   channels: Channel[];
@@ -64,10 +68,11 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [dryRunResult, setDryRunResult] = useState<AutomationBatch | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showWeeklyScheduleModal, setShowWeeklyScheduleModal] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [previewFilter, setPreviewFilter] = useState<'ALL' | 'INCLUDED' | 'UNCLASSIFIED' | 'EXCLUDED'>('ALL');
-  const BATCH_SIZE = 70;
-  const [pageSize, setPageSize] = useState<number>(BATCH_SIZE); // BATCH_SIZE (Kloter per 70) or 0 (Semua)
+  const BATCH_SIZE = 90;
+  const [pageSize, setPageSize] = useState<number>(BATCH_SIZE); // BATCH_SIZE (Kloter per 90) or 0 (Semua)
   const [currentBatchIndex, setCurrentBatchIndex] = useState<number>(1);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
@@ -280,15 +285,16 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const totalPages = pageSize > 0 ? Math.ceil(visiblePreviewItems.length / pageSize) : 1;
   const effectivePage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
 
-  // Semua video dalam kloter aktif (hingga 70 video sesuai kapasitas kloter)
+  // Semua video dalam kloter aktif (hingga 90 video sesuai kapasitas kloter)
   const currentKloterItems = pageSize > 0
     ? visiblePreviewItems.slice((effectivePage - 1) * pageSize, effectivePage * pageSize)
     : visiblePreviewItems;
 
-  // Pemotongan antrean video layak per kloter (tepat 70 video per kloter):
-  const currentBatchVideos = eligibleVideos.slice((currentBatchIndex - 1) * 70, currentBatchIndex * 70);
+  // Pemotongan antrean video layak per kloter (tepat 90 video per kloter):
+  const currentBatchVideos = eligibleVideos.slice((currentBatchIndex - 1) * BATCH_SIZE, currentBatchIndex * BATCH_SIZE);
   const sisaVideo = Math.max(0, eligibleVideos.length - (currentBatchIndex - 1) * BATCH_SIZE);
-  const jumlahVideoKloterN = currentBatchVideos.length;
+  const currentBatchTotal = currentBatchVideos.length;
+  const jumlahVideoKloterN = currentBatchTotal;
 
   // UI Ringkas: Secara default tampilkan hanya 10 video pertama, buka semua kloter jika diperluas (isTableExpanded)
   const displayPreviewItems = isTableExpanded
@@ -346,14 +352,18 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
     }
   };
 
+  const handleStopAutomation = () => {
+    workerClient.stopWorker();
+    setIsExecuting(false);
+    setExecutionMessage('Otomasi dihentikan oleh pengguna.');
+  };
+
   const handleStartAutomation = async () => {
     if (channelTitles.length === 0) {
       alert('Silakan masukkan Master Judul sebelum memulai otomasi');
       return;
     }
 
-    // Kunci Tunggal Antrean (Single Active Worker & Anti-Duplicate Batch):
-    // Jangan pernah membuat batch baru jika batch sebelumnya masih dalam status 'RUNNING'!
     if (workerClient.getIsRunning()) {
       setExecutionMessage(
         'Worker sedang aktif memproses antrean video secara serial. Tunggu hingga kloter saat ini selesai.'
@@ -378,8 +388,15 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
     setIsExecuting(true);
     setShowConfirmModal(false);
+    workerClient.resetStop();
 
-    try {
+    const runBatchChain = async (batchIdx: number) => {
+      if (workerClient.shouldStopWorker()) {
+        setIsExecuting(false);
+        setExecutionMessage('Otomasi dihentikan oleh pengguna.');
+        return;
+      }
+
       // 1. Ambil video kandidat dari storage lokal atau pratinjau (Salinan dari A / kandidat aktif)
       let candidateVideosToProcess: ManagedVideo[] = [];
       try {
@@ -445,15 +462,18 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         }));
       }
 
-      // Pemotongan antrean video layak per kloter (tepat 70 video per kloter):
+      // Pemotongan antrean video layak per kloter (tepat 90 video per kloter):
       const targetVideosForCurrentKloter = candidateVideosToProcess.slice(
-        (currentBatchIndex - 1) * BATCH_SIZE,
-        currentBatchIndex * BATCH_SIZE
+        (batchIdx - 1) * BATCH_SIZE,
+        batchIdx * BATCH_SIZE
       );
 
       if (targetVideosForCurrentKloter.length === 0) {
-        setExecutionMessage(`Semua video untuk Kloter ${currentBatchIndex} telah selesai diproses.`);
+        setExecutionMessage(`Semua video untuk antrean telah selesai diproses 100%!`);
         setIsExecuting(false);
+        if (pureChannelId || selectedChannelId) {
+          fetchPreview(pureChannelId || selectedChannelId);
+        }
         return;
       }
 
@@ -491,13 +511,12 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       ]);
 
       setExecutionMessage(
-        `[Worker Phase 3] Memulai pemrosesan Kloter ${currentBatchIndex} (${totalCount} video) langsung ke YouTube API...`
+        `[Worker Phase 3] Memulai Kloter ${batchIdx} (${totalCount} video) langsung ke YouTube API...`
       );
       onAutomationTriggered();
 
-      // Eksekusi Client-Side Serial Worker langsung ke YouTube Data API v3 (Direct API)
-      workerClient
-        .executeBatchSerial(
+      try {
+        const finishedBatch = await workerClient.executeBatchSerial(
           selectedChannel,
           targetVideosForCurrentKloter,
           channelTitles,
@@ -523,42 +542,56 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
             onVideoCompleted: () => {
               onAutomationTriggered();
             },
-            onBatchFinished: (finishedBatch) => {
-              setIsExecuting(false);
+            onBatchFinished: (batchResult) => {
               setBatches((prev) =>
-                prev.map((b) => (b.id === newRunningBatch.id ? finishedBatch : b))
+                prev.map((b) => (b.id === newRunningBatch.id ? batchResult : b))
               );
-              // Auto-Advance Kloter pada Tombol Merah Otomasi & Tabel Pratinjau
-              setCurrentBatchIndex((prev) => {
-                const nextIndex = prev + 1;
-                setCurrentPage(nextIndex);
-                return nextIndex;
-              });
-              setExecutionMessage(
-                `Kloter ${currentBatchIndex} selesai dieksekusi 100% (${finishedBatch.completedCount}/${finishedBatch.detectedCount} video)! Berpindah otomatis ke Kloter ${currentBatchIndex + 1}.`
-              );
-              onAutomationTriggered();
-              if (pureChannelId || selectedChannelId) {
-                fetchPreview(pureChannelId || selectedChannelId);
-              }
             },
             onError: (err) => {
-              setIsExecuting(false);
-              console.error('[AutomationView] Worker error:', err);
-              setExecutionMessage(`Peringatan antrean worker: ${err.message}`);
+              console.error('[AutomationView] Worker batch error:', err);
             },
           }
-        )
-        .catch((err) => {
+        );
+
+        onAutomationTriggered();
+        if (pureChannelId || selectedChannelId) {
+          fetchPreview(pureChannelId || selectedChannelId);
+        }
+
+        if (workerClient.shouldStopWorker()) {
           setIsExecuting(false);
-          console.error('[AutomationView] Client worker execution failed:', err);
-          setExecutionMessage(`Eksekusi antrean terhenti: ${err.message}`);
-        });
-    } catch (err: any) {
-      setIsExecuting(false);
-      console.error('[AutomationView] Setup error:', err);
-      setExecutionMessage(`Gagal memulai otomasi: ${err.message}`);
-    }
+          setExecutionMessage('Otomasi dihentikan oleh pengguna.');
+          return;
+        }
+
+        // FULL AUTO-CHAINING TANPA STOP:
+        // Cek apakah ada sisa video di kloter berikutnya:
+        const nextBatchIndex = batchIdx + 1;
+        const remainingVideos = candidateVideosToProcess.slice((nextBatchIndex - 1) * BATCH_SIZE);
+
+        if (remainingVideos.length > 0) {
+          setCurrentBatchIndex(nextBatchIndex);
+          setCurrentPage(nextBatchIndex);
+          setExecutionMessage(
+            `Kloter ${batchIdx} selesai 100% (${finishedBatch.completedCount}/${finishedBatch.detectedCount} video)! Melanjutkan otomatis tanpa henti ke Kloter ${nextBatchIndex} (${Math.min(remainingVideos.length, BATCH_SIZE)} video)...`
+          );
+          // Jeda singkat 1.5 detik antar-kloter lalu sambung otomatis tanpa henti
+          await new Promise((r) => setTimeout(r, 1500));
+          await runBatchChain(nextBatchIndex);
+        } else {
+          setIsExecuting(false);
+          setExecutionMessage(
+            `Semua Kloter Selesai 100%! Seluruh antrean video yang memenuhi syarat (${candidateVideosToProcess.length} video) telah berhasil dijadwalkan.`
+          );
+        }
+      } catch (err: any) {
+        setIsExecuting(false);
+        console.error('[AutomationView] Client worker execution failed:', err);
+        setExecutionMessage(`Eksekusi antrean terhenti: ${err.message}`);
+      }
+    };
+
+    runBatchChain(currentBatchIndex);
   };
 
   const handleEmergencyRollback = async (batchId: string) => {
@@ -901,10 +934,26 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               </div>
             </div>
 
-            <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80">
-              <div className="text-[10px] uppercase font-semibold text-zinc-500">Waktu Publikasi Harian</div>
+            <div className="bg-zinc-950/60 p-2.5 rounded-xl border border-zinc-800/80 flex flex-col justify-between">
+              <div className="text-[10px] uppercase font-semibold text-zinc-500 flex items-center justify-between">
+                <span>Jadwal Jam Tayang</span>
+                <button
+                  type="button"
+                  onClick={() => setShowWeeklyScheduleModal(true)}
+                  className="text-[10px] font-bold text-red-400 hover:text-red-300 underline cursor-pointer"
+                >
+                  Atur Jam
+                </button>
+              </div>
               <div className="text-xs font-mono font-bold text-zinc-200 mt-0.5 truncate">
-                {selectedChannel.scheduleConfig?.times?.join(', ') || selectedChannel.publishTime}
+                {(() => {
+                  const ds = getChannelDaySchedule(selectedChannel);
+                  const times = Object.values(ds);
+                  const allSame = times.every((t) => t === times[0]);
+                  return allSame
+                    ? `${times[0]} WIB (Semua Hari)`
+                    : `Sen: ${ds.senin} ... Min: ${ds.minggu}`;
+                })()}
               </div>
             </div>
 
@@ -1004,6 +1053,18 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               <span>{isDryRunning ? 'Mensimulasikan...' : 'Jalankan Dry Run'}</span>
             </button>
 
+            {isExecuting && (
+              <button
+                type="button"
+                onClick={handleStopAutomation}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-rose-400 border border-rose-500/40 text-xs font-bold transition active:scale-95 cursor-pointer"
+                title="Hentikan eksekusi otomasi"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Hentikan Otomasi</span>
+              </button>
+            )}
+
             <button
               onClick={() => {
                 if (channelTitles.length === 0) {
@@ -1012,12 +1073,21 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                 }
                 setShowConfirmModal(true);
               }}
-              disabled={sisaVideo === 0 || jumlahVideoKloterN === 0 || channelTitles.length === 0}
+              disabled={isExecuting || sisaVideo === 0 || jumlahVideoKloterN === 0 || channelTitles.length === 0}
               title={channelTitles.length === 0 ? "Silakan masukkan Master Judul sebelum memulai otomasi" : undefined}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold shadow-lg shadow-red-900/30 transition active:scale-95 cursor-pointer"
             >
-              <PlayCircle className="w-4 h-4" />
-              <span>Konfirmasi & Mulai Otomasi (Semua: {sisaVideo} Video) - Kloter {currentBatchIndex} ({jumlahVideoKloterN} Video)</span>
+              {isExecuting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Memproses Kloter {currentBatchIndex} ({jumlahVideoKloterN} Video)...</span>
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="w-4 h-4" />
+                  <span>Konfirmasi & Mulai Otomasi (Semua: {sisaVideo} Video) - Kloter {currentBatchIndex} ({jumlahVideoKloterN} Video)</span>
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1239,7 +1309,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     : 'text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                Kloter per 70
+                Kloter per 90
               </button>
               <button
                 type="button"
@@ -1607,6 +1677,19 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           onClose={() => setShowEligibilityModal(false)}
           channel={selectedChannel}
           onUpdated={() => {
+            fetchPreview(selectedChannelId);
+            onAutomationTriggered();
+          }}
+        />
+      )}
+
+      {showWeeklyScheduleModal && selectedChannel && (
+        <WeeklyScheduleModal
+          isOpen={showWeeklyScheduleModal}
+          onClose={() => setShowWeeklyScheduleModal(false)}
+          channelId={selectedChannel.id}
+          channelTitle={selectedChannel.title}
+          onScheduleSaved={() => {
             fetchPreview(selectedChannelId);
             onAutomationTriggered();
           }}

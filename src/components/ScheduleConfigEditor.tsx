@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Calendar, Globe, Plus, Trash2, CheckCircle2, AlertTriangle, ArrowRight, Zap, Info } from 'lucide-react';
-import { ScheduleConfig, ScheduleMode } from '../types/index.ts';
+import { Clock, Calendar, Globe, Plus, Trash2, CheckCircle2, AlertTriangle, ArrowRight, Zap, Info, Check } from 'lucide-react';
+import { ScheduleConfig, ScheduleMode, DayScheduleConfig, ScheduleTimeMode } from '../types/index.ts';
+import { DEFAULT_DAY_SCHEDULE } from '../utils/dayScheduleUtils.ts';
 
 interface ScheduleConfigEditorProps {
   value: ScheduleConfig;
@@ -62,6 +63,15 @@ export const ScheduleConfigEditor: React.FC<ScheduleConfigEditorProps> = ({
   const [intervalHours, setIntervalHours] = useState<number>(value.intervalHours || 4);
   const [intervalStartTime, setIntervalStartTime] = useState<string>(value.intervalStartTime || '08:00');
   const [activeDays, setActiveDays] = useState<number[]>(value.advancedConfig?.activeDaysOfWeek || [1, 2, 3, 4, 5, 6, 0]);
+  const [dayScheduleConfig, setDayScheduleConfig] = useState<DayScheduleConfig>(
+    value.dayScheduleConfig || { ...DEFAULT_DAY_SCHEDULE }
+  );
+  const [scheduleTimeMode, setScheduleTimeMode] = useState<ScheduleTimeMode>(
+    value.scheduleTimeMode || 'SAME_ALL_DAYS'
+  );
+  const [uniformTime, setUniformTime] = useState<string>(
+    value.dayScheduleConfig?.senin || value.times?.[0] || '16:00'
+  );
 
   // Keep state synchronized with prop changes
   useEffect(() => {
@@ -72,9 +82,13 @@ export const ScheduleConfigEditor: React.FC<ScheduleConfigEditorProps> = ({
     if (value.intervalHours) setIntervalHours(value.intervalHours);
     if (value.intervalStartTime) setIntervalStartTime(value.intervalStartTime);
     if (value.advancedConfig?.activeDaysOfWeek) setActiveDays(value.advancedConfig.activeDaysOfWeek);
+    if (value.dayScheduleConfig) setDayScheduleConfig(value.dayScheduleConfig);
+    if (value.scheduleTimeMode) setScheduleTimeMode(value.scheduleTimeMode);
   }, [value]);
 
   const emitChange = (updates: Partial<ScheduleConfig>) => {
+    const nextDaySchedule = updates.dayScheduleConfig !== undefined ? updates.dayScheduleConfig : dayScheduleConfig;
+    const nextTimeMode = updates.scheduleTimeMode !== undefined ? updates.scheduleTimeMode : scheduleTimeMode;
     const updated: ScheduleConfig = {
       mode: updates.mode !== undefined ? updates.mode : mode,
       videosPerDay: updates.videosPerDay !== undefined ? updates.videosPerDay : videosPerDay,
@@ -86,6 +100,8 @@ export const ScheduleConfigEditor: React.FC<ScheduleConfigEditorProps> = ({
       advancedConfig: {
         activeDaysOfWeek: activeDays,
       },
+      dayScheduleConfig: nextDaySchedule,
+      scheduleTimeMode: nextTimeMode,
     };
     onChange(updated);
   };
@@ -396,6 +412,184 @@ export const ScheduleConfigEditor: React.FC<ScheduleConfigEditorProps> = ({
               </div>
             </div>
           )}
+
+          {/* Konfigurasi Jadwal Mingguan Per Hari (Senin-Minggu) */}
+          <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-rose-400" />
+                  <span>Pengaturan Jam Tayang Fleksibel (Senin – Minggu)</span>
+                </h4>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Jam yang diatur menjadi acuan mutlak saat video dipublikasikan ke YouTube Data API.
+                </p>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">
+                WIB (Asia/Jakarta)
+              </span>
+            </div>
+
+            {/* Opsi 1 vs Opsi 2 Toggle */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setScheduleTimeMode('SAME_ALL_DAYS');
+                  const updated: DayScheduleConfig = {
+                    senin: uniformTime,
+                    selasa: uniformTime,
+                    rabu: uniformTime,
+                    kamis: uniformTime,
+                    jumat: uniformTime,
+                    sabtu: uniformTime,
+                    minggu: uniformTime,
+                  };
+                  setDayScheduleConfig(updated);
+                  emitChange({
+                    scheduleTimeMode: 'SAME_ALL_DAYS',
+                    dayScheduleConfig: updated,
+                    times: [uniformTime],
+                  });
+                }}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                  scheduleTimeMode === 'SAME_ALL_DAYS'
+                    ? 'bg-rose-950/30 border-rose-500/60 text-rose-200 ring-1 ring-rose-500/40'
+                    : 'bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold">Opsi 1: Jam Sama ke Semua Hari</span>
+                  {scheduleTimeMode === 'SAME_ALL_DAYS' && (
+                    <span className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] font-bold">
+                      ✓
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-1">
+                  1 input jam otomatis berlaku seragam untuk Senin hingga Minggu.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  setScheduleTimeMode('DIFFERENT_PER_DAY');
+                  emitChange({
+                    scheduleTimeMode: 'DIFFERENT_PER_DAY',
+                    dayScheduleConfig,
+                  });
+                }}
+                className={`p-3 rounded-xl border text-left transition cursor-pointer flex flex-col justify-between ${
+                  scheduleTimeMode === 'DIFFERENT_PER_DAY'
+                    ? 'bg-rose-950/30 border-rose-500/60 text-rose-200 ring-1 ring-rose-500/40'
+                    : 'bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold">Opsi 2: Atur Jam Berbeda Per Hari</span>
+                  {scheduleTimeMode === 'DIFFERENT_PER_DAY' && (
+                    <span className="w-4 h-4 rounded-full bg-rose-600 text-white flex items-center justify-center text-[10px] font-bold">
+                      ✓
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-1">
+                  Kustomisasi jam tayang bebas dan spesifik untuk tiap hari (Senin–Minggu).
+                </p>
+              </button>
+            </div>
+
+            {/* Inputs based on selected option */}
+            {scheduleTimeMode === 'SAME_ALL_DAYS' ? (
+              <div className="p-3.5 rounded-xl bg-zinc-950/70 border border-zinc-800/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-zinc-300">
+                    Jam Tayang Seragam (Senin – Minggu)
+                  </label>
+                  <span className="text-[10px] font-mono text-zinc-400">Semua Hari</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="time"
+                    disabled={disabled}
+                    value={uniformTime}
+                    onChange={(e) => {
+                      const newT = e.target.value;
+                      setUniformTime(newT);
+                      const updated: DayScheduleConfig = {
+                        senin: newT,
+                        selasa: newT,
+                        rabu: newT,
+                        kamis: newT,
+                        jumat: newT,
+                        sabtu: newT,
+                        minggu: newT,
+                      };
+                      setDayScheduleConfig(updated);
+                      emitChange({
+                        dayScheduleConfig: updated,
+                        scheduleTimeMode: 'SAME_ALL_DAYS',
+                        times: [newT],
+                      });
+                    }}
+                    className="bg-zinc-800 text-zinc-100 font-mono font-bold text-sm px-3 py-1.5 rounded-lg border border-zinc-700 focus:border-rose-500 focus:outline-none"
+                  />
+                  <span className="text-xs text-zinc-400">
+                    Berlaku seragam untuk seluruh tanggal tayang.
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-zinc-300">
+                  Input Jam Tayang Per Hari:
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
+                  {[
+                    { key: 'senin' as const, label: 'Senin', badge: 'Sen' },
+                    { key: 'selasa' as const, label: 'Selasa', badge: 'Sel' },
+                    { key: 'rabu' as const, label: 'Rabu', badge: 'Rab' },
+                    { key: 'kamis' as const, label: 'Kamis', badge: 'Kam' },
+                    { key: 'jumat' as const, label: 'Jumat', badge: 'Jum' },
+                    { key: 'sabtu' as const, label: 'Sabtu', badge: 'Sab' },
+                    { key: 'minggu' as const, label: 'Minggu', badge: 'Min' },
+                  ].map((day) => (
+                    <div
+                      key={day.key}
+                      className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                          {day.badge}
+                        </span>
+                        <span className="text-xs font-medium text-zinc-200">{day.label}</span>
+                      </div>
+                      <input
+                        type="time"
+                        disabled={disabled}
+                        value={dayScheduleConfig[day.key] || '16:00'}
+                        onChange={(e) => {
+                          const updated = {
+                            ...dayScheduleConfig,
+                            [day.key]: e.target.value,
+                          };
+                          setDayScheduleConfig(updated);
+                          emitChange({
+                            dayScheduleConfig: updated,
+                            scheduleTimeMode: 'DIFFERENT_PER_DAY',
+                          });
+                        }}
+                        className="bg-zinc-800 text-zinc-100 font-mono text-xs px-2 py-1 rounded border border-zinc-700 focus:border-rose-500 focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Explicit Daily Publish Times List */}
           {mode !== 'CUSTOM_INTERVAL' && (
