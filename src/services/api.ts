@@ -100,11 +100,13 @@ function getStorageItem<T>(key: string, defaultVal: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) {
-      // First time initialization: persist the default value to localStorage
-      localStorage.setItem(key, JSON.stringify(defaultVal));
       return defaultVal;
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(defaultVal) && !Array.isArray(parsed)) {
+      return defaultVal;
+    }
+    return parsed;
   } catch (err) {
     console.warn(`[LocalStorage] Error reading "${key}":`, err);
     return defaultVal;

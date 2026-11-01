@@ -85,45 +85,64 @@ function getStoredActiveChannelId(): string {
 }
 
 function getStoredChannels(): Channel[] {
+  let savedChannels: Channel[] = [];
+  try {
+    const raw = localStorage.getItem('amg_persistent_channels');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        savedChannels = parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Gagal parse channels', e);
+  }
+
   try {
     const unlinkedRaw = localStorage.getItem('amg_unlinked_channel_ids');
-    const unlinkedIds: string[] = unlinkedRaw ? JSON.parse(unlinkedRaw) : [];
+    let unlinkedIds: string[] = [];
+    if (unlinkedRaw) {
+      try {
+        const parsed = JSON.parse(unlinkedRaw);
+        if (Array.isArray(parsed)) unlinkedIds = parsed;
+      } catch {}
+    }
     const isUnlinked = (id?: string) => (id ? unlinkedIds.includes(id) : false);
 
     let clean: Channel[] = [];
-    const persistentRaw = localStorage.getItem('amg_persistent_channels');
-    if (persistentRaw) {
-      try {
-        const parsed = JSON.parse(persistentRaw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          clean = parsed
-            .filter(
-              (c: Channel) =>
-                isRealChannel(c) &&
-                !isUnlinked(c.id) &&
-                !isUnlinked(c.youtubeChannelId) &&
-                !isUnlinked(`chan-${c.youtubeChannelId}`)
-            )
-            .map(sanitizeChannel);
-        }
-      } catch {}
+    if (savedChannels.length > 0) {
+      clean = savedChannels
+        .filter(
+          (c: Channel) =>
+            c &&
+            isRealChannel(c) &&
+            !isUnlinked(c.id) &&
+            !isUnlinked(c.youtubeChannelId) &&
+            !isUnlinked(`chan-${c.youtubeChannelId}`)
+        )
+        .map(sanitizeChannel);
+      if (clean.length > 0) return clean;
     }
 
-    if (clean.length === 0) {
-      const storedChannelsRaw = localStorage.getItem('amg_channels');
-      if (storedChannelsRaw) {
+    const storedChannelsRaw = localStorage.getItem('amg_channels');
+    if (storedChannelsRaw) {
+      try {
         const parsed = JSON.parse(storedChannelsRaw);
         if (Array.isArray(parsed) && parsed.length > 0) {
           clean = parsed
             .filter(
               (c: Channel) =>
+                c &&
                 isRealChannel(c) &&
                 !isUnlinked(c.id) &&
                 !isUnlinked(c.youtubeChannelId) &&
                 !isUnlinked(`chan-${c.youtubeChannelId}`)
             )
             .map(sanitizeChannel);
+          if (clean.length > 0) return clean;
         }
+      } catch (e) {
+        console.error('Gagal parse amg_channels', e);
       }
     }
 
@@ -178,20 +197,23 @@ function getStoredChannels(): Channel[] {
             }
           }
         }
-      } catch {}
+      } catch (e) {
+        console.error('Gagal parse amg_persistent_channels_list', e);
+      }
     }
 
     return clean;
   } catch (e) {
-    console.warn('getStoredChannels error:', e);
+    console.error('getStoredChannels error:', e);
   }
   return [];
 }
 
 function getStoredVideos(activeChanId?: string): ManagedVideo[] {
+  let savedVideos: ManagedVideo[] = [];
   try {
     const validChans = getStoredChannels();
-    if (validChans.length === 0) {
+    if (!Array.isArray(validChans) || validChans.length === 0) {
       return [];
     }
     const active = activeChanId || getStoredActiveChannelId();
@@ -202,25 +224,33 @@ function getStoredVideos(activeChanId?: string): ManagedVideo[] {
       const raw3 = localStorage.getItem(`amg_real_videos_chan-${cleanId}`);
       const raw = raw1 || raw2 || raw3;
       if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const clean = parsed.filter(isRealVideo);
-          if (clean.length > 0) return clean;
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const clean = parsed.filter(isRealVideo);
+            if (clean.length > 0) return clean;
+          }
+        } catch (e) {
+          console.error('Gagal parse active channel real videos', e);
         }
       }
     }
     const rawAll = localStorage.getItem('amg_videos');
     if (rawAll) {
-      const parsed = JSON.parse(rawAll);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        const clean = parsed.filter(isRealVideo);
-        if (clean.length > 0) return clean;
+      try {
+        const parsed = JSON.parse(rawAll);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const clean = parsed.filter(isRealVideo);
+          if (clean.length > 0) return clean;
+        }
+      } catch (e) {
+        console.error('Gagal parse amg_videos', e);
       }
     }
   } catch (e) {
     console.warn('getStoredVideos error:', e);
   }
-  return [];
+  return savedVideos;
 }
 
 export default function App() {
@@ -739,6 +769,13 @@ export default function App() {
         result.allChannels && result.allChannels.length > 0 ? result.allChannels : [result.channel];
 
       for (const chan of channelsToSync) {
+        // Store per-channel token isolated in localStorage
+        try {
+          const cleanId = chan.id.replace(/^chan-/, '');
+          localStorage.setItem(`amg_token_${cleanId}`, result.accessToken);
+          localStorage.setItem(`amg_expires_${cleanId}`, (Date.now() + 3600 * 1000).toString());
+        } catch {}
+
         await api.gisSyncChannel({
           channelId: undefined, // Never pass existing channel ID to avoid replacing other channels!
           accessToken: result.accessToken,
@@ -748,55 +785,75 @@ export default function App() {
         await api.syncChannel(chan.id).catch(() => {});
       }
 
-      setChannels((prev) => {
-        let updated = [...prev];
+      setChannels((prevChannels) => {
+        const current = Array.isArray(prevChannels) ? prevChannels : [];
+        let updated = [...current];
+
         for (const chan of channelsToSync) {
           const chanId = `chan-${chan.id}`;
-          if (!updated.some((c) => c.id === chanId || c.youtubeChannelId === chan.id || c.id === chan.id)) {
-            const newChan = sanitizeChannel({
-              id: chanId,
-              youtubeChannelId: chan.id,
-              title: chan.title || 'Channel YouTube Terhubung',
-              customUrl: chan.customUrl || `@${chan.id}`,
-              thumbnailUrl: chan.thumbnailUrl || '',
-              status: 'CONNECTED',
-              monetizationStatus: 'NOT_MONETIZED',
-              watchHours: 0,
-              revenue: { adSenseReguler: 0, liveStream: 0, ytShopping: 0, channelMemberships: 0, totalChannelRevenue: 0 },
-              nicheCategory: 'General',
-              nicheBadge: 'cyan',
-              publishFrequency: '1/day',
-              publishTime: '16:00',
+          const existingIdx = updated.findIndex(
+            (c) => c.id === chanId || c.youtubeChannelId === chan.id || c.id === chan.id
+          );
+
+          const newChanData = sanitizeChannel({
+            id: chanId,
+            youtubeChannelId: chan.id,
+            title: chan.title || 'Channel YouTube Terhubung',
+            customUrl: chan.customUrl || `@${chan.id}`,
+            thumbnailUrl: chan.thumbnailUrl || '',
+            status: 'CONNECTED',
+            monetizationStatus: 'NOT_MONETIZED',
+            watchHours: 0,
+            revenue: { adSenseReguler: 0, liveStream: 0, ytShopping: 0, channelMemberships: 0, totalChannelRevenue: 0 },
+            nicheCategory: 'General',
+            nicheBadge: 'cyan',
+            publishFrequency: '1/day',
+            publishTime: '16:00',
+            timezone: 'Asia/Jakarta',
+            useProfileSchedule: false,
+            scheduleConfig: {
+              mode: 'DAILY',
+              videosPerDay: 1,
+              times: ['16:00'],
               timezone: 'Asia/Jakarta',
-              useProfileSchedule: false,
-              scheduleConfig: {
-                mode: 'DAILY',
-                videosPerDay: 1,
-                times: ['16:00'],
-                timezone: 'Asia/Jakarta',
-                startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
-              },
-              eligibilityWindowDays: 7,
-              eligibleTitlePatterns: [],
-              autoEnroll: false,
-              subscriberCount: chan.subscriberCount || 0,
-              videoCount: chan.videoCount || 0,
-              unmanagedVideoCount: 0,
-              hasOAuthConfigured: true,
-              isSeeded: false,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              connectedAt: new Date().toISOString(),
-              lastSyncAt: new Date().toISOString(),
-              scheduleBufferDays: 7,
-              scheduleStockCount: 5,
-              scheduleAlertStatus: 'SAFE',
-            });
-            updated.push(newChan);
+              startPolicy: 'CONTINUE_FROM_LATEST_YOUTUBE_SCHEDULE',
+            },
+            eligibilityWindowDays: 7,
+            eligibleTitlePatterns: [],
+            autoEnroll: false,
+            subscriberCount: chan.subscriberCount || 0,
+            videoCount: chan.videoCount || 0,
+            unmanagedVideoCount: 0,
+            hasOAuthConfigured: true,
+            isSeeded: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            connectedAt: new Date().toISOString(),
+            lastSyncAt: new Date().toISOString(),
+            scheduleBufferDays: 7,
+            scheduleStockCount: 5,
+            scheduleAlertStatus: 'SAFE',
+          });
+
+          if (existingIdx >= 0) {
+            // Update existing channel without duplicating
+            updated[existingIdx] = {
+              ...updated[existingIdx],
+              ...newChanData,
+              connectedAt: updated[existingIdx].connectedAt || newChanData.connectedAt,
+            };
+          } else {
+            // Append new channel without overwriting prior channels
+            updated.push(newChanData);
           }
         }
-        localStorage.setItem('amg_persistent_channels', JSON.stringify(updated));
-        localStorage.setItem('amg_channels', JSON.stringify(updated));
+
+        try {
+          localStorage.setItem('amg_persistent_channels', JSON.stringify(updated));
+          localStorage.setItem('amg_channels', JSON.stringify(updated));
+        } catch (e) {
+          console.error('Gagal simpan channels ke localStorage', e);
+        }
         return updated;
       });
 
@@ -804,8 +861,10 @@ export default function App() {
       if (activeChan) {
         const nextId = `chan-${activeChan.id}`;
         setSelectedChannelId(nextId);
-        localStorage.setItem('amg_active_channel_id', nextId);
-        localStorage.setItem('amg_active_channel', nextId);
+        try {
+          localStorage.setItem('amg_active_channel_id', nextId);
+          localStorage.setItem('amg_active_channel', nextId);
+        } catch {}
       }
 
       setToastMessage({

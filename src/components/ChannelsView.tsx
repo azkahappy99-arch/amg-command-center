@@ -118,6 +118,7 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [selectedChannelFilter, setSelectedChannelFilter] = useState<string>('ALL');
   const [isAccordionExpanded, setIsAccordionExpanded] = useState<boolean>(false);
   const [selectedChannelForOAuth, setSelectedChannelForOAuth] = useState<Channel | null>(null);
   const [loadedVideos, setLoadedVideos] = useState<ManagedVideo[]>(() => {
@@ -286,12 +287,14 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
     }
   };
 
-  // Filter channels by query, status, and niche tab with real-time multi-attribute matching
+  // Filter channels by query, status, channel selector, and niche tab with real-time multi-attribute matching
   const filteredChannels = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const cleanQ = q.startsWith('@') ? q.slice(1) : q;
+    const safeChannels = Array.isArray(channels) ? channels : [];
 
-    return channels.filter((c) => {
+    return safeChannels.filter((c) => {
+      if (!c) return false;
       const title = (c.title || '').toLowerCase();
       const ytId = (c.youtubeChannelId || '').toLowerCase();
       const rawId = (c.id || '').toLowerCase();
@@ -309,9 +312,14 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
 
       const matchesStatus = statusFilter === 'ALL' || c.status === statusFilter;
       const matchesTab = currentActiveTab.matcher(c.nicheCategory || 'General');
-      return matchesSearch && matchesStatus && matchesTab;
+      const matchesChannelSelect =
+        selectedChannelFilter === 'ALL' ||
+        c.id === selectedChannelFilter ||
+        c.youtubeChannelId === selectedChannelFilter;
+
+      return matchesSearch && matchesStatus && matchesTab && matchesChannelSelect;
     });
-  }, [channels, searchQuery, statusFilter, currentActiveTab]);
+  }, [channels, searchQuery, statusFilter, currentActiveTab, selectedChannelFilter]);
 
   const { primaryChannel, otherChannels } = useMemo(() => {
     if (filteredChannels.length === 0) {
@@ -1352,6 +1360,32 @@ export const ChannelsView: React.FC<ChannelsViewProps> = ({
             </button>
           )}
         </div>
+
+        {/* Channel Selector Dropdown */}
+        {channels && channels.length > 0 && (
+          <div className="flex items-center gap-1 shrink-0">
+            <Tv className="w-3.5 h-3.5 text-emerald-400 hidden sm:block" />
+            <select
+              value={selectedChannelFilter}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedChannelFilter(val);
+                if (val !== 'ALL') {
+                  handleSetActiveChannel(val);
+                }
+              }}
+              className="px-2.5 py-1.5 rounded-xl bg-neutral-900 border border-emerald-800/70 text-emerald-300 font-semibold text-xs focus:ring-1 focus:ring-emerald-500 focus:outline-none cursor-pointer max-w-[150px] sm:max-w-[220px] truncate shadow-sm"
+              title="Pilih Channel Terhubung / Filter Tampilan"
+            >
+              <option value="ALL">Semua Channel ({channels.length})</option>
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.title} ({c.customUrl || c.youtubeChannelId})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="flex items-center gap-1 shrink-0">
           <Filter className="w-3.5 h-3.5 text-neutral-500 hidden sm:block" />
