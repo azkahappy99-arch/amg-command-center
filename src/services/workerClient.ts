@@ -53,6 +53,7 @@ export function dataUrlToBlob(dataUrl: string): Blob {
 class WorkerClientService {
   private isRunning: boolean = false;
   private shouldStop: boolean = false;
+  private stoppedByUser: boolean = false;
   private currentProgress: WorkerClientProgress | null = null;
 
   public getIsRunning(): boolean {
@@ -60,11 +61,16 @@ class WorkerClientService {
   }
 
   public shouldStopWorker(): boolean {
-    return this.shouldStop;
+    return this.shouldStop && this.stoppedByUser;
+  }
+
+  public isStoppedByUser(): boolean {
+    return this.stoppedByUser;
   }
 
   public resetStop(): void {
     this.shouldStop = false;
+    this.stoppedByUser = false;
   }
 
   public getCurrentProgress(): WorkerClientProgress | null {
@@ -73,7 +79,9 @@ class WorkerClientService {
 
   public stopWorker(): void {
     this.shouldStop = true;
+    this.stoppedByUser = true;
     this.isRunning = false;
+    console.log('[WorkerClient] Pengguna secara sengaja menekan tombol stop.');
   }
 
   /**
@@ -282,7 +290,7 @@ class WorkerClientService {
     videoId: string,
     thumbnailBlob: Blob,
     accessToken: string
-  ): Promise<{ success: boolean; data?: any; error?: string }> {
+  ): Promise<{ success: boolean; data?: any; error?: string; status?: number; isUploadLimitExceeded?: boolean }> {
     const cleanId = videoId.replace(/^yt-vid-|^yt-/, '');
     const uploadUrl = `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${cleanId}`;
     const standardUrl = `https://www.googleapis.com/youtube/v3/thumbnails/set?videoId=${cleanId}`;
@@ -314,7 +322,7 @@ class WorkerClientService {
 
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
-        return { success: true, data };
+        return { success: true, data, status: res.status };
       }
 
       // Fallback ke standard endpoint jika upload endpoint 404/menolak
@@ -329,14 +337,30 @@ class WorkerClientService {
         });
         if (fallbackRes.ok) {
           const fbData = await fallbackRes.json().catch(() => ({}));
-          return { success: true, data: fbData };
+          return { success: true, data: fbData, status: fallbackRes.status };
         }
       }
 
       const errJson = await res.json().catch(() => ({}));
-      return { success: false, error: errJson?.error?.message || `Thumbnail upload failed (${res.status})` };
+      // HANYA trigger uploadLimitExceeded jika YouTube API benar-benar mengembalikan HTTP 403 dengan error code "uploadLimitExceeded"
+      const isLimitExceeded =
+        res.status === 403 &&
+        (errJson?.error?.errors?.some((e: any) => e.reason === 'uploadLimitExceeded') ||
+          (typeof errJson?.error?.message === 'string' && errJson.error.message.includes('uploadLimitExceeded')) ||
+          (typeof errJson?.message === 'string' && errJson.message.includes('uploadLimitExceeded')));
+
+      return {
+        success: false,
+        error: errJson?.error?.message || `Thumbnail upload failed (${res.status})`,
+        status: res.status,
+        isUploadLimitExceeded: Boolean(isLimitExceeded),
+      };
     } catch (e: any) {
-      return { success: false, error: e.message || 'Network error during thumbnail upload' };
+      return {
+        success: false,
+        error: e.message || 'Network error during thumbnail upload',
+        isUploadLimitExceeded: false,
+      };
     }
   }
 
@@ -357,6 +381,7 @@ class WorkerClientService {
 
     this.isRunning = true;
     this.shouldStop = false;
+    this.stoppedByUser = false;
 
     const pureChannelId = channel.youtubeChannelId || channel.id.replace(/^chan-/, '');
     const batchSize = options.batchSize || 90;
@@ -414,8 +439,8 @@ class WorkerClientService {
     let failedCount = 0;
 
     for (let i = 0; i < itemsToProcess.length; i++) {
-      if (this.shouldStop) {
-        console.log('[WorkerClient] Eksekusi dihentikan oleh pengguna.');
+      if (this.shouldStop && this.stoppedByUser) {
+        console.log('[WorkerClient] Eksekusi dihentikan secara fisik oleh pengguna.');
         break;
       }
 
@@ -467,7 +492,7 @@ class WorkerClientService {
             const missingMsg = `Aset Gambar Hilang - Harap Unggah Ulang pada thumbnail "${assignedThumb.name || assignedThumb.id}". Worker dilarang mengeksekusi antrean jika payload thumbnail tidak ditemukan (Atomic Execution Guard).`;
             console.error(`[WorkerClient] [Atomic Abort] ${missingMsg}`);
 
-            currentProgress.status = 'PAUSED';
+            currentProgress.status = 'FAILED';
             currentProgress.processingCount = 0;
             currentProgress.message = missingMsg;
             options.onProgress?.(currentProgress);
@@ -482,7 +507,6 @@ class WorkerClientService {
               status: `Dihentikan: Aset Gambar Hilang (${assignedThumb.name || assignedThumb.id})`,
             });
 
-            this.shouldStop = true;
             this.isRunning = false;
             batchRecord.status = 'failed';
             batchRecord.failureReason = missingMsg;
@@ -502,7 +526,7 @@ class WorkerClientService {
             const blobErrMsg = `Aset Gambar Hilang - Harap Unggah Ulang pada thumbnail "${assignedThumb.name || assignedThumb.id}" (Ukuran blob tidak valid).`;
             console.error(`[WorkerClient] [Atomic Abort] ${blobErrMsg}`);
 
-            currentProgress.status = 'PAUSED';
+            currentProgress.status = 'FAILED';
             currentProgress.processingCount = 0;
             currentProgress.message = blobErrMsg;
             options.onProgress?.(currentProgress);
@@ -517,7 +541,6 @@ class WorkerClientService {
               status: `Dihentikan: Aset Gambar Hilang (${assignedThumb.name || assignedThumb.id})`,
             });
 
-            this.shouldStop = true;
             this.isRunning = false;
             batchRecord.status = 'failed';
             batchRecord.failureReason = blobErrMsg;
@@ -528,11 +551,11 @@ class WorkerClientService {
           if (!thumbRes.success) {
             console.error(`[WorkerClient] [Atomic Abort] Gagal upload thumbnail video ${video.id}:`, thumbRes.error);
 
-              // STRICT ATOMIC ABORT: DILARANG menjalankan videos.update atau menjadwalkan/mengubah judul
+            if (thumbRes.isUploadLimitExceeded) {
+              // HANYA JIKA RESMI HTTP 403 uploadLimitExceeded DARI YOUTUBE API:
               const limitMsg =
                 'Batas Upload Thumbnail YouTube Tercapai (Limit 24 Jam). Otomasi dihentikan agar video tidak terjadwal tanpa thumbnail. Silakan lanjutkan kembali besok setelah kuota reset.';
 
-              // Simpan checkpoint agar saat dilanjutkan besok, worker memproses video mentah tersebut secara utuh
               safeSetItem(
                 'amg_thumbnail_limit_paused',
                 JSON.stringify({
@@ -542,7 +565,7 @@ class WorkerClientService {
                   videoTitle: assignedTitle,
                   batchId,
                   stoppedAt: new Date().toISOString(),
-                  reason: thumbRes.error || 'UPLOAD_LIMIT_EXCEEDED_24H',
+                  reason: 'uploadLimitExceeded',
                 })
               );
 
@@ -562,17 +585,40 @@ class WorkerClientService {
                 status: 'Dihentikan Sementara (Menunggu Reset Thumbnail 24 Jam)',
               });
 
-              this.shouldStop = true;
               this.isRunning = false;
               batchRecord.status = 'failed';
               batchRecord.failureReason = limitMsg;
-
-              // Hentikan pemrosesan kloter saat itu juga
               break;
             } else {
-              console.log(`[WorkerClient] Thumbnail berhasil diunggah untuk video ${video.id}`);
+              // BUKAN uploadLimitExceeded resmi (bisa error client-side, network timeout, 400, 401, dsb.)
+              // DILARANG mengunci checkpoint 24 jam!
+              const errDetail = thumbRes.error || `Gagal upload thumbnail (${thumbRes.status || 'Client/Network Error'})`;
+              console.warn(`[WorkerClient] Gagal upload thumbnail (Bukan uploadLimitExceeded): ${errDetail}`);
+
+              currentProgress.status = 'FAILED';
+              currentProgress.processingCount = 0;
+              currentProgress.message = `Gagal upload thumbnail: ${errDetail}`;
+              options.onProgress?.(currentProgress);
+
+              this.syncQueueStateToStorage({
+                total: totalCount,
+                processing: 0,
+                completed: completedCount,
+                remainingInQueue: totalCount - completedCount,
+                currentTitle: assignedTitle,
+                batchId,
+                status: `Gagal: ${errDetail}`,
+              });
+
+              this.isRunning = false;
+              batchRecord.status = 'failed';
+              batchRecord.failureReason = errDetail;
+              break;
             }
+          } else {
+            console.log(`[WorkerClient] Thumbnail berhasil diunggah untuk video ${video.id}`);
           }
+        }
 
         // ====================================================================
         // TAHAP 2 & 3: TERAPKAN JUDUL DETERMINISTIK & KUNCI TANGGAL/JAM PUBLISHAT

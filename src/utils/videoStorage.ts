@@ -272,12 +272,16 @@ export async function deleteCachedVideosFromIdb(channelId: string): Promise<void
 }
 
 /**
- * Proactively purges bloated legacy video keys from localStorage to prevent QuotaExceededError.
+ * Proactively purges bloated legacy video keys and fake lock/checkpoint states from localStorage.
  */
 export function purgeLegacyVideoLocalStorageKeys(): void {
   if (typeof localStorage === 'undefined') return;
 
   try {
+    // 1. Purge fake lock & limit checkpoint keys
+    clearFakeLockCheckpoints();
+
+    // 2. Purge bloated video cache keys from localStorage
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
@@ -306,6 +310,33 @@ export function purgeLegacyVideoLocalStorageKeys(): void {
     }
   } catch (e) {
     console.warn('[SafeStorage] Notice during purgeLegacyVideoLocalStorageKeys:', e);
+  }
+}
+
+/**
+ * Permanently removes fake lock & thumbnail limit checkpoint keys from localStorage and sessionStorage.
+ */
+export function clearFakeLockCheckpoints(): void {
+  const fakeKeys = [
+    'amg_thumbnail_limit_reached',
+    'amg_checkpoint_lock',
+    'amg_thumbnail_limit_paused',
+  ];
+
+  if (typeof localStorage !== 'undefined') {
+    for (const k of fakeKeys) {
+      try {
+        localStorage.removeItem(k);
+      } catch {}
+    }
+  }
+
+  if (typeof sessionStorage !== 'undefined') {
+    for (const k of fakeKeys) {
+      try {
+        sessionStorage.removeItem(k);
+      } catch {}
+    }
   }
 }
 

@@ -40,7 +40,7 @@ import { WeeklyScheduleModal } from './WeeklyScheduleModal.tsx';
 import { QueueMonitor } from './QueueMonitor.tsx';
 import { NicheBadge } from '../utils/nicheCategories';
 import { getChannelDaySchedule } from '../utils/dayScheduleUtils.ts';
-import { safeSetItem } from '../utils/videoStorage.ts';
+import { safeSetItem, clearFakeLockCheckpoints } from '../utils/videoStorage.ts';
 
 interface AutomationViewProps {
   channels: Channel[];
@@ -91,14 +91,16 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [batchToRollback, setBatchToRollback] = useState<AutomationBatch | null>(null);
   const [isClearingStale, setIsClearingStale] = useState(false);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
-  const [thumbnailLimitPaused, setThumbnailLimitPaused] = useState<any>(() => {
-    try {
-      const raw = localStorage.getItem('amg_thumbnail_limit_paused');
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Banner oranye DILARANG muncul saat halaman dibuka atau inisialisasi antrean.
+  const [thumbnailLimitPaused, setThumbnailLimitPaused] = useState<any>(null);
+  const [currentProcessingVideoIndex, setCurrentProcessingVideoIndex] = useState<number>(0);
+  const [userExplicitlyStopped, setUserExplicitlyStopped] = useState<boolean>(false);
+  const userExplicitlyStoppedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    // Bersihkan kunci fake limit & checkpoint lock secara permanen saat komponen dibuka
+    clearFakeLockCheckpoints();
+  }, []);
 
   const selectedChannel = channels.find((c) => c.id === selectedChannelId || c.youtubeChannelId === selectedChannelId || `chan-${c.youtubeChannelId}` === selectedChannelId) || channels[0];
   const pureChannelId = selectedChannel?.youtubeChannelId || (selectedChannelId ? selectedChannelId.replace(/^chan-/, '') : '');
@@ -390,12 +392,25 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   };
 
   const handleStopAutomation = () => {
+    userExplicitlyStoppedRef.current = true;
+    setUserExplicitlyStopped(true);
     workerClient.stopWorker();
     setIsExecuting(false);
+    setCurrentProcessingVideoIndex(0);
     setExecutionMessage('Otomasi dihentikan oleh pengguna.');
   };
 
   const handleStartAutomation = async () => {
+    // 1. Bersihkan semua riwayat error & checkpoint limit sebelumnya (Bebas hambatan)
+    setPreviewError(null);
+    setDryRunResult(null);
+    setExecutionMessage(null);
+    setThumbnailLimitPaused(null);
+    userExplicitlyStoppedRef.current = false;
+    setUserExplicitlyStopped(false);
+    setCurrentProcessingVideoIndex(1);
+    clearFakeLockCheckpoints();
+
     if (channelTitles.length === 0) {
       alert('Silakan masukkan Master Judul sebelum memulai otomasi');
       return;
@@ -431,13 +446,15 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
       return;
     }
 
+    // 2. Set workerState = 'RUNNING' & buka lock antrean seketika
     setIsExecuting(true);
     setShowConfirmModal(false);
     workerClient.resetStop();
 
     const runBatchChain = async (batchIdx: number) => {
-      if (workerClient.shouldStopWorker()) {
+      if (userExplicitlyStoppedRef.current || workerClient.isStoppedByUser()) {
         setIsExecuting(false);
+        setUserExplicitlyStopped(true);
         setExecutionMessage('Otomasi dihentikan oleh pengguna.');
         return;
       }
@@ -569,6 +586,9 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           {
             batchSize: BATCH_SIZE,
             onProgress: (prog) => {
+              if (prog.currentVideoIndex) {
+                setCurrentProcessingVideoIndex(prog.currentVideoIndex);
+              }
               setExecutionMessage(prog.message);
               setBatches((prev) =>
                 prev.map((b) =>
@@ -603,9 +623,16 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           fetchPreview(pureChannelId || selectedChannelId);
         }
 
-        if (workerClient.shouldStopWorker()) {
+        if (userExplicitlyStoppedRef.current || workerClient.isStoppedByUser()) {
           setIsExecuting(false);
+          setUserExplicitlyStopped(true);
           setExecutionMessage('Otomasi dihentikan oleh pengguna.');
+          return;
+        }
+
+        if (finishedBatch.status === 'failed') {
+          setIsExecuting(false);
+          setExecutionMessage(finishedBatch.failureReason || 'Otomasi terhenti karena kendala pemrosesan.');
           return;
         }
 
@@ -625,12 +652,14 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           await runBatchChain(nextBatchIndex);
         } else {
           setIsExecuting(false);
+          setCurrentProcessingVideoIndex(0);
           setExecutionMessage(
             `Semua Kloter Selesai 100%! Seluruh antrean video yang memenuhi syarat (${candidateVideosToProcess.length} video) telah berhasil dijadwalkan.`
           );
         }
       } catch (err: any) {
         setIsExecuting(false);
+        setCurrentProcessingVideoIndex(0);
         console.error('[AutomationView] Client worker execution failed:', err);
         setExecutionMessage(`Eksekusi antrean terhenti: ${err.message}`);
       }
@@ -1069,9 +1098,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           </div>
           <button
             onClick={() => {
-              try {
-                localStorage.removeItem('amg_thumbnail_limit_paused');
-              } catch {}
+              clearFakeLockCheckpoints();
               setThumbnailLimitPaused(null);
             }}
             className="px-3.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold transition whitespace-nowrap cursor-pointer shadow flex items-center gap-1.5 self-start sm:self-auto"
@@ -1121,11 +1148,30 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-3 border-b border-neutral-800">
           <div>
-            <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
-              <Eye className="w-4 h-4 text-red-500" />
-              Pratinjau Otomasi Pra-Eksekusi (Kloter {effectivePage}: {currentKloterItems.length} Video)
-            </h3>
-            <p className="text-xs text-neutral-400 mt-0.5">
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <h3 className="text-sm font-bold text-neutral-100 flex items-center gap-2">
+                <Eye className="w-4 h-4 text-red-500" />
+                Pratinjau Otomasi Pra-Eksekusi (Kloter {effectivePage}: {currentKloterItems.length} Video)
+              </h3>
+              {/* Dynamic Live Status Badge */}
+              {isExecuting ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-950/80 text-blue-300 border border-blue-600/70 animate-pulse shadow-sm">
+                  <RefreshCw className="w-3 h-3 animate-spin text-blue-400" />
+                  <span>Memproses Video [{currentProcessingVideoIndex || 1}/{Math.min(currentKloterItems.length, BATCH_SIZE)}]...</span>
+                </span>
+              ) : userExplicitlyStopped ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-950/80 text-rose-300 border border-rose-600/70 shadow-sm">
+                  <Square className="w-3 h-3 text-rose-400 fill-current" />
+                  <span>Otomasi Dihentikan oleh Pengguna</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-600/70 shadow-sm">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                  <span>Sistem Siap Eksekusi</span>
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-neutral-400 mt-1">
               Tinjau penentuan judul deterministik, thumbnail, dan tanggal jadwal. Menampilkan {displayPreviewItems.length} dari {currentKloterItems.length} video kloter ini (Total Semua: {includedItems.length} Video Layak).
             </p>
           </div>
