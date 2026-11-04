@@ -1021,12 +1021,12 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               </div>
               <div className="text-xs font-mono font-bold text-zinc-200 mt-0.5 truncate">
                 {(() => {
+                  const isGlobal = selectedChannel.useGlobalPreset !== false;
+                  if (isGlobal) {
+                    return 'Preset Standar Global (Analitik)';
+                  }
                   const ds = getChannelDaySchedule(selectedChannel);
-                  const times = Object.values(ds);
-                  const allSame = times.every((t) => t === times[0]);
-                  return allSame
-                    ? `${times[0]} WIB (Semua Hari)`
-                    : `Sen: ${ds.senin} ... Min: ${ds.minggu}`;
+                  return `Kustom Harian (Sen: ${ds.senin} ... Min: ${ds.minggu})`;
                 })()}
               </div>
             </div>
@@ -1876,6 +1876,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           onClose={() => setShowWeeklyScheduleModal(false)}
           channelId={selectedChannel.id}
           channelTitle={selectedChannel.title}
+          channel={selectedChannel}
           onScheduleSaved={() => {
             fetchPreview(selectedChannelId);
             onAutomationTriggered();

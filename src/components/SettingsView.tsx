@@ -25,6 +25,12 @@ import {
   formatClientIdPoolToText,
   resetSlotCooldown,
 } from '../utils/clientIdPoolUtils.ts';
+import {
+  getQuotaUsage,
+  getQuotaUsageSync,
+  QuotaTrackerData,
+  DEFAULT_DAILY_LIMIT,
+} from '../utils/quotaTracker.ts';
 
 export const SettingsView: React.FC = () => {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
@@ -42,6 +48,9 @@ export const SettingsView: React.FC = () => {
   const [isSavingPool, setIsSavingPool] = useState(false);
   const [poolSavedSuccess, setPoolSavedSuccess] = useState(false);
 
+  // Realtime Quota Tracker state from 'amg_quota_tracker'
+  const [quotaData, setQuotaData] = useState<QuotaTrackerData>(getQuotaUsageSync());
+
   useEffect(() => {
     api.getSettings().then((s) => {
       setSettings(s);
@@ -56,6 +65,24 @@ export const SettingsView: React.FC = () => {
     const pool = getClientIdPool();
     setClientIdSlots(pool);
     setClientIdPoolText(formatClientIdPoolToText(pool));
+
+    // Baca langsung data dari 'amg_quota_tracker' (IndexedDB)
+    getQuotaUsage().then(setQuotaData);
+
+    const handleQuotaUpdate = (e: any) => {
+      if (e.detail) {
+        setQuotaData(e.detail);
+      } else {
+        getQuotaUsage().then(setQuotaData);
+      }
+    };
+
+    window.addEventListener('amg_quota_updated', handleQuotaUpdate);
+    window.addEventListener('storage', handleQuotaUpdate);
+    return () => {
+      window.removeEventListener('amg_quota_updated', handleQuotaUpdate);
+      window.removeEventListener('storage', handleQuotaUpdate);
+    };
   }, []);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -223,25 +250,53 @@ export const SettingsView: React.FC = () => {
             </div>
 
             {/* Quota Gauge */}
-            <div className="p-3.5 rounded-xl bg-neutral-950/80 border border-neutral-800 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-neutral-200">Penggunaan Kuota YouTube Data API</span>
-                <span className="font-mono text-neutral-400">
-                  {settings?.apiQuotaUsed ?? 0} / {settings?.apiQuotaDailyLimit || 10000} unit
-                </span>
-              </div>
-              <div className="w-full h-2 rounded-full bg-neutral-800 overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-emerald-500 to-amber-500 rounded-full"
-                  style={{
-                    width: `${(((settings?.apiQuotaUsed ?? 0)) / (settings?.apiQuotaDailyLimit || 10000)) * 100}%`,
-                  }}
-                />
-              </div>
-              <div className="text-[10.5px] text-neutral-500">
-                Reset otomatis setiap hari tengah malam PST. Cukup untuk ~150 pembaruan video per hari.
-              </div>
-            </div>
+            {(() => {
+              const currentUsedQuota = quotaData.usedQuota;
+              const currentDailyLimit = quotaData.dailyLimit || DEFAULT_DAILY_LIMIT;
+              const quotaPercent = Math.min(100, Math.max(0, (currentUsedQuota / currentDailyLimit) * 100));
+
+              return (
+                <div className="p-4 rounded-xl bg-neutral-950/80 border border-neutral-800 space-y-2.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-neutral-200 flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-amber-400" />
+                      <span>Penggunaan Kuota YouTube Data API</span>
+                    </span>
+                    <span className="font-mono font-bold text-neutral-100 bg-neutral-900 px-2.5 py-1 rounded-lg border border-neutral-800">
+                      {currentUsedQuota} / {currentDailyLimit} unit
+                    </span>
+                  </div>
+
+                  {/* Progress bar dinamis sesuai persentase kuota yang terpakai */}
+                  <div className="space-y-1.5">
+                    <div className="w-full h-2.5 rounded-full bg-neutral-800 overflow-hidden p-0.5">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          quotaPercent >= 90
+                            ? 'bg-rose-500'
+                            : quotaPercent >= 75
+                            ? 'bg-amber-500'
+                            : 'bg-gradient-to-r from-emerald-500 to-amber-500'
+                        }`}
+                        style={{
+                          width: `${quotaPercent}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-neutral-400 font-mono">
+                      <span>{quotaPercent.toFixed(1)}% terpakai</span>
+                      <span>
+                        Sisa: {Math.max(0, currentDailyLimit - currentUsedQuota)} unit (~{Math.floor(Math.max(0, currentDailyLimit - currentUsedQuota) / 100)} video)
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-[10.5px] text-neutral-500 pt-1 border-t border-neutral-800/60 flex items-center justify-between">
+                    <span>Reset otomatis setiap hari tengah malam PST ({quotaData.lastDatePst}). Estimasi: 100 unit/video (thumbnails.set + videos.update).</span>
+                  </div>
+                </div>
+              );
+            })()}
 
             <button
               type="submit"

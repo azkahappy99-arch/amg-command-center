@@ -131,6 +131,7 @@ export interface Channel {
   scheduleConfig?: ScheduleConfig;
   dayScheduleConfig?: DayScheduleConfig;
   customWeeklySchedule?: Record<number, string>;
+  useGlobalPreset?: boolean; // If true (or undefined), inherits DEFAULT_WEEKLY_SCHEDULE
   scheduleTimeMode?: ScheduleTimeMode;
   useProfileSchedule?: boolean; // If true, inherits from assigned ContentProfile scheduleConfig
   eligibilityWindowDays?: number; // Phase 2: default 7 days

@@ -64,6 +64,7 @@ function runTestSuite() {
   const overriddenChannel: Channel = {
     ...defaultChannel,
     id: 'chan-override-1',
+    useGlobalPreset: false,
     customWeeklySchedule: {
       5: '19:00', // Override Friday
       6: '20:00', // Override Saturday

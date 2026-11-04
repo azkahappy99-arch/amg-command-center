@@ -71,6 +71,8 @@ import {
 import {
   getChannelDaySchedule,
   generateSequentialSchedulesWithDayConfig,
+  getWibTimeString,
+  getWibCalendarComponents,
 } from '../utils/dayScheduleUtils.ts';
 import {
   safeLocalStorageSet,
@@ -85,6 +87,7 @@ import {
   getCachedVideosFromIdb,
   deleteCachedVideosFromIdb,
 } from '../utils/videoStorage.ts';
+import { incrementQuota, getQuotaUsage } from '../utils/quotaTracker.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -2957,7 +2960,8 @@ export const api = {
     const generatedSlots = generateSequentialSchedulesWithDayConfig(
       candidateVideos.length,
       anchorIso,
-      channelDaySchedule
+      channelDaySchedule,
+      channel
     );
 
     // Map ALL candidate videos (without capping or slicing at 10)
@@ -2973,10 +2977,9 @@ export const api = {
       const assignedThumb = hasCustomMasterThumb ? realCustomThumbnails[i % realCustomThumbnails.length].url : rawNativeThumb;
 
       const slotIso = generatedSlots[i] || new Date().toISOString();
-      const slotDate = new Date(slotIso);
-      const publishDateStr = slotDate.toISOString().split('T')[0];
-      const timeParts = formatWibDateTime(slotIso).split(' ');
-      const timeStr = `${timeParts[1] || '16:00'} WIB`;
+      const wibComp = getWibCalendarComponents(slotIso);
+      const publishDateStr = `${wibComp.year}-${String(wibComp.month + 1).padStart(2, '0')}-${String(wibComp.day).padStart(2, '0')}`;
+      const timeStr = `${getWibTimeString(slotIso)} WIB`;
 
       return {
         sequence: i + 1,
@@ -3291,6 +3294,9 @@ export const api = {
         // Update video di memori lokal (amg_videos) dari 'Salinan dari A' menjadi Master Judul yang baru diterapkan,
         // ubah status publikasi menjadi target jadwal (16:00 WIB), dan pindahkan ke Video Terjadwal (SCHEDULED).
         if (json.video) {
+          try {
+            incrementQuota(100).catch(() => {});
+          } catch {}
           const rawVideos = getStorageItem<ManagedVideo[]>(KEYS.VIDEOS, []);
           const vIdx = rawVideos.findIndex(
             (v) =>
@@ -3565,7 +3571,15 @@ export const api = {
   },
 
   // Settings
-  getSettings: async () => getStorageItem<SystemSettings>(KEYS.SETTINGS, initialSettings),
+  getSettings: async () => {
+    const current = getStorageItem<SystemSettings>(KEYS.SETTINGS, initialSettings);
+    try {
+      const q = await getQuotaUsage();
+      current.apiQuotaUsed = q.usedQuota;
+      current.apiQuotaDailyLimit = q.dailyLimit;
+    } catch {}
+    return current;
+  },
   updateSettings: async (data: Partial<SystemSettings>) => {
     const current = getStorageItem<SystemSettings>(KEYS.SETTINGS, initialSettings);
     const updated = { ...current, ...data };

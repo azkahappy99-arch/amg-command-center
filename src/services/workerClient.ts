@@ -12,6 +12,7 @@ import { requestGisAccessToken, GIS_CONFIG } from './youtubeGisAuth.ts';
 import { getChannelDaySchedule, generateSequentialSchedulesWithDayConfig } from '../utils/dayScheduleUtils.ts';
 import { formatWibDateTime } from '../utils/scheduleAndUnmanagedUtils.ts';
 import { safeSetItem, saveCachedVideosToIdb, getCachedVideosFromIdb } from '../utils/videoStorage.ts';
+import { incrementQuota } from '../utils/quotaTracker.ts';
 
 export interface WorkerClientProgress {
   batchId: string;
@@ -677,6 +678,13 @@ class WorkerClientService {
 
         if (updatedVideo) {
           options.onVideoCompleted?.(updatedVideo);
+        }
+
+        // Increment Kuota Otomatis Setiap Eksekusi Sukses (thumbnails.set + videos.update = 100 unit):
+        try {
+          await incrementQuota(100);
+        } catch (quotaErr) {
+          console.warn('[WorkerClient] Error incrementing quota tracker:', quotaErr);
         }
 
         // Update progress callback realtime

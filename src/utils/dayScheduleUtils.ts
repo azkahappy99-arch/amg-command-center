@@ -15,15 +15,17 @@ export const DAY_NAMES_ID: Record<keyof DayScheduleConfig, string> = {
   minggu: 'Minggu',
 };
 
-export const GLOBAL_WEEKLY_SCHEDULE: Record<number, string> = {
-  0: '15:00', // Minggu (Day 0)
-  1: '16:00', // Senin  (Day 1)
-  2: '16:00', // Selasa (Day 2)
-  3: '16:00', // Rabu   (Day 3)
-  4: '16:00', // Kamis  (Day 4)
-  5: '14:30', // Jumat  (Day 5)
-  6: '15:30', // Sabtu  (Day 6)
+export const DEFAULT_WEEKLY_SCHEDULE: Record<number, string> = {
+  0: '15:00', // Minggu -> 15.00 WIB
+  1: '16:00', // Senin  -> 16.00 WIB
+  2: '16:00', // Selasa -> 16.00 WIB
+  3: '16:00', // Rabu   -> 16.00 WIB
+  4: '16:00', // Kamis  -> 16.00 WIB
+  5: '14:30', // Jumat  -> 14.30 WIB
+  6: '15:30', // Sabtu  -> 15.30 WIB
 };
+
+export const GLOBAL_WEEKLY_SCHEDULE: Record<number, string> = DEFAULT_WEEKLY_SCHEDULE;
 
 export const DEFAULT_DAY_SCHEDULE: DayScheduleConfig = {
   minggu: '15:00',
@@ -37,59 +39,106 @@ export const DEFAULT_DAY_SCHEDULE: DayScheduleConfig = {
 
 /**
  * Logika Penentuan Jam PublishAt (Hierarki Fallback Cerdas):
- * 1. Cek prioritas konfigurasi jam: channelCustomTime (customWeeklySchedule?.[targetDay] atau dayScheduleConfig)
- * 2. Fallback cerdas: GLOBAL_WEEKLY_SCHEDULE[targetDay]
+ * const day = targetDate.getDay(); // 0 (Min) s/d 6 (Sab)
+ * const isGlobal = activeChannel?.useGlobalPreset ?? true;
+ * const finalPublishTime = (!isGlobal && activeChannel?.customWeeklySchedule?.[day])
+ *   ? activeChannel.customWeeklySchedule[day]
+ *   : DEFAULT_WEEKLY_SCHEDULE[day];
  */
 export function resolveTargetDayPublishTime(
   targetDay: number,
   channel?: Channel | null,
   dayConfig?: DayScheduleConfig | null
 ): string {
-  // 1. Cek customWeeklySchedule per day index (0-6)
+  // 1. Jika channel eksplisit memilih Preset Standar Global
+  if (channel?.useGlobalPreset === true) {
+    return DEFAULT_WEEKLY_SCHEDULE[targetDay] || '16:00';
+  }
+
+  // 2. Jika channel eksplisit memilih Kustom Override Mandiri
+  if (channel?.useGlobalPreset === false) {
+    if (channel.customWeeklySchedule && channel.customWeeklySchedule[targetDay]) {
+      return channel.customWeeklySchedule[targetDay];
+    }
+    const dayKey = DAY_KEYS[targetDay];
+    if (channel.dayScheduleConfig && channel.dayScheduleConfig[dayKey]) {
+      return channel.dayScheduleConfig[dayKey];
+    }
+    if (dayConfig && dayConfig[dayKey]) {
+      return dayConfig[dayKey];
+    }
+    return DEFAULT_WEEKLY_SCHEDULE[targetDay] || '16:00';
+  }
+
+  // 3. Jika useGlobalPreset tidak eksplisit (fallback backward compatibility):
+  // Cek kustomisasi spesifik pada channel atau parameter dayConfig
   if (channel?.customWeeklySchedule && channel.customWeeklySchedule[targetDay]) {
     return channel.customWeeklySchedule[targetDay];
   }
-
-  // 2. Cek dayScheduleConfig (dari parameter atau channel)
   const dayKey = DAY_KEYS[targetDay];
-  if (dayConfig && dayConfig[dayKey]) {
-    return dayConfig[dayKey];
-  }
   if (channel?.dayScheduleConfig && channel.dayScheduleConfig[dayKey]) {
     return channel.dayScheduleConfig[dayKey];
   }
+  if (dayConfig && dayConfig[dayKey] && dayConfig !== DEFAULT_DAY_SCHEDULE) {
+    return dayConfig[dayKey];
+  }
 
-  // 3. Fallback cerdas ke Preset Jadwal Global
-  return GLOBAL_WEEKLY_SCHEDULE[targetDay] || '16:00';
+  // Standar Global Terkunci (Preset Analitik Penonton)
+  return DEFAULT_WEEKLY_SCHEDULE[targetDay] || '16:00';
+}
+
+/**
+ * Mengambil jam & menit dalam zona waktu Asia/Jakarta (WIB) berformat "HH:mm"
+ */
+export function getWibTimeString(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '16:00';
+    const wibDate = new Date(d.getTime() + 7 * 60 * 60 * 1000);
+    const hh = String(wibDate.getUTCHours()).padStart(2, '0');
+    const mm = String(wibDate.getUTCMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  } catch {
+    return '16:00';
+  }
 }
 
 /**
  * Mengambil konfigurasi jadwal harian untuk channel tertentu
- * Prioritas: channel.dayScheduleConfig -> localStorage('amg_day_schedule_{id}') -> DEFAULT_DAY_SCHEDULE
+ * - Jika channel.useGlobalPreset !== false (default): Merujuk ke DEFAULT_DAY_SCHEDULE / DEFAULT_WEEKLY_SCHEDULE
+ * - Jika channel.useGlobalPreset === false: Merujuk ke customWeeklySchedule atau dayScheduleConfig channel
  */
 export function getChannelDaySchedule(channelOrId?: Channel | string | null): DayScheduleConfig {
   if (!channelOrId) return { ...DEFAULT_DAY_SCHEDULE };
 
   // 1. Cek dari objek channel langsung
   if (typeof channelOrId === 'object') {
+    const isGlobal = channelOrId.useGlobalPreset === true
+      ? true
+      : channelOrId.useGlobalPreset === false
+      ? false
+      : !(channelOrId.customWeeklySchedule || channelOrId.dayScheduleConfig);
+    if (isGlobal) {
+      return { ...DEFAULT_DAY_SCHEDULE };
+    }
+
+    if (channelOrId.customWeeklySchedule) {
+      return {
+        minggu: channelOrId.customWeeklySchedule[0] || DEFAULT_DAY_SCHEDULE.minggu,
+        senin: channelOrId.customWeeklySchedule[1] || DEFAULT_DAY_SCHEDULE.senin,
+        selasa: channelOrId.customWeeklySchedule[2] || DEFAULT_DAY_SCHEDULE.selasa,
+        rabu: channelOrId.customWeeklySchedule[3] || DEFAULT_DAY_SCHEDULE.rabu,
+        kamis: channelOrId.customWeeklySchedule[4] || DEFAULT_DAY_SCHEDULE.kamis,
+        jumat: channelOrId.customWeeklySchedule[5] || DEFAULT_DAY_SCHEDULE.jumat,
+        sabtu: channelOrId.customWeeklySchedule[6] || DEFAULT_DAY_SCHEDULE.sabtu,
+      };
+    }
+
     if (channelOrId.dayScheduleConfig) {
       return { ...DEFAULT_DAY_SCHEDULE, ...channelOrId.dayScheduleConfig };
     }
     if (channelOrId.scheduleConfig?.dayScheduleConfig) {
       return { ...DEFAULT_DAY_SCHEDULE, ...channelOrId.scheduleConfig.dayScheduleConfig };
-    }
-    // Jika channel memiliki publishTime tunggal (misal '14:00')
-    if (channelOrId.publishTime && /^\d{2}:\d{2}$/.test(channelOrId.publishTime)) {
-      const t = channelOrId.publishTime;
-      return {
-        senin: t,
-        selasa: t,
-        rabu: t,
-        kamis: t,
-        jumat: t,
-        sabtu: t,
-        minggu: t,
-      };
     }
   }
 
@@ -98,6 +147,29 @@ export function getChannelDaySchedule(channelOrId?: Channel | string | null): Da
   if (chanId && typeof window !== 'undefined') {
     try {
       const cleanId = chanId.replace(/^chan-/, '');
+      const rawGlobal = localStorage.getItem(`amg_use_global_preset_${cleanId}`);
+      if (rawGlobal === 'true') {
+        return { ...DEFAULT_DAY_SCHEDULE };
+      }
+
+      if (rawGlobal === 'false') {
+        const rawCustom = localStorage.getItem(`amg_custom_weekly_${cleanId}`);
+        if (rawCustom) {
+          const parsed = JSON.parse(rawCustom);
+          if (parsed && typeof parsed === 'object') {
+            return {
+              minggu: parsed[0] || DEFAULT_DAY_SCHEDULE.minggu,
+              senin: parsed[1] || DEFAULT_DAY_SCHEDULE.senin,
+              selasa: parsed[2] || DEFAULT_DAY_SCHEDULE.selasa,
+              rabu: parsed[3] || DEFAULT_DAY_SCHEDULE.rabu,
+              kamis: parsed[4] || DEFAULT_DAY_SCHEDULE.kamis,
+              jumat: parsed[5] || DEFAULT_DAY_SCHEDULE.jumat,
+              sabtu: parsed[6] || DEFAULT_DAY_SCHEDULE.sabtu,
+            };
+          }
+        }
+      }
+
       const raw =
         localStorage.getItem(`amg_day_schedule_${chanId}`) ||
         localStorage.getItem(`amg_day_schedule_${cleanId}`) ||
@@ -116,21 +188,54 @@ export function getChannelDaySchedule(channelOrId?: Channel | string | null): Da
 
 /**
  * Menyimpan konfigurasi jadwal harian ke localStorage dan channel
+ * Menyelaraskan opsi Preset Global (useGlobalPreset = true) vs Kustom Override Mandiri (useGlobalPreset = false)
  */
 export function saveChannelDaySchedule(
   channelId: string,
   config: DayScheduleConfig,
-  mode: ScheduleTimeMode = 'SAME_ALL_DAYS'
+  modeOrUseGlobal: ScheduleTimeMode | boolean = true,
+  customWeeklyParam?: Record<number, string>,
+  explicitUseGlobal?: boolean
 ): void {
   if (!channelId || typeof window === 'undefined') return;
   const cleanId = channelId.replace(/^chan-/, '');
 
+  const useGlobal: boolean =
+    typeof explicitUseGlobal === 'boolean'
+      ? explicitUseGlobal
+      : typeof modeOrUseGlobal === 'boolean'
+      ? modeOrUseGlobal
+      : false;
+
+  const mode: ScheduleTimeMode =
+    typeof modeOrUseGlobal === 'string'
+      ? modeOrUseGlobal
+      : useGlobal
+      ? 'SAME_ALL_DAYS'
+      : 'DIFFERENT_PER_DAY';
+
+  // Siapkan customWeekly mapping (0=Min .. 6=Sab)
+  const customWeekly: Record<number, string> =
+    customWeeklyParam || {
+      0: config.minggu,
+      1: config.senin,
+      2: config.selasa,
+      3: config.rabu,
+      4: config.kamis,
+      5: config.jumat,
+      6: config.sabtu,
+    };
+
   try {
-    const configStr = JSON.stringify(config);
+    const configStr = JSON.stringify(useGlobal ? DEFAULT_DAY_SCHEDULE : config);
+    const customWeeklyStr = JSON.stringify(useGlobal ? DEFAULT_WEEKLY_SCHEDULE : customWeekly);
+
     safeSetItem(`amg_day_schedule_${channelId}`, configStr);
     safeSetItem(`amg_day_schedule_${cleanId}`, configStr);
     safeSetItem(`amg_day_schedule_chan-${cleanId}`, configStr);
     safeSetItem(`amg_day_schedule_mode_${cleanId}`, mode);
+    safeSetItem(`amg_use_global_preset_${cleanId}`, String(useGlobal));
+    safeSetItem(`amg_custom_weekly_${cleanId}`, customWeeklyStr);
 
     // Update juga di amg_persistent_channels dan amg_channels
     const keys = ['amg_persistent_channels', 'amg_channels'];
@@ -147,23 +252,19 @@ export function saveChannelDaySchedule(
                 c.id === `chan-${cleanId}`
             );
             if (idx >= 0) {
-              channels[idx].dayScheduleConfig = config;
+              channels[idx].useGlobalPreset = useGlobal;
+              channels[idx].dayScheduleConfig = useGlobal ? { ...DEFAULT_DAY_SCHEDULE } : config;
+              channels[idx].customWeeklySchedule = useGlobal ? { ...DEFAULT_WEEKLY_SCHEDULE } : customWeekly;
               channels[idx].scheduleTimeMode = mode;
               if (channels[idx].scheduleConfig) {
-                channels[idx].scheduleConfig!.dayScheduleConfig = config;
+                channels[idx].scheduleConfig!.dayScheduleConfig = channels[idx].dayScheduleConfig;
                 channels[idx].scheduleConfig!.scheduleTimeMode = mode;
               }
               // Set display publishTime
-              if (mode === 'SAME_ALL_DAYS') {
-                channels[idx].publishTime = config.senin;
-              } else {
-                channels[idx].publishTime = 'Kustom Harian';
-              }
-              const customWeekly: Record<number, string> = {};
-              DAY_KEYS.forEach((key, idxDay) => {
-                customWeekly[idxDay] = config[key];
-              });
-              channels[idx].customWeeklySchedule = customWeekly;
+              channels[idx].publishTime = useGlobal
+                ? 'Preset Standar Global (Analitik)'
+                : 'Kustom Harian';
+
               safeSetItem(key, JSON.stringify(channels));
             }
           }
