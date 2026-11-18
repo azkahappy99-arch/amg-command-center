@@ -88,6 +88,7 @@ import {
   deleteCachedVideosFromIdb,
 } from '../utils/videoStorage.ts';
 import { incrementQuota, getQuotaUsage } from '../utils/quotaTracker.ts';
+import { BATCH_SIZE } from '../utils/batchConfig.ts';
 
 const KEYS = {
   CHANNELS: 'amg_channels',
@@ -3101,7 +3102,7 @@ export const api = {
     const payload: Record<string, any> = {
       channelId: cleanChannelId,
       profileId,
-      batchSize: payloadOptions?.batchSize || 50,
+      batchSize: payloadOptions?.batchSize || BATCH_SIZE,
       channelTitle: payloadOptions?.channelTitle,
       publishStartDate: payloadOptions?.publishStartDate,
       intervalDays: payloadOptions?.intervalDays || 1,
@@ -3251,7 +3252,7 @@ export const api = {
             status: 'running',
             startedAt: new Date().toISOString(),
             lastHeartbeatAt: new Date().toISOString(),
-            detectedCount: payloadOptions?.videoIds?.length || 50,
+            detectedCount: payloadOptions?.videoIds?.length || BATCH_SIZE,
             processedCount: 0,
             scheduledCount: 0,
             completedCount: 0,

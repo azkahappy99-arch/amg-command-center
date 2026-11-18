@@ -23,6 +23,7 @@ import {
   saveClientIdPool,
 } from '../src/utils/clientIdPoolUtils.ts';
 import { ClientIdSlot, Channel } from '../src/types/index.ts';
+import { BATCH_SIZE, ESTIMATED_QUOTA_PER_BATCH, MAX_CHANNELS_PER_DAY } from '../src/utils/batchConfig.ts';
 
 console.log('================================================================');
 console.log('AMG ARCHITECTURE SUITE: GLOBAL PRESET, ATOMIC, & CLIENT ID POOL');
@@ -134,31 +135,33 @@ function runTestSuite() {
   assert.match(formattedDay2, /14[:.]00/);
   console.log(`✅ PASSED: Day 2 (Selasa 3 Nov) scheduled at 14:00 WIB: ${formattedDay2}`);
 
-  console.log('\n--- TEST GROUP 3: Batch Size Exactly 90 Videos & Dynamic Meter Calculations ---');
-  const BATCH_SIZE = 90;
-  assert.equal(BATCH_SIZE, 90, 'BATCH_SIZE must be exactly 90');
+  console.log('\n--- TEST GROUP 3: Batch Size Exactly 33 Videos & Dynamic Meter Calculations ---');
+  assert.equal(BATCH_SIZE, 33, 'BATCH_SIZE must be exactly 33');
 
-  // Case: 200 videos -> Kloter 1 = 90, Kloter 2 = 90, Kloter 3 = 20
-  const totalEligibleVideos = 200;
+  // Case: 100 videos -> Kloter 1 = 33, Kloter 2 = 33, Kloter 3 = 33, Kloter 4 = 1
+  const totalEligibleVideos = 100;
   const batch1 = Math.min(BATCH_SIZE, totalEligibleVideos);
   const rem1 = totalEligibleVideos - batch1;
   const batch2 = Math.min(BATCH_SIZE, rem1);
   const rem2 = rem1 - batch2;
   const batch3 = Math.min(BATCH_SIZE, rem2);
+  const rem3 = rem2 - batch3;
+  const batch4 = Math.min(BATCH_SIZE, rem3);
 
-  assert.equal(batch1, 90);
-  assert.equal(batch2, 90);
-  assert.equal(batch3, 20);
-  console.log(`✅ PASSED: 200 videos sliced into Kloter 1 (90), Kloter 2 (90), Kloter 3 (20)`);
+  assert.equal(batch1, 33);
+  assert.equal(batch2, 33);
+  assert.equal(batch3, 33);
+  assert.equal(batch4, 1);
+  console.log(`✅ PASSED: 100 videos sliced into Kloter 1 (33), Kloter 2 (33), Kloter 3 (33), Kloter 4 (1)`);
 
   // Quota Unit Calculation Verification:
-  // 90 videos * 100 units = 9,000 units per batch
-  // Menghabiskan 90% kuota harian (9.000 dari 10.000 unit) untuk mengunci runway 3 bulan dalam 1 channel.
-  const quotaPerKloter = BATCH_SIZE * 100;
-  assert.equal(quotaPerKloter, 9000);
-  const percentage = (quotaPerKloter / 10000) * 100;
-  assert.equal(percentage, 90);
-  console.log(`✅ PASSED: Kloter 90 Video (~9.000 unit). Menghabiskan 90% kuota harian untuk mengunci runway 3 bulan dalam 1 channel.`);
+  // 33 videos * 100 units = 3,300 units per batch
+  // Kapasitas harian 10.000 unit aman untuk mengeksekusi hingga 3 channel berbeda per hari (3 × 3.300 = 9.900 unit).
+  assert.equal(ESTIMATED_QUOTA_PER_BATCH, 3300);
+  assert.equal(MAX_CHANNELS_PER_DAY, 3);
+  const threeChannelsQuota = ESTIMATED_QUOTA_PER_BATCH * 3;
+  assert.ok(threeChannelsQuota <= 10000, '3 channels x 3300 units (9900) fits safely within 10,000 daily quota');
+  console.log(`✅ PASSED: Kloter 33 Video (~3.300 unit). Mengamankan runway 1 bulan penuh untuk 1 channel (Mendukung hingga 3 channel/hari).`);
 
   console.log('\n--- TEST GROUP 4: Multi-Project Client ID Pool Parsing & Auto-Rotation ---');
   const samplePoolText = `

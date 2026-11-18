@@ -13,6 +13,9 @@ import { getChannelDaySchedule, generateSequentialSchedulesWithDayConfig } from 
 import { formatWibDateTime } from '../utils/scheduleAndUnmanagedUtils.ts';
 import { safeSetItem, saveCachedVideosToIdb, getCachedVideosFromIdb } from '../utils/videoStorage.ts';
 import { incrementQuota } from '../utils/quotaTracker.ts';
+import { BATCH_SIZE } from '../utils/batchConfig.ts';
+
+export { BATCH_SIZE };
 
 export interface WorkerClientProgress {
   batchId: string;
@@ -385,7 +388,7 @@ class WorkerClientService {
     this.stoppedByUser = false;
 
     const pureChannelId = channel.youtubeChannelId || channel.id.replace(/^chan-/, '');
-    const batchSize = options.batchSize || 90;
+    const batchSize = options.batchSize || BATCH_SIZE;
     const itemsToProcess = candidates.slice(0, batchSize);
     const totalCount = itemsToProcess.length;
 

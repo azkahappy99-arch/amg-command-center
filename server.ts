@@ -3665,8 +3665,8 @@ const handleStartBatchAutomation = async (req: Request, res: Response) => {
       });
     }
 
-    // Step B: Dynamic Batch Chaining (Requirement 1 & 2): Kapasitas 1 kloter = 50 video per eksekusi
-    const BATCH_CHUNK_SIZE = Number(batchSize) || 50;
+    // Step B: Dynamic Batch Chaining: Kapasitas 1 kloter = 33 video per eksekusi (Strategi 3 Channel/Bulan)
+    const BATCH_CHUNK_SIZE = Number(batchSize) || 33;
     const kloter1Limit = Math.min(BATCH_CHUNK_SIZE, remainingCapacity, allCandidates.length);
     const planToExecute = allCandidates.slice(0, kloter1Limit);
 

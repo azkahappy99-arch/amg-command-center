@@ -41,6 +41,7 @@ import { QueueMonitor } from './QueueMonitor.tsx';
 import { NicheBadge } from '../utils/nicheCategories';
 import { getChannelDaySchedule } from '../utils/dayScheduleUtils.ts';
 import { safeSetItem, clearFakeLockCheckpoints } from '../utils/videoStorage.ts';
+import { BATCH_SIZE } from '../utils/batchConfig.ts';
 
 interface AutomationViewProps {
   channels: Channel[];
@@ -78,8 +79,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const [showWeeklyScheduleModal, setShowWeeklyScheduleModal] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [previewFilter, setPreviewFilter] = useState<'ALL' | 'INCLUDED' | 'UNCLASSIFIED' | 'EXCLUDED'>('ALL');
-  const BATCH_SIZE = 90;
-  const [pageSize, setPageSize] = useState<number>(BATCH_SIZE); // BATCH_SIZE (Kloter 90 Video) or 0 (Semua)
+  const [pageSize, setPageSize] = useState<number>(BATCH_SIZE); // BATCH_SIZE (Kloter 33 Video) or 0 (Semua)
   const [currentBatchIndex, setCurrentBatchIndex] = useState<number>(1);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [isTableExpanded, setIsTableExpanded] = useState<boolean>(false);
@@ -250,7 +250,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
           if (res.chainedNextBatch) {
             setExecutionMessage(
-              `Kloter 1 selesai (${res.batch?.completedCount || 50} video)! Otomatis melanjutkan ke ${res.chainedNextBatch.batchNumber} (Kloter 2: ${res.chainedNextBatch.detectedCount} video)...`
+              `Kloter 1 selesai (${res.batch?.completedCount || BATCH_SIZE} video)! Otomatis melanjutkan ke ${res.chainedNextBatch.batchNumber} (Kloter 2: ${res.chainedNextBatch.detectedCount} video)...`
             );
             fetchBatches();
             onAutomationTriggered();
@@ -258,7 +258,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
 
           if (res.isAllCompleted || (res.batch?.status === 'completed' && !res.chainedNextBatch)) {
             setExecutionMessage(
-              `Semua batch otomasi telah SELESAI diproses (${res.batch?.completedCount || 53}/${res.batch?.detectedCount || 53} video)! Seluruh jadwal tayang jam 16:00 WIB aktif.`
+              `Semua batch otomasi telah SELESAI diproses (${res.batch?.completedCount || BATCH_SIZE}/${res.batch?.detectedCount || BATCH_SIZE} video)! Seluruh jadwal tayang aktif.`
             );
             fetchBatches();
             if (selectedChannelId) {
@@ -302,12 +302,12 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
   const totalPages = pageSize > 0 ? Math.ceil(visiblePreviewItems.length / pageSize) : 1;
   const effectivePage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
 
-  // Semua video dalam kloter aktif (hingga 90 video sesuai kapasitas kloter)
+  // Semua video dalam kloter aktif (hingga 33 video sesuai kapasitas kloter)
   const currentKloterItems = pageSize > 0
     ? visiblePreviewItems.slice((effectivePage - 1) * pageSize, effectivePage * pageSize)
     : visiblePreviewItems;
 
-  // Pemotongan antrean video layak per kloter (tepat 90 video per kloter):
+  // Pemotongan antrean video layak per kloter (maksimal 33 video per kloter):
   const currentBatchVideos = eligibleVideos.slice((currentBatchIndex - 1) * BATCH_SIZE, currentBatchIndex * BATCH_SIZE);
   const sisaVideo = Math.max(0, eligibleVideos.length - (currentBatchIndex - 1) * BATCH_SIZE);
   const currentBatchTotal = currentBatchVideos.length;
@@ -524,7 +524,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
         }));
       }
 
-      // Pemotongan antrean video layak per kloter (tepat 90 video per kloter):
+      // Pemotongan antrean video layak per kloter (maksimal 33 video per kloter):
       const targetVideosForCurrentKloter = candidateVideosToProcess.slice(
         (batchIdx - 1) * BATCH_SIZE,
         batchIdx * BATCH_SIZE
@@ -1138,7 +1138,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
           <div className="flex items-center gap-2">
             <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>
-              <strong>Kloter 90 Video (~9.000 unit).</strong> Menghabiskan 90% kuota harian untuk mengunci runway 3 bulan dalam 1 channel.
+              <strong>Kloter {BATCH_SIZE} Video (~3.300 unit).</strong> Mengamankan runway 1 bulan penuh untuk 1 channel (Mendukung hingga 3 channel/hari).
             </span>
           </div>
           <span className="font-mono text-[10px] text-neutral-500">
@@ -1231,7 +1231,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               ) : (
                 <>
                   <PlayCircle className="w-4 h-4" />
-                  <span>Konfirmasi & Mulai Otomasi (Semua: {sisaVideo} Video) - Kloter {currentBatchIndex} ({jumlahVideoKloterN} Video)</span>
+                  <span>Konfirmasi & Mulai Otomasi (Kloter: {jumlahVideoKloterN} Video)</span>
                 </>
               )}
             </button>
@@ -1496,7 +1496,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                     : 'text-neutral-400 hover:text-neutral-200'
                 }`}
               >
-                Kloter 90 Video
+                Kloter {BATCH_SIZE} Video
               </button>
               <button
                 type="button"
@@ -1748,11 +1748,11 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
               <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2 text-[11px]">
                 <div className="font-semibold text-neutral-200">Rencana Eksekusi Berantai (Auto-Chaining):</div>
                 <ul className="list-disc list-inside space-y-1 text-neutral-400">
-                  <li>Kapasitas per kloter: <strong>90 video per eksekusi</strong> (Kloter {currentBatchIndex} dimulai segera).</li>
-                  <li><strong>Auto-Chaining Berantai:</strong> Setelah 90 video selesai, worker otomatis beralih ke kloter berikutnya tanpa reset.</li>
+                  <li>Kapasitas per kloter: <strong>{BATCH_SIZE} video per eksekusi</strong> (Kloter {currentBatchIndex}: {jumlahVideoKloterN} video, sisa {Math.max(0, sisaVideo - jumlahVideoKloterN)} video berlanjut ke kloter berikutnya).</li>
+                  <li><strong>Auto-Chaining Berantai:</strong> Setelah {BATCH_SIZE} video selesai, worker otomatis beralih ke kloter berikutnya tanpa reset.</li>
                   <li><strong>Anti-Spam Throttling:</strong> Jeda aman 2 hingga 4 detik di antara setiap video untuk mencegah deteksi bot YouTube.</li>
                   <li><strong>Upload Serial & Atomic Execution:</strong> Custom thumbnail diunggah pertama kali. Jika limit 24 jam tercapai, video batal dijadwalkan dan tetap private mentah aman.</li>
-                  <li><strong>Kalkulasi Kuota YouTube:</strong> Kloter 90 Video (~9.000 unit). Menghabiskan 90% kuota harian untuk mengunci runway 3 bulan dalam 1 channel.</li>
+                  <li><strong>Kalkulasi Kuota YouTube:</strong> ~3.300 unit per channel (Kloter {BATCH_SIZE} Video). Mengamankan runway 1 bulan penuh untuk 1 channel (Mendukung hingga 3 channel/hari dari kapasitas 10.000 unit).</li>
                   <li>Verifikasi read-after-write dan pencatatan snapshot otomatis untuk rollback darurat.</li>
                 </ul>
               </div>
@@ -1771,7 +1771,7 @@ export const AutomationView: React.FC<AutomationViewProps> = ({
                   disabled={isExecuting || sisaVideo === 0 || jumlahVideoKloterN === 0 || hasCorruptThumbnails}
                   className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shadow-lg shadow-red-900/30 cursor-pointer disabled:opacity-50"
                 >
-                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Semua: ${sisaVideo} Video) - Kloter ${currentBatchIndex} (${jumlahVideoKloterN} Video)`}
+                  {isExecuting ? 'Memulai Otomasi...' : `Konfirmasi & Mulai Otomasi (Kloter: ${jumlahVideoKloterN} Video)`}
                 </button>
               </div>
             </div>
